@@ -1,6 +1,6 @@
 // Levels of detail on instanced meshes:
 //  - rows held on the GPU (unchanged for a few renders) still move when
-//    setInstances replaces them;
+//    setInstances replaces them, and an empty array clears them;
 //  - fadeInDist / fadeOutDist split a band between two nodes pixel for
 //    pixel: before the band only the near node draws, past it only the far
 //    one, and inside it the two together cover every pixel (no gap);
@@ -45,6 +45,8 @@ assert(centre().any === 0, 'replaced rows move it off the centre at once');
 for (let i = 0; i < 6; i++) centre();
 moving.setInstances(new Float32Array(row(0, 1, 0, 0)));
 assert(centre().red > 0.9, 'and back');
+moving.setInstances(new Float32Array(0));
+assert(moving.instanceCount === 0 && centre().any === 0, 'an empty array clears the instances');
 moving.destroy();
 
 // A near (red) and far (green) level of the same box, handing over at 40 m.

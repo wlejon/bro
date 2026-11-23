@@ -676,8 +676,10 @@ void bro_scene_SceneNode_setInstanceCount(void* self, int32_t count) {
 
 void bro_scene_SceneNode_setInstances(void* self, const float* data, uint32_t count) {
     auto* n = nodeOf(self);
-    if (n && n->type() == scene::SceneNode::Type::InstancedMesh && data && count >= 16) {
-        static_cast<scene::InstancedMeshNode*>(n)->setInstances(data, count / 16);
+    // An empty array clears the instances (a layer with none left to draw).
+    if (n && n->type() == scene::SceneNode::Type::InstancedMesh && (data || count == 0)) {
+        static float none;
+        static_cast<scene::InstancedMeshNode*>(n)->setInstances(data ? data : &none, count / 16);
     }
 }
 
