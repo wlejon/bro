@@ -424,12 +424,15 @@ void Engine::windowedFrame(bool modal) {
         if (window_ && !headlessPipeline_ && !modal) window_->waitForFrame(kFrameWaitMaxMs);
         double frameStart = util::currentTimeMs();
 
-        // Where the window system reports presentation (Wayland), the clock
-        // advances to the vblank this frame is expected on, as under DRM:
-        // frame starts wander within the refresh period, the screen does not.
-        // Elsewhere the frame start is the best guess there is.
+        // Where the window system reports presentation (Wayland) and frames
+        // are paced by it (vsync), the clock advances to the vblank this
+        // frame is expected on, as under DRM: frame starts wander within the
+        // refresh period, the screen does not. With vsync off several frames
+        // fall within one refresh, and each has its own time (snapped, they
+        // would all read the same vblank and see no time pass). Elsewhere the
+        // frame start is the best guess there is.
         double clockAt = frameStart;
-        {
+        if (!vulkanSwapchain_ || vulkanSwapchain_->vsync()) {
             const double last = frameTrace_->lastPresentationMs();
             const double period = frameTrace_->refreshPeriodMs();
             if (last > 0.0 && period > 0.0 && frameStart - last < 1000.0) {
