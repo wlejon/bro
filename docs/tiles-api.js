@@ -298,7 +298,14 @@ const terrain = bro.tiles.createCache({
 //                   four ivec4 a record, intBitsToFloat for the floats), and
 //                   place it at (centerHi - camHi) + (centerLo - camLo) with
 //                   the camera split the same way, a camera-relative position
-//                   good to f64 at any distance.
+//                   good to f64 at any distance. A vertex hook's v.pos is the
+//                   node's space, and the engine still applies the node's
+//                   eye-relative model matrix: a camera-relative v.pos is
+//                   right only when the camera sits at the origin
+//                   (scene.setCamera({ eye: [0, 0, 0], ..., origin })); with
+//                   a camera at its world position, emit the absolute
+//                   position (centerHi + centerLo + local) instead, or the
+//                   ground is drawn at world - eye and slides as it moves.
 //                   `drawn` builds an object a tile: for inspection, not for
 //                   every frame.
 // cache.drawnNear([x, y, z], reach)
