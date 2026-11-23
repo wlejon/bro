@@ -88,6 +88,9 @@ public:
     /// A copy of `data` in this frame's upload memory, aligned for use as a
     /// uniform buffer.
     VkDescriptorBufferInfo frameUniform(const void* data, VkDeviceSize size);
+    /// A copy of `data` in this frame's upload memory, aligned for use as a
+    /// storage buffer.
+    VkDescriptorBufferInfo frameStorage(const void* data, VkDeviceSize size);
     /// A descriptor set of `layout` valid for this frame only.
     VkDescriptorSet frameSet(VkDescriptorSetLayout layout);
     /// Run `destroy` once the GPU is done with everything submitted so far.

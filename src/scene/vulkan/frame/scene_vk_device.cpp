@@ -166,6 +166,15 @@ VkDescriptorBufferInfo SceneVkDevice::frameUniform(const void* data, VkDeviceSiz
     return {slice.buffer, slice.offset, size};
 }
 
+VkDescriptorBufferInfo SceneVkDevice::frameStorage(const void* data, VkDeviceSize size) {
+    const VkDeviceSize align = std::max<VkDeviceSize>(
+        16, context_.deviceProperties().limits.minStorageBufferOffsetAlignment);
+    render::UploadSlice slice = frameUpload(size, align);
+    if (!slice) return {};
+    std::memcpy(slice.mapped, data, static_cast<size_t>(size));
+    return {slice.buffer, slice.offset, size};
+}
+
 VkDescriptorSet SceneVkDevice::frameSet(VkDescriptorSetLayout layout) {
     return context_.frames().allocDescriptorSet(layout);
 }

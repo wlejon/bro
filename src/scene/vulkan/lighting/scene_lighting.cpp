@@ -5,6 +5,7 @@
 #include "scene/nodes/light_node.h"
 #include "scene/nodes/mesh_node.h"
 #include "scene/nodes/reflection_probe_node.h"
+#include "scene/nodes/interior_volume_node.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #include "scene/vulkan/draw/scene_mesh_drawer.h"
@@ -165,8 +166,98 @@ void writeCameraSet(SceneFrame& frame) {
     camWriter.updateSet(frame.gpu.device.device(), frame.cameraSet);
 }
 
+void uploadLocalLightingData(const SceneRenderer& renderer, SceneGpu& gpu, const bromath::Vec3& eye,
+                             SceneLightingUniforms& uniforms, LocalLightingBuffers& out) {
+    const SceneDefaults& d = gpu.defaults;
+    const VkDescriptorBufferInfo fallback{d.dummyStorage.buffer, 0, d.dummyStorage.size};
+    out.localLights = fallback;
+    out.interiorVolumes = fallback;
+    out.lightTiles = fallback;
+
+    const std::vector<LightNode*>& localLights = renderer.frameLocalLights();
+    const int localCount = std::min(static_cast<int>(localLights.size()), kSceneMaxLocalLights);
+    if (localCount > 0) {
+        std::vector<SceneLocalLightGpu> packed(static_cast<size_t>(localCount));
+        for (int i = 0; i < localCount; ++i) {
+            const LightNode& l = *localLights[i];
+            const auto& m = l.worldMatrix();
+            SceneLocalLightGpu& dst = packed[static_cast<size_t>(i)];
+            dst.posType[0] = m.at(0, 3) - eye.x;
+            dst.posType[1] = m.at(1, 3) - eye.y;
+            dst.posType[2] = m.at(2, 3) - eye.z;
+            dst.posType[3] = static_cast<float>(l.kind());
+
+            bromath::Vec3 dir = l.direction();
+            const float len = std::sqrt(bromath::vdot(dir, dir));
+            if (len > 1e-6f) dir = dir * (1.0f / len);
+            dst.dirRange[0] = dir.x;
+            dst.dirRange[1] = dir.y;
+            dst.dirRange[2] = dir.z;
+            dst.dirRange[3] = l.range();
+
+            const auto& c = l.color();
+            dst.colorIntensity[0] = c.x;
+            dst.colorIntensity[1] = c.y;
+            dst.colorIntensity[2] = c.z;
+            dst.colorIntensity[3] = l.intensity();
+
+            dst.spotPad[0] = std::cos(l.innerAngle());
+            dst.spotPad[1] = std::cos(l.outerAngle());
+            dst.spotPad[2] = 0.0f;
+            dst.spotPad[3] = 0.0f;
+        }
+        const VkDescriptorBufferInfo uploaded =
+            gpu.device.frameStorage(packed.data(), packed.size() * sizeof(SceneLocalLightGpu));
+        if (uploaded.buffer != VK_NULL_HANDLE) out.localLights = uploaded;
+    }
+
+    const std::vector<const InteriorVolumeNode*>& volumes = renderer.frameInteriorVolumes();
+    const int volumeCount = std::min(static_cast<int>(volumes.size()), kSceneMaxInteriorVolumes);
+    if (volumeCount > 0) {
+        std::vector<SceneInteriorVolumeGpu> packed(static_cast<size_t>(volumeCount));
+        for (int i = 0; i < volumeCount; ++i) {
+            const InteriorVolumeNode& v = *volumes[i];
+            const bromath::Mat4 pw = eyeRelative(v.worldMatrix(), eye);
+            const bromath::Mat4 inv = bromath::minverse(pw);
+            SceneInteriorVolumeGpu& dst = packed[static_cast<size_t>(i)];
+            for (int c = 0; c < 4; ++c) {
+                dst.worldToLocalRow0[c] = inv.at(0, c);
+                dst.worldToLocalRow1[c] = inv.at(1, c);
+                dst.worldToLocalRow2[c] = inv.at(2, c);
+            }
+            auto axisLen = [&](int col) {
+                return std::sqrt(pw.at(0, col) * pw.at(0, col) +
+                                 pw.at(1, col) * pw.at(1, col) +
+                                 pw.at(2, col) * pw.at(2, col));
+            };
+            dst.boxBlend[0] = axisLen(0);
+            dst.boxBlend[1] = axisLen(1);
+            dst.boxBlend[2] = axisLen(2);
+            dst.boxBlend[3] = v.blendDistance();
+            dst.vis[0] = v.skyVisibility();
+            dst.vis[1] = v.sunVisibility();
+            dst.vis[2] = 0.0f;
+            dst.vis[3] = 0.0f;
+            const auto& ac = v.ambientColor();
+            const float ai = v.ambientIntensity();
+            dst.ambient[0] = ac.x * ai;
+            dst.ambient[1] = ac.y * ai;
+            dst.ambient[2] = ac.z * ai;
+            dst.ambient[3] = 0.0f;
+        }
+        const VkDescriptorBufferInfo uploaded =
+            gpu.device.frameStorage(packed.data(), packed.size() * sizeof(SceneInteriorVolumeGpu));
+        if (uploaded.buffer != VK_NULL_HANDLE) out.interiorVolumes = uploaded;
+    }
+
+    uniforms.localParams[0] = static_cast<float>(localCount);
+    uniforms.localParams[1] = static_cast<float>(volumeCount);
+    uniforms.localParams[2] = 0.0f;
+    uniforms.localParams[3] = 0.0f;
+}
+
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
-                                 const SceneVkImage* shadeMap) {
+                                 const SceneVkImage* shadeMap, const LocalLightingBuffers* local) {
     const SceneDefaults& d = gpu.defaults;
     const VkDescriptorBufferInfo ubo = gpu.device.frameUniform(&uniforms, sizeof(uniforms));
     VkDescriptorSet set = gpu.device.frameSet(d.lightingLayout);
@@ -185,6 +276,16 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
     gpu.atmosphere.writeBindings(writer);
     const VkDescriptorBufferInfo table = gpu.shadows.table();
     writer.writeBuffer(14, table.buffer, table.range, table.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    const VkDescriptorBufferInfo fallback{d.dummyStorage.buffer, 0, d.dummyStorage.size};
+    auto pick = [&](const VkDescriptorBufferInfo& info) {
+        return info.buffer != VK_NULL_HANDLE && info.range > 0 ? info : fallback;
+    };
+    const VkDescriptorBufferInfo b17 = pick(local ? local->localLights : VkDescriptorBufferInfo{});
+    const VkDescriptorBufferInfo b18 = pick(local ? local->interiorVolumes : VkDescriptorBufferInfo{});
+    const VkDescriptorBufferInfo b19 = pick(local ? local->lightTiles : VkDescriptorBufferInfo{});
+    writer.writeBuffer(17, b17.buffer, b17.range, b17.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    writer.writeBuffer(18, b18.buffer, b18.range, b18.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    writer.writeBuffer(19, b19.buffer, b19.range, b19.offset, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.updateSet(gpu.device.device(), set);
     return set;
 }
@@ -235,21 +336,23 @@ VkDescriptorSet lightingSetFor(SceneFrame& frame, const ProbeLighting* probe, co
     if (probe) setProbe(light, *probe->node, probe->mipLevels, frame.view.eye);
     const SceneVkImage* shadeImage = shade ? frame.gpu.resources.shadeMap(*shade) : nullptr;
     if (shadeImage) setShade(light, *shade, frame.view.eye);
-    VkDescriptorSet set = writeLightingSet(frame.gpu, light, probe ? probe->view : VK_NULL_HANDLE, shadeImage);
+    const LocalLightingBuffers local{frame.localLightsBuf, frame.interiorVolumesBuf, frame.lightTilesBuf};
+    VkDescriptorSet set = writeLightingSet(frame.gpu, light, probe ? probe->view : VK_NULL_HANDLE, shadeImage, &local);
     frame.lightingSets.emplace(key, set);
     return set;
 }
 
 VkDescriptorSet shadedLightingSet(SceneGpu& gpu, const SceneLightingUniforms& base, const ShadeMapBinding& shade,
-                                  const bromath::Vec3& eye) {
+                                  const bromath::Vec3& eye, const LocalLightingBuffers* local) {
     SceneLightingUniforms light = base;
     const SceneVkImage* shadeImage = gpu.resources.shadeMap(shade);
     if (shadeImage) setShade(light, shade, eye);
-    return writeLightingSet(gpu, light, VK_NULL_HANDLE, shadeImage);
+    return writeLightingSet(gpu, light, VK_NULL_HANDLE, shadeImage, local);
 }
 
 void PassFrameUniforms::record(SceneFrame& frame) {
-    frame.lightingSet = writeLightingSet(frame.gpu, frame.lighting, VK_NULL_HANDLE, nullptr);
+    const LocalLightingBuffers local{frame.localLightsBuf, frame.interiorVolumesBuf, frame.lightTilesBuf};
+    frame.lightingSet = writeLightingSet(frame.gpu, frame.lighting, VK_NULL_HANDLE, nullptr, &local);
 
     // Every TileWorld hands its nodes one map: each draw sampling one gets a
     // set carrying it (shared by the draws of that map).

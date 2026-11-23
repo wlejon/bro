@@ -1,0 +1,95 @@
+// Compute pass for 16x16 tiled culling of bounded non-shadow local lights
+// (Point & Spot, up to 1024 lights, 64 lights per tile).
+
+const TILE_SIZE: f32 = 16.0;
+const MAX_PER_TILE: i32 = 64;
+const TILE_STRIDE: i32 = 65;
+
+struct LightCullUBO {
+    inv_rel_view_proj: mat4f,
+    params: vec4<f32>,   // x = width, y = height, z = light_count, w = tiles_x
+    params2: vec4<f32>,  // x = tiles_y
+}
+
+@binding(0, 0) var u: uniform<LightCullUBO>;
+@binding(0, 1) var local_lights: read_buffer<vec4<f32>>;
+@binding(0, 2) var light_tiles: buffer<u32>;
+
+fn mul4(m: mat4f, v: vec4<f32>) -> vec4<f32> {
+    return m[0] * v.x + m[1] * v.y + m[2] * v.z + m[3] * v.w;
+}
+
+fn unproject(nx: f32, ny: f32, nz: f32) -> vec3<f32> {
+    let h = mul4(u.inv_rel_view_proj, vec4<f32>(nx, ny, nz, 1.0));
+    let iw = 1.0 / (abs(h.w) > 1.0e-6 ? h.w : (h.w < 0.0 ? -1.0e-6 : 1.0e-6));
+    return h.xyz * iw;
+}
+
+fn plane_normal(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>, inside_pt: vec3<f32>) -> vec3<f32> {
+    var n = cross(b - a, c - a);
+    let len2 = dot(n, n);
+    if (len2 > 1.0e-12) {
+        n = n * (1.0 / sqrt(len2));
+        if (dot(n, inside_pt - a) < 0.0) { n = -n; }
+        return n;
+    }
+    return vec3<f32>(0.0, 0.0, 0.0);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn light_cull() {
+    let tx = global_id_x() as i32;
+    let ty = global_id_y() as i32;
+    let tiles_x = u.params.w as i32;
+    let tiles_y = u.params2.x as i32;
+    if (tx >= tiles_x || ty >= tiles_y) { return; }
+
+    let w = max(u.params.x, 1.0);
+    let h = max(u.params.y, 1.0);
+    let x0 = ((tx as f32) * TILE_SIZE / w) * 2.0 - 1.0;
+    let x1 = (((tx + 1) as f32) * TILE_SIZE / w) * 2.0 - 1.0;
+    let y0 = ((ty as f32) * TILE_SIZE / h) * 2.0 - 1.0;
+    let y1 = (((ty + 1) as f32) * TILE_SIZE / h) * 2.0 - 1.0;
+
+    let center = unproject(0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5);
+    let n00 = unproject(x0, y0, 1.0);
+    let n10 = unproject(x1, y0, 1.0);
+    let n11 = unproject(x1, y1, 1.0);
+    let n01 = unproject(x0, y1, 1.0);
+    let m00 = unproject(x0, y0, 0.5);
+    let m10 = unproject(x1, y0, 0.5);
+    let m11 = unproject(x1, y1, 0.5);
+    let m01 = unproject(x0, y1, 0.5);
+    let f00 = unproject(x0, y0, 0.0);
+    let f10 = unproject(x1, y0, 0.0);
+    let f01 = unproject(x0, y1, 0.0);
+
+    let pL = plane_normal(n00, n01, m00, center);
+    let pR = plane_normal(n10, n11, m10, center);
+    let pT = plane_normal(n00, n10, m00, center);
+    let pB = plane_normal(n01, n11, m01, center);
+    let pN = plane_normal(n00, n10, n01, center);
+    let pF = plane_normal(f00, f10, f01, center);
+
+    let count = u.params.z as i32;
+    let base = (ty * tiles_x + tx) * TILE_STRIDE;
+    var out_n: i32 = 0;
+
+    for (var i: i32 = 0; i < count; i += 1) {
+        let lp = local_lights[i * 4];
+        let dr = local_lights[i * 4 + 1];
+        let c = lp.xyz;
+        let r = dr.w;
+        if (dot(pL, c - n00) < -r) { continue; }
+        if (dot(pR, c - n10) < -r) { continue; }
+        if (dot(pT, c - n00) < -r) { continue; }
+        if (dot(pB, c - n01) < -r) { continue; }
+        if (dot(pN, c - n00) < -r) { continue; }
+        if (dot(pF, c - f00) < -r) { continue; }
+        if (out_n < MAX_PER_TILE) {
+            light_tiles[base + 1 + out_n] = i as u32;
+            out_n += 1;
+        }
+    }
+    light_tiles[base] = out_n as u32;
+}

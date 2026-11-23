@@ -47,6 +47,9 @@ struct ExposurePush {
     brighter: f32,
     darker: f32,
     volumes: i32,
+    enclosure_sun_vis: f32,
+    enclosure_sky_vis: f32,
+    enclosure_ambient_lux: f32,
 }
 
 @binding(0, 0) var tex_hdr: sampler2d<vec4<f32>>;
@@ -204,7 +207,9 @@ fn exposure_comp(u: ExposurePush) {
                     sun_t *= s / (METER_RAYS as f32);
                     sky_t *= t / (METER_RAYS as f32);
                 }
-                e_inc = e_inc * sun_t + sky_e * sky_t + 3.14159265 * down;
+                sun_t *= u.enclosure_sun_vis;
+                sky_t *= u.enclosure_sky_vis;
+                e_inc = e_inc * sun_t + sky_e * sky_t + 3.14159265 * (down + u.enclosure_ambient_lux);
                 var ev_inc: f32 = e_inc > 0.0 ? (log2(e_inc) + u.incident_ev_offset) : (reflected - u.brighter);
                 let knee = log2(3.0 * 3.14159265 / 0.18) + u.incident_ev_offset;
                 if (ev_inc < knee) {

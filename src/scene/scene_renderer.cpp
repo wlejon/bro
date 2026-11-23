@@ -4,6 +4,8 @@
 #include "scene/nodes/particles3d_node.h"
 #include "scene/nodes/decal_node.h"
 #include "scene/nodes/voxel_world_node.h"
+#include "scene/nodes/reflection_probe_node.h"
+#include "scene/nodes/interior_volume_node.h"
 #include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
 #include "scene/nodes/skinned_mesh_node.h"
@@ -157,17 +159,64 @@ bool SceneRenderer::cameraCulled(SceneNode* n) const {
     return !bromath::fintersects(cameraFrustum_, *bounds);
 }
 
-int SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
+int SceneRenderer::collectLights(std::vector<LightNode*>& out, std::vector<LightNode*>& outLocal,
+                                 bool& hasExplicitLight) const {
     out.clear();
+    outLocal.clear();
+    hasExplicitLight = false;
     const SceneNode* root = graph_.root();
+    const Vec3 eye = graph_.cameraEye();
+    bool hasPendingProbe = false;
+    for (auto& [id, node] : graph_.nodes()) {
+        if (node->renderVisible() && node->type() == SceneNode::Type::ReflectionProbe &&
+            static_cast<const ReflectionProbeNode*>(node.get())->captureRequested()) {
+            hasPendingProbe = true;
+            break;
+        }
+    }
+
+    struct LocalCand {
+        LightNode* node;
+        float distSq;
+    };
+    std::vector<LocalCand> local;
+
     for (auto& [id, node] : graph_.nodes()) {
         if (!node->renderVisible() || node->type() != SceneNode::Type::Light) continue;
         const SceneNode* p = node.get();
         while (p && p->parent()) p = p->parent();
         if (p != root) continue;
-        out.push_back(static_cast<LightNode*>(node.get()));
-        if (out.size() >= 32) break;
+
+        auto* l = static_cast<LightNode*>(node.get());
+        hasExplicitLight = true;
+
+        const bool isLocalNonShadow = !l->castsShadow() &&
+                                      l->kind() != LightNode::Kind::Directional &&
+                                      l->range() > 0.0f;
+        if (isLocalNonShadow) {
+            const bromath::Vec3& c = l->color();
+            if (l->intensity() <= 0.0f || std::max(c.x, std::max(c.y, c.z)) <= 0.0f) continue;
+            const auto& m = l->worldMatrix();
+            const Vec3 pos{m.at(0, 3), m.at(1, 3), m.at(2, 3)};
+            if (cullingActive_ && !hasPendingProbe &&
+                !bromath::fintersects(cameraFrustum_, bromath::Sphere{pos, l->range()})) {
+                continue;
+            }
+            const Vec3 d = pos - eye;
+            local.push_back({l, d.x * d.x + d.y * d.y + d.z * d.z});
+        } else {
+            if (out.size() < 32) out.push_back(l);
+        }
     }
+
+    // Sort local lights nearest-first and cap at 1024 (kSceneMaxLocalLights).
+    std::sort(local.begin(), local.end(), [](const LocalCand& a, const LocalCand& b) {
+        return a.distSq < b.distSq;
+    });
+    const size_t localCap = std::min<size_t>(local.size(), 1024);
+    outLocal.reserve(localCap);
+    for (size_t i = 0; i < localCap; ++i) outLocal.push_back(local[i].node);
+
     // The lit first, each side in the order met.
     const auto lit = [](const LightNode* l) {
         const bromath::Vec3& c = l->color();
@@ -175,6 +224,36 @@ int SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
     };
     const auto dark = std::stable_partition(out.begin(), out.end(), lit);
     return static_cast<int>(dark - out.begin());
+}
+
+void SceneRenderer::collectInteriorVolumes(std::vector<const InteriorVolumeNode*>& out) const {
+    out.clear();
+    const SceneNode* root = graph_.root();
+    struct Entry {
+        const InteriorVolumeNode* node;
+        float volume;
+    };
+    std::vector<Entry> entries;
+    for (auto& [id, node] : graph_.nodes()) {
+        if (!node->renderVisible() || node->type() != SceneNode::Type::InteriorVolume) continue;
+        const SceneNode* p = node.get();
+        while (p && p->parent()) p = p->parent();
+        if (p != root) continue;
+        const auto* v = static_cast<const InteriorVolumeNode*>(node.get());
+        const auto& m = v->worldMatrix();
+        auto colLen = [&](int c) {
+            return std::sqrt(m.at(0, c) * m.at(0, c) + m.at(1, c) * m.at(1, c) + m.at(2, c) * m.at(2, c));
+        };
+        entries.push_back({v, colLen(0) * colLen(1) * colLen(2)});
+    }
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+        if (a.node->priority() != b.node->priority()) return a.node->priority() > b.node->priority();
+        if (a.volume != b.volume) return a.volume < b.volume;
+        return a.node->id() < b.node->id();
+    });
+    const size_t cap = std::min<size_t>(entries.size(), 64);
+    out.reserve(cap);
+    for (size_t i = 0; i < cap; ++i) out.push_back(entries[i].node);
 }
 
 double SceneRenderer::takeGpuMs(bool wait) {
@@ -298,11 +377,13 @@ void SceneRenderer::render3D() {
     if (cullingActive_)
         cameraFrustum_ = makeFrustum(bromath::mmul(graph_.projectionMatrix(), graph_.viewMatrix()));
 
-    frameLitLights_ = collectLights(frameLights_);
-    if (frameLights_.empty()) {
+    bool hasExplicitLight = false;
+    frameLitLights_ = collectLights(frameLights_, frameLocalLights_, hasExplicitLight);
+    if (!hasExplicitLight) {
         frameLights_.push_back(&implicitSun_);
         frameLitLights_ = 1;
     }
+    collectInteriorVolumes(frameInteriorVolumes_);
     exposureDt_ = pendingExposureDt_;
     pendingExposureDt_ = 0.0f;
     prepareShadows(frameLights_);
@@ -507,11 +588,13 @@ std::vector<SceneNodeProbeResult> SceneRenderer::probe(int x, int y) {
     cullingActive_ = frustumCullingEnabled_;
     if (cullingActive_)
         cameraFrustum_ = makeFrustum(bromath::mmul(graph_.projectionMatrix(), graph_.viewMatrix()));
-    frameLitLights_ = collectLights(frameLights_);
-    if (frameLights_.empty()) {
+    bool hasExplicitLight = false;
+    frameLitLights_ = collectLights(frameLights_, frameLocalLights_, hasExplicitLight);
+    if (!hasExplicitLight) {
         frameLights_.push_back(&implicitSun_);
         frameLitLights_ = 1;
     }
+    collectInteriorVolumes(frameInteriorVolumes_);
     prepareShadows(frameLights_);
     return vkBridge_->probe(graph_, *this, x, y);
 }

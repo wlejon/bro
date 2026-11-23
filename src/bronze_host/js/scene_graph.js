@@ -148,6 +148,28 @@
         }
         return node;
     });
+    fn(SceneGraph.prototype, "createInteriorVolume", function createInteriorVolume(opts) {
+        const d_opts = opts === undefined ? {} : opts;
+        let sz = d_opts.size;
+        if (typeof sz === 'number') sz = [sz, sz, sz];
+        const node = canon(__bro_native.scene.SceneGraph_createInteriorVolume(
+            this,
+            sz === undefined ? EMPTY_F64 : toF64(sz),
+            d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position)
+        ));
+        if (node) {
+            applyNodeOpts(node, d_opts);
+            if (d_opts.size !== undefined) node.scale = sz;
+            if (d_opts.skyVisibility !== undefined) node.skyVisibility = d_opts.skyVisibility;
+            if (d_opts.sunVisibility !== undefined) node.sunVisibility = d_opts.sunVisibility;
+            if (d_opts.ambientColor !== undefined) node.ambientColor = d_opts.ambientColor;
+            if (d_opts.ambientIntensity !== undefined) node.ambientIntensity = d_opts.ambientIntensity;
+            if (d_opts.blendDistance !== undefined) node.blendDistance = d_opts.blendDistance;
+            if (d_opts.priority !== undefined) node.priority = d_opts.priority;
+            if (d_opts.affectExposure !== undefined) node.affectExposure = d_opts.affectExposure;
+        }
+        return node;
+    });
 
     fn(SceneGraph.prototype, "createTween", function createTween() {
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;

@@ -274,6 +274,25 @@ void* bro_scene_SceneGraph_createReflectionProbe(void* self, const double* opts_
     return wrapNode(node, g);
 }
 
+void* bro_scene_SceneGraph_createInteriorVolume(void* self, const double* opts_size, uint32_t opts_size_len,
+                                                const double* opts_position, uint32_t opts_position_len) {
+    auto* g = graphOf(self);
+    if (!g) return nullptr;
+    auto* node = g->createInteriorVolume();
+    g->root()->addChild(node);
+    if (opts_size && opts_size_len >= 3) {
+        node->setScale(static_cast<float>(opts_size[0]),
+                       static_cast<float>(opts_size[1]),
+                       static_cast<float>(opts_size[2]));
+    }
+    if (opts_position && opts_position_len >= 3) {
+        node->setPosition(static_cast<float>(opts_position[0]),
+                          static_cast<float>(opts_position[1]),
+                          static_cast<float>(opts_position[2]));
+    }
+    return wrapNode(node, g);
+}
+
 void* bro_scene_SceneGraph_createTween(void* self) {
     auto* g = graphOf(self);
     if (!g) return nullptr;

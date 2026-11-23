@@ -19,6 +19,7 @@
 #include "scene/nodes/gaussian_splat_node.h"
 #include "scene/nodes/decal_node.h"
 #include "scene/nodes/reflection_probe_node.h"
+#include "scene/nodes/interior_volume_node.h"
 #include "scene/nodes/terrain_manager.h"
 #include "scene/nodes/tile_world.h"
 #include "scene/tween.h"

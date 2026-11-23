@@ -10,6 +10,7 @@
 #include "scene/vulkan/frame/scene_vk_device.h"
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
+#include "scene/nodes/interior_volume_node.h"
 #include "exposure.bk.src.h"
 #include "util/log.h"
 
@@ -205,6 +206,15 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
         ap.brighter = exposure::kIncidentBrighter;
         ap.darker = exposure::kIncidentDarker;
         ap.volumes = static_cast<int32_t>(frame.meteredVolumes);
+        const InteriorEnclosureSample enc = evaluateInteriorEnclosures(
+            frame.renderer.frameInteriorVolumes(), frame.view.eye, true);
+        ap.enclosureSunVis = enc.sunVisibility;
+        ap.enclosureSkyVis = enc.skyVisibility;
+        ap.enclosureAmbientLux = 0.2126f * enc.ambient.x + 0.7152f * enc.ambient.y + 0.0722f * enc.ambient.z;
+    } else {
+        ap.enclosureSunVis = 1.0f;
+        ap.enclosureSkyVis = 1.0f;
+        ap.enclosureAmbientLux = 0.0f;
     }
     bindScenePipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0, 1, &set, 0, nullptr);

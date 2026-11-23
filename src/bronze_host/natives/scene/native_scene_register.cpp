@@ -168,6 +168,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_createParticles", BRO_NATIVE_FN(bro_scene_SceneGraph_createParticles), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
         fn("__bro_native.scene.SceneGraph_createDecal", BRO_NATIVE_FN(bro_scene_SceneGraph_createDecal), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "f64[]", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_createReflectionProbe", BRO_NATIVE_FN(bro_scene_SceneGraph_createReflectionProbe), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "f64[]", "bool", "i32", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_createInteriorVolume", BRO_NATIVE_FN(bro_scene_SceneGraph_createInteriorVolume), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "f64[]", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_createTween", BRO_NATIVE_FN(bro_scene_SceneGraph_createTween), "__bro_native.animation.Tween", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_createAnimationPlayer", BRO_NATIVE_FN(bro_scene_SceneGraph_createAnimationPlayer), "__bro_native.animation.AnimationPlayer", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_createTerrain", BRO_NATIVE_FN(bro_scene_SceneGraph_createTerrain), "__bro_native.terrain.Terrain", {"__bro_native.scene.SceneGraph", "i32[]", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "i32", "bool", "f64", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64", "f64[]", "f32[]"}, error) &&
@@ -287,6 +288,19 @@ bool registerSceneExtraNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_interior_set", BRO_NATIVE_FN(bro_scene_SceneNode_interior_set), "void", {N, "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_priority_get", BRO_NATIVE_FN(bro_scene_SceneNode_priority_get), "i32", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_priority_set", BRO_NATIVE_FN(bro_scene_SceneNode_priority_set), "void", {N, "i32"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_skyVisibility_get", BRO_NATIVE_FN(bro_scene_SceneNode_skyVisibility_get), "f64", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_skyVisibility_set", BRO_NATIVE_FN(bro_scene_SceneNode_skyVisibility_set), "void", {N, "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_sunVisibility_get", BRO_NATIVE_FN(bro_scene_SceneNode_sunVisibility_get), "f64", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_sunVisibility_set", BRO_NATIVE_FN(bro_scene_SceneNode_sunVisibility_set), "void", {N, "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_ambientColor_get", BRO_NATIVE_FN(bro_scene_SceneNode_ambientColor_get), "f64[]", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_ambientColor_set", BRO_NATIVE_FN(bro_scene_SceneNode_ambientColor_set), "void", {N, "f64[]"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_ambientColorCss_set", BRO_NATIVE_FN(bro_scene_SceneNode_ambientColorCss_set), "void", {N, "str"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_ambientIntensity_get", BRO_NATIVE_FN(bro_scene_SceneNode_ambientIntensity_get), "f64", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_ambientIntensity_set", BRO_NATIVE_FN(bro_scene_SceneNode_ambientIntensity_set), "void", {N, "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_blendDistance_get", BRO_NATIVE_FN(bro_scene_SceneNode_blendDistance_get), "f64", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_blendDistance_set", BRO_NATIVE_FN(bro_scene_SceneNode_blendDistance_set), "void", {N, "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_affectExposure_get", BRO_NATIVE_FN(bro_scene_SceneNode_affectExposure_get), "bool", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_affectExposure_set", BRO_NATIVE_FN(bro_scene_SceneNode_affectExposure_set), "void", {N, "bool"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_emissiveColor_get", BRO_NATIVE_FN(bro_scene_SceneNode_emissiveColor_get), "f64[]", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_emissiveColor_set", BRO_NATIVE_FN(bro_scene_SceneNode_emissiveColor_set), "void", {N, "f64[]"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_emissiveColorCss_set", BRO_NATIVE_FN(bro_scene_SceneNode_emissiveColorCss_set), "void", {N, "str"}, error) &&

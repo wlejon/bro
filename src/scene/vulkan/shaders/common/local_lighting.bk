@@ -1,0 +1,81 @@
+// Helpers for bounded tiled local lights (> 32 lights) and interior enclosure
+// volumes (sky/sun attenuation + indoor ambient bounce).
+module local_lighting;
+
+import scene;
+
+pub const LIGHT_TILE_SIZE: i32 = 16;
+pub const MAX_LOCAL_LIGHTS: i32 = 1024;
+pub const MAX_INTERIOR_VOLUMES: i32 = 64;
+pub const MAX_LIGHTS_PER_TILE: i32 = 64;
+pub const LIGHT_TILE_STRIDE: i32 = 65;
+
+pub struct Enclosure {
+    sky_vis: f32,
+    sun_vis: f32,
+    ambient: vec3<f32>,
+}
+
+// Weight in [0, 1] of a position inside a local unit box [-0.5, 0.5]^3 given
+// the three dot-product local coordinates, box world axis extents, and inward
+// blend margin in world units.
+pub fn box_weight(lp: vec3<f32>, box_blend: vec4<f32>) -> f32 {
+    let edge = (vec3<f32>(0.5, 0.5, 0.5) - abs(lp)) * box_blend.xyz;
+    let dmin = min(min(edge.x, edge.y), edge.z);
+    if (dmin <= 0.0) { return 0.0; }
+    if (box_blend.w <= 0.0) { return 1.0; }
+    let t = clamp(dmin / box_blend.w, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// GGX distribution, Smith geometry, Fresnel-Schlick and physically-based
+// microfacet BRDF evaluation shared by both UBO lights and tiled local lights.
+pub fn dist_ggx(n_dot_h: f32, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+    return a2 / max(scene::PI * denom * denom, 0.0000001);
+}
+
+fn geom_schlick(n_dot_v: f32, roughness: f32) -> f32 {
+    let r = roughness + 1.0;
+    let k = (r * r) / 8.0;
+    return n_dot_v / (n_dot_v * (1.0 - k) + k);
+}
+
+pub fn geom_smith(n_dot_v: f32, n_dot_l: f32, roughness: f32) -> f32 {
+    return geom_schlick(n_dot_v, roughness) * geom_schlick(n_dot_l, roughness);
+}
+
+pub fn fresnel(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
+    return f0 + (1.0 - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+}
+
+pub fn dist_attenuation(dist: f32, range: f32) -> f32 {
+    if (range <= 0.0) { return 1.0; }
+    let t = dist / range;
+    let win = clamp(1.0 - t * t * t * t, 0.0, 1.0);
+    return win * win / (dist * dist + 1.0);
+}
+
+pub fn eval_pbr_light(
+    n: vec3<f32>,
+    v: vec3<f32>,
+    n_dot_v: f32,
+    f0: vec3<f32>,
+    base_color: vec3<f32>,
+    metallic: f32,
+    roughness: f32,
+    l: vec3<f32>,
+    diff_nl: f32,
+    n_dot_l: f32,
+    radiance: vec3<f32>
+) -> vec3<f32> {
+    let h = normalize(v + l);
+    let d_term = dist_ggx(max(dot(n, h), 0.0), roughness);
+    let g_term = geom_smith(n_dot_v, n_dot_l, roughness);
+    let f_term = fresnel(max(dot(v, h), 0.0), f0);
+    let specular = (d_term * g_term * f_term) / max(4.0 * n_dot_v * n_dot_l, 0.0001);
+    let diffuse = (vec3<f32>(1.0, 1.0, 1.0) - f_term) * (1.0 - metallic) * base_color / scene::PI;
+    return (diffuse * diff_nl + specular * n_dot_l) * radiance;
+}

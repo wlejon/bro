@@ -121,6 +121,9 @@ struct SceneFrame {
     /// (scene_lighting.h). No probe and no shade map: a draw's own lighting
     /// set adds those.
     SceneLightingUniforms lighting{};
+    VkDescriptorBufferInfo localLightsBuf{};
+    VkDescriptorBufferInfo interiorVolumesBuf{};
+    VkDescriptorBufferInfo lightTilesBuf{};
     /// The lighting sets written this frame per (probe node id, shade map
     /// pixels), beyond the frame's own (lightingSetFor).
     std::map<std::pair<uint32_t, const uint8_t*>, VkDescriptorSet> lightingSets;

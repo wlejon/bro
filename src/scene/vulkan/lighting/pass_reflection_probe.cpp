@@ -199,8 +199,10 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
     camWriter.updateSet(gpu.device.device(), cameraSet);
     // The face draws relative to the probe: its own lighting, and every draw
     // (prepared relative to the frame's eye) re-based onto it.
-    const SceneLightingUniforms lighting = sceneLighting(frame.renderer, gpu, view);
-    const VkDescriptorSet lightingSet = writeLightingSet(gpu, lighting, VK_NULL_HANDLE, nullptr);
+    SceneLightingUniforms lighting = sceneLighting(frame.renderer, gpu, view);
+    LocalLightingBuffers probeLocal{};
+    uploadLocalLightingData(frame.renderer, gpu, eye, lighting, probeLocal);
+    const VkDescriptorSet lightingSet = writeLightingSet(gpu, lighting, VK_NULL_HANDLE, nullptr, &probeLocal);
     const bromath::Vec3 rebase = frame.view.eye - eye;
     std::map<const uint8_t*, VkDescriptorSet> shadedSets;
 
@@ -250,7 +252,7 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
         faceDraw.lightingSet = VK_NULL_HANDLE;
         if (flags & mesh_flags::kShadeMap) {
             auto [it, fresh] = shadedSets.try_emplace(draw.shade.pixels, VK_NULL_HANDLE);
-            if (fresh) it->second = shadedLightingSet(gpu, lighting, draw.shade, eye);
+            if (fresh) it->second = shadedLightingSet(gpu, lighting, draw.shade, eye, &probeLocal);
             faceDraw.lightingSet = it->second;
         }
         const SceneMeshDrawer::ChunkCull chunkCull{cull ? &view.frustum : nullptr, eye, true};

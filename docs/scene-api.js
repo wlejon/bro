@@ -713,6 +713,12 @@ class SceneGraph {
   createReflectionProbe(opts) {}
 
   /**
+   * @param {InteriorVolumeNodeOptions} [opts]
+   * @returns {SceneNode}
+   */
+  createInteriorVolume(opts) {}
+
+  /**
    * @returns {Tween}
    */
   createTween() {}

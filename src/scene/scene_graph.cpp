@@ -13,6 +13,7 @@
 #include "scene/nodes/particles3d_node.h"
 #include "scene/nodes/physics_node.h"
 #include "scene/nodes/reflection_probe_node.h"
+#include "scene/nodes/interior_volume_node.h"
 #include "scene/nodes/voxel_world_node.h"
 #include "scene/nodes/shape_node.h"
 #include "scene/nodes/skinned_mesh_node.h"
@@ -189,6 +190,13 @@ DecalNode* SceneGraph::createDecal(const std::string& name) {
 
 ReflectionProbeNode* SceneGraph::createReflectionProbe(const std::string& name) {
     auto node = std::make_unique<ReflectionProbeNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+InteriorVolumeNode* SceneGraph::createInteriorVolume(const std::string& name) {
+    auto node = std::make_unique<InteriorVolumeNode>(name);
     auto* ptr = node.get();
     nodes_[ptr->id()] = std::move(node);
     return ptr;

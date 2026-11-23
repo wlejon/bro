@@ -475,6 +475,10 @@ void* bro_scene_SceneGraph_createDecal(void* self, bool opts_texture_given, cons
 //   opts_resolution_given: false when the value was not passed (no declared default)
 void* bro_scene_SceneGraph_createReflectionProbe(void* self, const double* opts_size, uint32_t opts_size_len, bool opts_resolution_given, int32_t opts_resolution, const double* opts_position, uint32_t opts_position_len);
 
+// bro.scene.SceneGraph.prototype.createInteriorVolume
+//   registered at __bro_native.scene.SceneGraph_createInteriorVolume
+void* bro_scene_SceneGraph_createInteriorVolume(void* self, const double* opts_size, uint32_t opts_size_len, const double* opts_position, uint32_t opts_position_len);
+
 // bro.scene.SceneGraph.prototype.createTween
 //   registered at __bro_native.scene.SceneGraph_createTween
 void* bro_scene_SceneGraph_createTween(void* self);
@@ -631,6 +635,21 @@ bool bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, c
 // bro.scene.SceneGraph.prototype.setFrustumCulling
 //   registered at __bro_native.scene.SceneGraph_setFrustumCulling
 void bro_scene_SceneGraph_setFrustumCulling(void* self, bool enabled);
+
+// InteriorVolume SceneNode accessors
+double bro_scene_SceneNode_skyVisibility_get(void* self);
+void bro_scene_SceneNode_skyVisibility_set(void* self, double v);
+double bro_scene_SceneNode_sunVisibility_get(void* self);
+void bro_scene_SceneNode_sunVisibility_set(void* self, double v);
+void bro_scene_SceneNode_ambientColor_get(void* self, bronze_native_buffer* out);
+void bro_scene_SceneNode_ambientColor_set(void* self, const double* v, uint32_t len);
+void bro_scene_SceneNode_ambientColorCss_set(void* self, const char* css);
+double bro_scene_SceneNode_ambientIntensity_get(void* self);
+void bro_scene_SceneNode_ambientIntensity_set(void* self, double v);
+double bro_scene_SceneNode_blendDistance_get(void* self);
+void bro_scene_SceneNode_blendDistance_set(void* self, double v);
+bool bro_scene_SceneNode_affectExposure_get(void* self);
+void bro_scene_SceneNode_affectExposure_set(void* self, bool v);
 
 // bro.scene.SceneGraph.prototype.cullStats: runs the operation and keeps its SceneCullStats result in a per-thread slot the SceneGraph_cullStats_<member> reads answer from until the next call
 //   registered at __bro_native.scene.SceneGraph_cullStats

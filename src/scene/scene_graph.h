@@ -69,7 +69,8 @@ public:
     Particles3DNode* createParticles3D(const std::string& name = "");
     CameraNode* createCamera(const std::string& name = "");
     DecalNode* createDecal(const std::string& name = "");
-    ReflectionProbeNode* createReflectionProbe(const std::string& name = "");
+    class ReflectionProbeNode* createReflectionProbe(const std::string& name = "");
+    class InteriorVolumeNode* createInteriorVolume(const std::string& name = "");
     VoxelWorldNode* createVoxelWorld(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.

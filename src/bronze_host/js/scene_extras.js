@@ -34,6 +34,7 @@
     const isMeshOrInstanced = (node) => isMesh(node) || isInstanced(node);
     const isShape = (node) => typeOf(node) === 'shape';
     const isProbe = (node) => typeOf(node) === 'reflectionProbe';
+    const isInteriorVolume = (node) => typeOf(node) === 'interiorVolume';
     const isPhysics = (node) => typeOf(node) === 'physics';
     const isSprite = (node) => typeOf(node) === 'sprite';
 
@@ -68,9 +69,34 @@
     typed('interior', isProbe,
         (n) => __bro_native.scene.SceneNode_interior_get(n),
         (n, v) => __bro_native.scene.SceneNode_interior_set(n, +v));
-    typed('priority', isProbe,
+    typed('priority', (n) => isProbe(n) || isInteriorVolume(n),
         (n) => __bro_native.scene.SceneNode_priority_get(n),
         (n, v) => __bro_native.scene.SceneNode_priority_set(n, v | 0));
+    typed('skyVisibility', isInteriorVolume,
+        (n) => __bro_native.scene.SceneNode_skyVisibility_get(n),
+        (n, v) => __bro_native.scene.SceneNode_skyVisibility_set(n, +v));
+    typed('sunVisibility', isInteriorVolume,
+        (n) => __bro_native.scene.SceneNode_sunVisibility_get(n),
+        (n, v) => __bro_native.scene.SceneNode_sunVisibility_set(n, +v));
+    typed('ambientColor', isInteriorVolume,
+        (n) => Array.from(__bro_native.scene.SceneNode_ambientColor_get(n)),
+        (n, v) => {
+            if (typeof v === 'string') __bro_native.scene.SceneNode_ambientColorCss_set(n, v);
+            else if (v && typeof v.length === 'number') {
+                const c = new Float64Array(v.length);
+                for (let i = 0; i < v.length; i++) c[i] = +v[i];
+                __bro_native.scene.SceneNode_ambientColor_set(n, c);
+            }
+        });
+    typed('ambientIntensity', isInteriorVolume,
+        (n) => __bro_native.scene.SceneNode_ambientIntensity_get(n),
+        (n, v) => __bro_native.scene.SceneNode_ambientIntensity_set(n, +v));
+    typed('blendDistance', isInteriorVolume,
+        (n) => __bro_native.scene.SceneNode_blendDistance_get(n),
+        (n, v) => __bro_native.scene.SceneNode_blendDistance_set(n, +v));
+    typed('affectExposure', isInteriorVolume,
+        (n) => __bro_native.scene.SceneNode_affectExposure_get(n),
+        (n, v) => __bro_native.scene.SceneNode_affectExposure_set(n, !!v));
     typed('radius', isShape,
         (n) => __bro_native.scene.SceneNode_radius_get(n),
         (n, v) => __bro_native.scene.SceneNode_radius_set(n, +v));
@@ -248,7 +274,7 @@
         });
     };
     ['createMesh', 'createSkinnedMesh', 'createInstancedMesh', 'createShape', 'createSprite',
-     'createPhysicsNode', 'createReflectionProbe', 'createHtmlNode'].forEach(wrapFactory);
+     'createPhysicsNode', 'createReflectionProbe', 'createInteriorVolume', 'createHtmlNode'].forEach(wrapFactory);
 
     // Moving a scene between canvases with everything it has uploaded
     // (native_scene_attach.cpp).

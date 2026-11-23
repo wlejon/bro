@@ -46,6 +46,7 @@ public:
     SceneVkImage zeroArray; // one-layer 2D array of zeros (an unset sampler2DArray)
     SceneVkImage zeroVolume;      // a 1x1x1 3D image of zeros (an unset sampler3D)
     SceneVkImage zeroUintArray;   // the same, R32_UINT (an unset usampler2DArray: an empty page table)
+    SceneVkBuffer dummyStorage;   // 256-byte zeroed fallback SSBO for empty local-light/volume/tile bindings
     VkSampler sampler = VK_NULL_HANDLE;      // linear, clamp to edge
     VkSampler cubeSampler = VK_NULL_HANDLE;  // linear mips, clamp to edge
     VkSampler nearestSampler = VK_NULL_HANDLE;   // nearest, clamp to edge (integer images)

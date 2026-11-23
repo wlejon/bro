@@ -4,6 +4,8 @@
 
 #include "util/log.h"
 
+#include <cstring>
+
 namespace bro::scene::vk {
 
 namespace {
@@ -123,6 +125,14 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
         LOG_ERROR("SceneDefaults: Failed creating the fallback uint 2D array");
         return false;
     }
+    if (!allocator.createBuffer(1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                dummyStorage) ||
+        !dummyStorage.mappedData) {
+        LOG_ERROR("SceneDefaults: Failed creating the fallback storage buffer");
+        return false;
+    }
+    std::memset(dummyStorage.mappedData, 0, 1024);
 
     if (!pool_.init(dev, 1)) return false;
     defaultMaterialSet = pool_.allocate(materialLayout);
@@ -148,6 +158,7 @@ void SceneDefaults::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) 
     allocator.destroyImage(zeroArray);
     allocator.destroyImage(zeroVolume);
     allocator.destroyImage(zeroUintArray);
+    allocator.destroyBuffer(dummyStorage);
     for (VkSampler* s : {&sampler, &cubeSampler, &nearestSampler, &repeatSampler, &mipSampler, &repeatSSampler}) {
         if (*s != VK_NULL_HANDLE) vkDestroySampler(dev, *s, nullptr);
         *s = VK_NULL_HANDLE;

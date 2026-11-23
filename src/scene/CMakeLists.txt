@@ -34,6 +34,7 @@ endfunction()
 embed_vk_shader(common/wind.bk                  kBkWindSrc)
 embed_vk_shader(common/scene.bk                 kBkSceneSrc)
 embed_vk_shader(common/atmosphere.bk            kBkAtmosphereSrc)
+embed_vk_shader(common/local_lighting.bk        kBkLocalLightingSrc)
 embed_vk_shader(common/lighting.bk              kBkLightingSrc)
 embed_vk_shader(common/custom.bk                kBkCustomSrc)
 embed_vk_shader(common/vegetation.bk            kBkVegetationSrc)
@@ -45,6 +46,7 @@ embed_vk_shader(shadow/shadow.bk                kBkShadowSrc)
 embed_vk_shader(shadow/shadow_mark.bk           kBkShadowMarkSrc)
 embed_vk_shader(lighting/atmosphere_tables.bk   kBkAtmosphereTablesSrc)
 embed_vk_shader(lighting/ibl.bk                 kBkIblSrc)
+embed_vk_shader(lighting/light_cull.bk          kBkLightCullSrc)
 embed_vk_shader(lighting/sky.bk                 kBkSkySrc)
 embed_vk_shader(post/postfx.bk                  kBkPostFxSrc)
 embed_vk_shader(post/exposure.bk                kBkExposureSrc)
@@ -95,6 +97,7 @@ add_library(bro_scene STATIC
     nodes/particles3d_node.cpp
     nodes/decal_node.cpp
     nodes/reflection_probe_node.cpp
+    nodes/interior_volume_node.cpp
     nodes/voxel_world_node.cpp
     nodes/terrain_manager.cpp
     nodes/terrain_manager_mesh.cpp
@@ -139,6 +142,7 @@ add_library(bro_scene STATIC
     vulkan/draw/pass_gaussian_splat.cpp
     vulkan/draw/pass_voxel_dag.cpp
     vulkan/lighting/scene_lighting.cpp
+    vulkan/lighting/pass_light_cull.cpp
     vulkan/lighting/scene_environment.cpp
     vulkan/lighting/scene_atmosphere.cpp
     vulkan/lighting/pass_atmosphere.cpp

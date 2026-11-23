@@ -406,6 +406,7 @@ const char* bro_scene_SceneNode_type_get(void* self) {
         case scene::SceneNode::Type::GaussianSplat: return "gaussianSplat";
         case scene::SceneNode::Type::Decal: return "decal";
         case scene::SceneNode::Type::ReflectionProbe: return "reflectionProbe";
+        case scene::SceneNode::Type::InteriorVolume: return "interiorVolume";
         case scene::SceneNode::Type::VoxelWorld: return "voxelWorld";
         default: return "node";
     }

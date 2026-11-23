@@ -49,6 +49,12 @@ scene::ReflectionProbeNode* probeOf(void* self) {
                ? static_cast<scene::ReflectionProbeNode*>(n) : nullptr;
 }
 
+scene::InteriorVolumeNode* interiorVolumeOf(void* self) {
+    auto* n = nodeOf(self);
+    return (n && n->type() == scene::SceneNode::Type::InteriorVolume)
+               ? static_cast<scene::InteriorVolumeNode*>(n) : nullptr;
+}
+
 scene::ShapeNode* shapeOf(void* self) {
     auto* n = nodeOf(self);
     return (n && n->type() == scene::SceneNode::Type::Shape) ? static_cast<scene::ShapeNode*>(n) : nullptr;
@@ -142,11 +148,69 @@ void bro_scene_SceneNode_interior_set(void* self, double v) {
     if (auto* p = probeOf(self)) p->setInterior(static_cast<float>(v));
 }
 int32_t bro_scene_SceneNode_priority_get(void* self) {
-    auto* p = probeOf(self);
-    return p ? p->priority() : 0;
+    if (auto* p = probeOf(self)) return p->priority();
+    if (auto* iv = interiorVolumeOf(self)) return iv->priority();
+    return 0;
 }
 void bro_scene_SceneNode_priority_set(void* self, int32_t v) {
     if (auto* p = probeOf(self)) p->setPriority(v);
+    else if (auto* iv = interiorVolumeOf(self)) iv->setPriority(v);
+}
+
+// ---- InteriorVolume properties --------------------------------------------
+double bro_scene_SceneNode_skyVisibility_get(void* self) {
+    auto* iv = interiorVolumeOf(self);
+    return iv ? iv->skyVisibility() : 1.0;
+}
+void bro_scene_SceneNode_skyVisibility_set(void* self, double v) {
+    if (auto* iv = interiorVolumeOf(self)) iv->setSkyVisibility(static_cast<float>(v));
+}
+double bro_scene_SceneNode_sunVisibility_get(void* self) {
+    auto* iv = interiorVolumeOf(self);
+    return iv ? iv->sunVisibility() : 1.0;
+}
+void bro_scene_SceneNode_sunVisibility_set(void* self, double v) {
+    if (auto* iv = interiorVolumeOf(self)) iv->setSunVisibility(static_cast<float>(v));
+}
+void bro_scene_SceneNode_ambientColor_get(void* self, bronze_native_buffer* out) {
+    auto* iv = interiorVolumeOf(self);
+    if (!iv) { transferBuffer(std::vector<double>{}, out); return; }
+    const auto& c = iv->ambientColor();
+    transferBuffer(std::vector<double>{c.x, c.y, c.z}, out);
+}
+void bro_scene_SceneNode_ambientColor_set(void* self, const double* v, uint32_t len) {
+    auto* iv = interiorVolumeOf(self);
+    if (!iv) return;
+    const auto& cur = iv->ambientColor();
+    float c[3] = {cur.x, cur.y, cur.z};
+    for (uint32_t i = 0; i < 3 && i < len; ++i) c[i] = static_cast<float>(v[i]);
+    iv->setAmbientColor(c[0], c[1], c[2]);
+}
+void bro_scene_SceneNode_ambientColorCss_set(void* self, const char* css) {
+    auto* iv = interiorVolumeOf(self);
+    bromath::Color c;
+    if (iv && colorOf(css, c)) iv->setAmbientColor(c.r, c.g, c.b);
+}
+double bro_scene_SceneNode_ambientIntensity_get(void* self) {
+    auto* iv = interiorVolumeOf(self);
+    return iv ? iv->ambientIntensity() : 0.0;
+}
+void bro_scene_SceneNode_ambientIntensity_set(void* self, double v) {
+    if (auto* iv = interiorVolumeOf(self)) iv->setAmbientIntensity(static_cast<float>(v));
+}
+double bro_scene_SceneNode_blendDistance_get(void* self) {
+    auto* iv = interiorVolumeOf(self);
+    return iv ? iv->blendDistance() : 1.0;
+}
+void bro_scene_SceneNode_blendDistance_set(void* self, double v) {
+    if (auto* iv = interiorVolumeOf(self)) iv->setBlendDistance(static_cast<float>(v));
+}
+bool bro_scene_SceneNode_affectExposure_get(void* self) {
+    auto* iv = interiorVolumeOf(self);
+    return iv ? iv->affectExposure() : true;
+}
+void bro_scene_SceneNode_affectExposure_set(void* self, bool v) {
+    if (auto* iv = interiorVolumeOf(self)) iv->setAffectExposure(v);
 }
 
 // ---- emissiveColor (Mesh, InstancedMesh): [r, g, b] in 0..1 ---------------

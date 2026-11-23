@@ -317,6 +317,23 @@
  * @property {Array<number>} [position]
  */
 
+/**
+ * Interior enclosure volume (box centered on its node, `size` / `scale` gives
+ * world dimensions before rotation). Attenuates outdoor sky SH irradiance and
+ * optionally outdoor sun, adds warm interior bounce fill, and couples to
+ * `meter: 'incident'` exposure.
+ * @typedef {Object} InteriorVolumeNodeOptions
+ * @property {Array<number>|number} [size]
+ * @property {Array<number>} [position]
+ * @property {number} [skyVisibility] - 0..1 outdoor sky multiplier (default 0.05)
+ * @property {number} [sunVisibility] - 0..1 outdoor sun multiplier (default 1.0)
+ * @property {Array<number>|string} [ambientColor] - linear RGB or CSS string
+ * @property {number} [ambientIntensity] - interior ambient fill luminance
+ * @property {number} [blendDistance] - inward edge fade in world units (default 1.0)
+ * @property {number} [priority] - higher overrides lower (default 0)
+ * @property {boolean} [affectExposure] - couple to incident exposure meter (default true)
+ */
+
 // ── SceneNode: per-type members ──────────────────────────────────────────────
 //
 // Continues `class SceneNode` from docs/scene-api.js (identity, hierarchy,

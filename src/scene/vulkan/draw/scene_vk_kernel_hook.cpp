@@ -26,6 +26,7 @@
 #include "wind.bk.src.h"
 #include "scene.bk.src.h"
 #include "atmosphere.bk.src.h"
+#include "local_lighting.bk.src.h"
 #include "lighting.bk.src.h"
 #include "custom.bk.src.h"
 #include "vegetation.bk.src.h"
@@ -94,7 +95,7 @@ std::string engineSource(const char* file, const char* embedded) {
 }
 
 constexpr const char* kEngineModules[] = {
-    "wind", "scene", "atmosphere", "lighting", "custom", "volume", "near",
+    "wind", "scene", "atmosphere", "local_lighting", "lighting", "custom", "volume", "near",
     "vegetation", "procedural", "bark", "mesh", "hook", "voxeldag"
 };
 
@@ -128,6 +129,7 @@ void registerCommonModules(brokernel::Compiler& compiler, const KernelHookModule
     compiler.register_module("wind", engineSource("common/wind.bk", kBkWindSrc));
     compiler.register_module("scene", engineSource("common/scene.bk", kBkSceneSrc));
     compiler.register_module("atmosphere", engineSource("common/atmosphere.bk", kBkAtmosphereSrc));
+    compiler.register_module("local_lighting", engineSource("common/local_lighting.bk", kBkLocalLightingSrc));
     compiler.register_module("lighting", engineSource("common/lighting.bk", kBkLightingSrc));
     compiler.register_module("custom", engineSource("common/custom.bk", kBkCustomSrc));
     compiler.set_module_resolver([](std::string_view name) { return brokernel::ModuleRegistry::resolve_default(name); });

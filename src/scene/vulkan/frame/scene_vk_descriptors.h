@@ -32,6 +32,31 @@ struct alignas(16) SceneCameraUniforms {
 /// light list and shadow plan never exceed them).
 constexpr int kSceneMaxLights = 32;
 constexpr int kSceneMaxShadowMaps = SP_MAX_MAPS;
+constexpr int kSceneMaxLocalLights = 1024;
+constexpr int kSceneMaxInteriorVolumes = 64;
+constexpr int kSceneLightTileSize = 16;
+constexpr int kSceneMaxLightsPerTile = 64;
+constexpr int kSceneLightTileStride = kSceneMaxLightsPerTile + 1;
+
+/// One bounded non-shadowed local light in the set-1 storage buffer (64 bytes = 4 vec4s).
+struct alignas(16) SceneLocalLightGpu {
+    alignas(16) float posType[4];         // xyz = camera-relative position, w = kind (1 point, 2 spot)
+    alignas(16) float dirRange[4];        // xyz = normalized direction (light -> scene), w = range
+    alignas(16) float colorIntensity[4];  // rgb = linear color, a = intensity
+    alignas(16) float spotPad[4];         // x = cos(inner), y = cos(outer), zw = 0
+};
+static_assert(sizeof(SceneLocalLightGpu) == 64);
+
+/// One interior enclosure volume in the set-1 storage buffer (96 bytes = 6 vec4s).
+struct alignas(16) SceneInteriorVolumeGpu {
+    alignas(16) float worldToLocalRow0[4];
+    alignas(16) float worldToLocalRow1[4];
+    alignas(16) float worldToLocalRow2[4];
+    alignas(16) float boxBlend[4];   // xyz = world axis sizes, w = blendDistance
+    alignas(16) float vis[4];        // x = skyVisibility, y = sunVisibility, zw = 0
+    alignas(16) float ambient[4];    // rgb = linear ambientColor * ambientIntensity, a = 0
+};
+static_assert(sizeof(SceneInteriorVolumeGpu) == 96);
 
 /// One light — Light in shaders/common/lighting.bk.
 struct alignas(16) SceneLightUniform {
@@ -105,6 +130,7 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float shadeParams[4];   // x = cellSize, y = hex, z = width, w = height
     alignas(16) float iblParams[4];     // x = enabled, y = intensity, z = rotation (rad), w = prefilter max LOD
     alignas(16) float groundBounce[4];  // rgb = the ground's bounce, irradiance over pi and intensity (0: none)
+    alignas(16) float localParams[4];   // x = localLightsCount, y = interiorVolumesCount, z = tilesX, w = tilesY
     AtmosphereGpu atm;                  // the atmosphere (sunDir[3] = 1 when on)
 };
 static_assert(sizeof(SceneLightUniform) == 80 && sizeof(SceneShadowMapUniform) == 112);

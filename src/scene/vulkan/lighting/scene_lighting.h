@@ -47,11 +47,25 @@ void shadowMapUniform(const ShadowPlan& plan, const ShadowMapPlan& map, const br
 /// The frame's camera set (frame.cameraSet), from frame.view.
 void writeCameraSet(SceneFrame& frame);
 
+/// Storage-buffer slices bound at set 1 bindings 17..19 for tiled local
+/// lights and interior enclosure volumes.
+struct LocalLightingBuffers {
+    VkDescriptorBufferInfo localLights{};
+    VkDescriptorBufferInfo interiorVolumes{};
+    VkDescriptorBufferInfo lightTiles{};
+};
+
+/// Uploads `renderer.frameLocalLights()` and `renderer.frameInteriorVolumes()`
+/// relative to `eye`, fills `uniforms.localParams[0..1]`, and zeroes
+/// `localParams[2..3]` (tile counts are set by PassLightCull for the main view).
+void uploadLocalLightingData(const SceneRenderer& renderer, SceneGpu& gpu, const bromath::Vec3& eye,
+                             SceneLightingUniforms& uniforms, LocalLightingBuffers& out);
+
 /// A lighting set: `uniforms`, the shadow pages (their pool and page table),
 /// a probe cube, a shade map (fallbacks where `probeView` / `shadeMap` are
-/// null) and the environment.
+/// null), local lighting storage buffers, and the environment.
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
-                                 const SceneVkImage* shadeMap);
+                                 const SceneVkImage* shadeMap, const LocalLightingBuffers* local = nullptr);
 
 /// A captured reflection probe, as a lighting set samples it.
 struct ProbeLighting {
@@ -68,7 +82,7 @@ VkDescriptorSet lightingSetFor(SceneFrame& frame, const ProbeLighting* probe, co
 /// `base` with `shade`'s map (origin relative to `eye`), for a view other
 /// than the frame's own (a reflection-probe face).
 VkDescriptorSet shadedLightingSet(SceneGpu& gpu, const SceneLightingUniforms& base, const ShadeMapBinding& shade,
-                                  const bromath::Vec3& eye);
+                                  const bromath::Vec3& eye, const LocalLightingBuffers* local = nullptr);
 
 class PassFrameUniforms final : public ScenePass {
 public:

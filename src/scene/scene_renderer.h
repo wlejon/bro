@@ -559,6 +559,8 @@ public:
     /// zero: a moon by day) are kept for their direction (the sky's sun) but
     /// not shaded, so a dark light costs a surface nothing.
     const std::vector<LightNode*>& frameLights() const { return frameLights_; }
+    const std::vector<LightNode*>& frameLocalLights() const { return frameLocalLights_; }
+    const std::vector<const class InteriorVolumeNode*>& frameInteriorVolumes() const { return frameInteriorVolumes_; }
     int frameLitLights() const { return frameLitLights_; }
 
     /// This frame's shadow plan (see shadow_plan.h).
@@ -583,14 +585,21 @@ private:
     };
     std::unordered_map<std::string, ShaderCheck> shaderChecks_;
 
-    // Rebuilds frameLights_ (see frameLights()); returns how many are lit.
-    int collectLights(std::vector<LightNode*>& out) const;
+    // Rebuilds frameLights_ (UBO + shadowed lights) and frameLocalLights_
+    // (bounded non-shadowed point/spot lights for tiled culling). Sets
+    // `hasExplicitLight` if any visible LightNode exists on the graph, and
+    // returns how many UBO lights cast shadows.
+    int collectLights(std::vector<LightNode*>& out, std::vector<LightNode*>& outLocal,
+                      bool& hasExplicitLight) const;
+    void collectInteriorVolumes(std::vector<const class InteriorVolumeNode*>& out) const;
 
     // Implicit directional sun used when the scene declares no lights, so
     // meshes are never pitch black. Per-renderer (configured once in the
     // constructor, never mutated afterwards).
     LightNode implicitSun_;
     std::vector<LightNode*> frameLights_;
+    std::vector<LightNode*> frameLocalLights_;
+    std::vector<const class InteriorVolumeNode*> frameInteriorVolumes_;
     int frameLitLights_ = 0;
 
     // --- Shadow planner (scene_renderer_shadow.cpp) ---

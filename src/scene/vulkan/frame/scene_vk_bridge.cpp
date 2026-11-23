@@ -10,6 +10,7 @@
 #include "scene/vulkan/post/pass_dof.h"
 #include "scene/vulkan/lighting/pass_atmosphere.h"
 #include "scene/vulkan/lighting/pass_environment.h"
+#include "scene/vulkan/lighting/pass_light_cull.h"
 #include "scene/vulkan/draw/pass_gaussian_splat.h"
 #include "scene/vulkan/draw/pass_mesh.h"
 #include "scene/vulkan/draw/pass_draw_counts.h"
@@ -57,6 +58,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // first, for the colour pass later the same frame).
     graph_.add(std::make_unique<PassVoxelShadow>(voxelDagPass));
     graph_.add(std::make_unique<PassShadowCopy>());
+    graph_.add(std::make_unique<PassLightCull>());
     graph_.add(std::make_unique<PassFrameUniforms>());
     graph_.add(std::make_unique<PassWorldService>());
     graph_.add(std::make_unique<PassAtmosphere>());
