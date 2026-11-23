@@ -431,6 +431,21 @@ int32_t bro_scene_SceneNode_childCount_get(void* self) {
     return n ? static_cast<int32_t>(n->children().size()) : 0;
 }
 
+bool bro_scene_SceneNode_hookStill_get(void* self) {
+    auto* n = nodeOf(self);
+    if (!n) return false;
+    if (n->type() == scene::SceneNode::Type::Mesh) return static_cast<scene::MeshNode*>(n)->hookStill();
+    if (n->type() == scene::SceneNode::Type::InstancedMesh) return static_cast<scene::InstancedMeshNode*>(n)->hookStill();
+    return false;
+}
+
+void bro_scene_SceneNode_hookStill_set(void* self, bool v) {
+    auto* n = nodeOf(self);
+    if (!n) return;
+    if (n->type() == scene::SceneNode::Type::Mesh) static_cast<scene::MeshNode*>(n)->setHookStill(v);
+    else if (n->type() == scene::SceneNode::Type::InstancedMesh) static_cast<scene::InstancedMeshNode*>(n)->setHookStill(v);
+}
+
 bool bro_scene_SceneNode_castsShadow_get(void* self) {
     auto* n = nodeOf(self);
     if (!n) return false;

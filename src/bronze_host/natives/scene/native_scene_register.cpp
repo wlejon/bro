@@ -379,6 +379,8 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_type_get", BRO_NATIVE_FN(bro_scene_SceneNode_type_get), "str", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_kind_get", BRO_NATIVE_FN(bro_scene_SceneNode_kind_get), "str", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_childCount_get", BRO_NATIVE_FN(bro_scene_SceneNode_childCount_get), "i32", {"__bro_native.scene.SceneNode"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_hookStill_get", BRO_NATIVE_FN(bro_scene_SceneNode_hookStill_get), "bool", {"__bro_native.scene.SceneNode"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_hookStill_set", BRO_NATIVE_FN(bro_scene_SceneNode_hookStill_set), "void", {"__bro_native.scene.SceneNode", "bool"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_castsShadow_get", BRO_NATIVE_FN(bro_scene_SceneNode_castsShadow_get), "bool", {"__bro_native.scene.SceneNode"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_castsShadow_set", BRO_NATIVE_FN(bro_scene_SceneNode_castsShadow_set), "void", {"__bro_native.scene.SceneNode", "bool"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_shadowOnly_get", BRO_NATIVE_FN(bro_scene_SceneNode_shadowOnly_get), "bool", {"__bro_native.scene.SceneNode"}, error) &&

@@ -375,6 +375,15 @@ public:
             bumpChangeGeneration();
         }
     }
+    /// A vertex hook that places its vertices from its bound state alone
+    /// (uniforms, buffers, textures, the vertex and instance index: no clock,
+    /// camera or wind, and no buffer a kernel rewrites without binding it
+    /// again) casts a still shadow: its cached pages are redrawn when a
+    /// binding changes, not every frame.
+    void setHookStill(bool v) {
+        if (v != hookStill_) { hookStill_ = v; bumpChangeGeneration(); }
+    }
+    bool hookStill() const { return hookStill_; }
     void setCustomShaderBuffer(const std::string& name, std::shared_ptr<render::ComputeBuffer> buffer) {
         bindCustomShaderBuffer(userBuffers_, name, std::move(buffer));
         bumpChangeGeneration();
@@ -538,6 +547,7 @@ private:
     float cullMaxDistance_ = 0.0f;                          // its maxDistance (0: none)
     float cullFade_ = 0.0f;                                 // and fade
     std::optional<bromath::AABB3> cullBounds_;              // setCullBounds
+    bool hookStill_ = false;                                // setHookStill
 
     // Static batching: mesh_ + instanceData_ merged into one draw. batchMesh_
     // is the baked geometry drawn (instead of mesh_) when renderingBatched().

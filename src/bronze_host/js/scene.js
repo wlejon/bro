@@ -374,6 +374,9 @@
             }
         });
     accessor(SceneNode.prototype, "kind", function () { return __bro_native.scene.SceneNode_kind_get(this); }, undefined);
+    accessor(SceneNode.prototype, "hookStill",
+        function () { return __bro_native.scene.SceneNode_hookStill_get(this); },
+        function (v) { __bro_native.scene.SceneNode_hookStill_set(this, !!v); });
     accessor(SceneNode.prototype, "castsShadow",
         function () { return __bro_native.scene.SceneNode_castsShadow_get(this); },
         function (v) { __bro_native.scene.SceneNode_castsShadow_set(this, !!v); });

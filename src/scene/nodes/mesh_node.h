@@ -413,6 +413,15 @@ public:
     /// unbinds). Bumps the change generation: a vertex chunk reading it moves
     /// the shadow silhouette, so binding again after rewriting the buffer
     /// refreshes cached shadows.
+    /// A vertex hook that places its vertices from its bound state alone
+    /// (uniforms, buffers, textures, the vertex and instance index: no clock,
+    /// camera or wind, and no buffer a kernel rewrites without binding it
+    /// again) casts a still shadow: its cached pages are redrawn when a
+    /// binding changes, not every frame.
+    void setHookStill(bool v) {
+        if (v != hookStill_) { hookStill_ = v; bumpChangeGeneration(); }
+    }
+    bool hookStill() const { return hookStill_; }
     void setCustomShaderBuffer(const std::string& name, std::shared_ptr<render::ComputeBuffer> buffer) {
         bindCustomShaderBuffer(userBuffers_, name, std::move(buffer));
         bumpChangeGeneration();
@@ -697,6 +706,7 @@ private:
     // textures outlive a shader swap.
     std::vector<UserTexture> userTextures_;
     std::vector<CustomShaderBuffer> userBuffers_;
+    bool hookStill_ = false;   // setHookStill
     float cullMargin_ = 0.0f;
     ShadeMapProvider shadeMap_;
 };

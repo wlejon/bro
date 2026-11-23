@@ -818,6 +818,21 @@ class SceneNode {
   setShaderBuffer(name, buffer) {}
 
   /**
+   * Mesh / InstancedMesh with a vertex hook: whether the hook places its
+   * vertices from its bound state alone (uniforms, buffers, textures, the
+   * vertex and instance index: no clock, camera or wind, and no buffer a
+   * kernel rewrites without binding it again). A hook that moves vertices
+   * casts a shadow redrawn every frame; a still one's is cached like a still
+   * mesh's and redrawn when a uniform or buffer is bound. Default false.
+   * @type {boolean}
+   * @example
+   *   // a city's buildings placed from one buffer of records
+   *   walls.setShaderBuffer('masses', records);
+   *   walls.hookStill = true;
+   */
+  hookStill;
+
+  /**
    * Remove the custom shader; the node draws with the stock program again.
    * @returns {SceneNode}
    */
