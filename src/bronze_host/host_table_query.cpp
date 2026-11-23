@@ -144,6 +144,7 @@ QueryPlan buildPlanFromJs(const HostQueryBuilder& qb) {
     for (const auto& ob : qb.orderBy) {
         plan.orderBy.push_back(OrderByItem{lowerExprTree(plan.exprs, ob.expr), ob.descending});
     }
+    plan.spatialFilter = qb.spatial;
     plan.limit = qb.limit;
     plan.offset = qb.offset;
     return plan;
@@ -469,6 +470,7 @@ void decorateQueryBuilderProto(ev::ObjectBuilder& proto) {
         }
         return applyTableDeleteDirect(qb->mutableSource, qb->filters);
     });
+    attachQueryExtProto(proto);
 }
 
 }  // namespace
@@ -636,6 +638,22 @@ void populateQueryNamespace(ev::ObjectBuilder& ns) {
     regAgg("min", AggSpec::Kind::Min, "min");
     regAgg("max", AggSpec::Kind::Max, "max");
     regAgg("avg", AggSpec::Kind::Avg, "avg");
+}
+
+HostQueryBuilder* hostQueryBuilderOf(Value val) {
+    return queryOf(val);
+}
+
+Value cloneQueryBuilderAnd(Value self, const std::function<void(HostQueryBuilder&)>& fn) {
+    return cloneQueryAnd(self, fn);
+}
+
+bro::table::QueryPlan buildJsQueryPlan(const HostQueryBuilder& qb) {
+    return buildPlanFromJs(qb);
+}
+
+bro::table::ExecOptions parseQueryExecOptions(std::span<const Value> args, size_t idx) {
+    return parseExecOptions(args, idx);
 }
 
 }  // namespace bro::bronze_host

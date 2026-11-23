@@ -2,9 +2,11 @@
 
 #include "embed/embed.h"
 #include "runtime/heap.h"
+#include "table/query_exec.h"
 #include "table/query_ir.h"
 #include "table/table.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -79,6 +81,8 @@ struct HostQueryBuilder {
     };
     std::vector<OrderCfg> orderBy;
 
+    bro::table::SpatialFilterSpec spatial;
+
     int64_t limit = -1;
     int64_t offset = 0;
 };
@@ -128,5 +132,22 @@ Value applyTableUpdateDirect(const std::shared_ptr<bro::table::Table>& tbl,
                              Value patchObj);
 Value applyTableDeleteDirect(const std::shared_ptr<bro::table::Table>& tbl,
                              const std::vector<std::shared_ptr<const JsExprNode>>& filters);
+
+/// Shared helpers & extension prototype hooks (implemented in host_table_ext.cpp).
+int resolveTableColumnArg(const bro::table::Schema& schema, Value arg);
+HostQueryBuilder* hostQueryBuilderOf(Value val);
+Value cloneQueryBuilderAnd(Value self, const std::function<void(HostQueryBuilder&)>& fn);
+bro::table::QueryPlan buildJsQueryPlan(const HostQueryBuilder& qb);
+bro::table::ExecOptions parseQueryExecOptions(std::span<const Value> args, size_t idx);
+
+void attachTableExtProto(ev::ObjectBuilder& proto);
+void attachSnapshotExtProto(ev::ObjectBuilder& proto);
+void attachQueryExtProto(ev::ObjectBuilder& proto);
+void populateTableExtNamespace(ev::ObjectBuilder& ns);
+
+/// Kernel / Tensor zero-copy & bulk interop hooks (implemented in host_table_interop.cpp).
+void attachTableInteropProto(ev::ObjectBuilder& proto);
+void attachSnapshotInteropProto(ev::ObjectBuilder& proto);
+void populateTableInteropNamespace(ev::ObjectBuilder& ns);
 
 }  // namespace bro::bronze_host

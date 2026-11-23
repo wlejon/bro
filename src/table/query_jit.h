@@ -2,6 +2,7 @@
 
 #include "brass/codegen/kernel_jit.hpp"
 #include "table/query_ir.h"
+#include "table/query_jit_agg.h"
 
 #include <atomic>
 #include <cstdint>
@@ -37,6 +38,7 @@ struct CompiledKernel {
     JitMode mode = JitMode::Filter;
     brass::codegen::KernelFunction func;
     JitKernelFnPtr entry = nullptr;
+    bool usesSimd = false;
     std::vector<uint32_t> jittableFilterIndices;  // indices into plan.filters
     std::vector<uint32_t> residualFilterIndices;  // non-jittable filters (e.g. String ops)
     bool allProjectsJittable = false;
@@ -57,6 +59,10 @@ public:
         const QueryPlan& plan, const TableSnapshot& snap, JitMode requestedMode,
         std::string* outError = nullptr);
 
+    std::shared_ptr<const CompiledAggKernel> getOrCompileAgg(
+        const QueryPlan& plan, const TableSnapshot& snap,
+        std::string* outError = nullptr);
+
     JitCacheStats stats() const;
     void clear();
 
@@ -65,7 +71,9 @@ private:
 
     mutable std::shared_mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<const CompiledKernel>> entries_;
+    std::unordered_map<std::string, std::shared_ptr<const CompiledAggKernel>> aggEntries_;
     std::deque<std::string> fifoOrder_;
+    std::deque<std::string> aggFifoOrder_;
     mutable std::atomic<uint64_t> hits_{0};
     mutable std::atomic<uint64_t> misses_{0};
 };

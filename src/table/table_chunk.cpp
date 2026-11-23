@@ -69,8 +69,20 @@ ColumnChunk::ColumnChunk(ColType type) : type_(type) {
     fixedData_ = allocAlignedZeroed(fixedByteCapacity_);
 }
 
+ColumnChunk::ColumnChunk(ColType type, const uint8_t* fixedData, size_t fixedBytes,
+                         const uint8_t* strArena, size_t strArenaBytes,
+                         std::shared_ptr<const void> owner)
+    : type_(type),
+      fixedData_(const_cast<uint8_t*>(fixedData)),
+      fixedByteCapacity_(fixedBytes),
+      mappedOwner_(std::move(owner)),
+      mappedStringArena_(strArena),
+      mappedStringArenaSize_(strArenaBytes) {}
+
 ColumnChunk::~ColumnChunk() {
-    freeAligned(fixedData_);
+    if (!mappedOwner_) {
+        freeAligned(fixedData_);
+    }
     fixedData_ = nullptr;
 }
 
@@ -78,21 +90,42 @@ std::shared_ptr<ColumnChunk> ColumnChunk::create(ColType type) {
     return std::shared_ptr<ColumnChunk>(new ColumnChunk(type));
 }
 
+std::shared_ptr<ColumnChunk> ColumnChunk::createMapped(
+    ColType type, const uint8_t* fixedData, size_t fixedBytes,
+    const uint8_t* strArena, size_t strArenaBytes,
+    std::shared_ptr<const void> owner) {
+    return std::shared_ptr<ColumnChunk>(
+        new ColumnChunk(type, fixedData, fixedBytes, strArena, strArenaBytes, std::move(owner)));
+}
+
 std::shared_ptr<ColumnChunk> ColumnChunk::clone() const {
     auto copy = std::shared_ptr<ColumnChunk>(new ColumnChunk(type_));
     if (fixedData_ && copy->fixedData_) {
-        std::memcpy(copy->fixedData_, fixedData_, fixedByteCapacity_);
+        const size_t n = std::min(fixedByteCapacity_, copy->fixedByteCapacity_);
+        std::memcpy(copy->fixedData_, fixedData_, n);
     }
-    copy->stringArena_ = stringArena_;
+    if (mappedOwner_) {
+        if (mappedStringArena_ && mappedStringArenaSize_ > 0) {
+            copy->stringArena_.assign(
+                reinterpret_cast<const char*>(mappedStringArena_),
+                reinterpret_cast<const char*>(mappedStringArena_ + mappedStringArenaSize_));
+        }
+    } else {
+        copy->stringArena_ = stringArena_;
+    }
     return copy;
 }
 
 std::string_view ColumnChunk::getString(uint32_t row) const {
-    if (type_ != ColType::String || row >= kChunkRows) return {};
+    if (type_ != ColType::String) return {};
+    const size_t spanCap = fixedByteCapacity_ / sizeof(StringSpan);
+    if (row >= spanCap) return {};
     const StringSpan span = stringSpans()[row];
     if (span.len == 0) return {};
-    if (static_cast<size_t>(span.offset) + span.len > stringArena_.size()) return {};
-    return std::string_view(stringArena_.data() + span.offset, span.len);
+    const uint8_t* arenaPtr = stringArenaData();
+    const size_t arenaLen = stringArenaSize();
+    if (!arenaPtr || static_cast<size_t>(span.offset) + span.len > arenaLen) return {};
+    return std::string_view(reinterpret_cast<const char*>(arenaPtr) + span.offset, span.len);
 }
 
 void ColumnChunk::setString(uint32_t row, std::string_view s) {

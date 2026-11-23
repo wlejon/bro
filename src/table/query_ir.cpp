@@ -405,6 +405,13 @@ bool bindQueryPlan(QueryPlan& plan, const TableSnapshot& left, std::string& outE
         }
     }
 
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        if (!left.findSpatialIndex(plan.spatialFilter.indexName)) {
+            outError = "unknown spatial index: " + plan.spatialFilter.indexName;
+            return false;
+        }
+    }
+
     // Bind filters and route post-join filters touching right table.
     std::vector<uint32_t> allFilters;
     allFilters.reserve(plan.filters.size() + plan.postJoinFilters.size());
@@ -564,6 +571,13 @@ std::string buildPlanCacheKey(const QueryPlan& plan, const TableSnapshot& left,
         for (const auto& u : plan.updates) {
             os << u.colIdx << ":";
             appendExprKey(plan.exprs, u.expr, os);
+            os << ";";
+        }
+    } else if (modeTag == "A" || modeTag == "SA") {
+        os << "|A=";
+        for (const auto& a : plan.aggregates) {
+            os << static_cast<int>(a.kind) << ":" << static_cast<int>(a.outputType) << ":";
+            appendExprKey(plan.exprs, a.expr, os);
             os << ";";
         }
     }

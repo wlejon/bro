@@ -445,13 +445,48 @@ std::shared_ptr<Table> executePlanReference(const TableSnapshot& left, const Que
     const bool hasJoin = plan.join.kind != JoinSpec::Kind::None && plan.join.rightTable;
     const TableSnapshot* right = hasJoin ? plan.join.rightTable.get() : nullptr;
 
-    // Step 1: Scan left table with pre-join filters
+    // Step 1: Scan left table with spatial + pre-join filters
+    const SpatialIndex* spatialIdx = nullptr;
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        spatialIdx = left.findSpatialIndex(plan.spatialFilter.indexName);
+    }
+    auto passesSpatial = [&](uint32_t ci, uint32_t r) -> bool {
+        if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::None || !spatialIdx) return true;
+        auto coord = [&](size_t colIdx) {
+            ScalarValue sv = left.getCell(colIdx, ci, r);
+            if (colTypeIsFloat(sv.type)) return sv.f64;
+            if (colTypeIsUnsignedInt(sv.type)) return static_cast<double>(sv.u64);
+            return static_cast<double>(sv.i64);
+        };
+        const auto& cols = spatialIdx->cols();
+        const double x = coord(cols[0]);
+        const double y = coord(cols[1]);
+        const double z = (spatialIdx->dims() >= 3) ? coord(cols[2]) : 0.0;
+        if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::AABB) {
+            if (x < plan.spatialFilter.a[0] || x > plan.spatialFilter.b[0] ||
+                y < plan.spatialFilter.a[1] || y > plan.spatialFilter.b[1]) {
+                return false;
+            }
+            if (spatialIdx->dims() >= 3 &&
+                (z < plan.spatialFilter.a[2] || z > plan.spatialFilter.b[2])) {
+                return false;
+            }
+            return true;
+        }
+        const double dx = x - plan.spatialFilter.a[0];
+        const double dy = y - plan.spatialFilter.a[1];
+        const double dz = (spatialIdx->dims() >= 3) ? (z - plan.spatialFilter.a[2]) : 0.0;
+        const double rad = plan.spatialFilter.radius;
+        return rad >= 0.0 && (dx * dx + dy * dy + dz * dz <= rad * rad);
+    };
+
     std::vector<RowLoc> leftMatches;
     for (uint32_t ci = 0; ci < left.chunks.size(); ++ci) {
         const auto& ch = left.chunks[ci];
         for (uint32_t r = 0; r < ch.rowCount; ++r) {
             if (!ch.isAlive(r)) continue;
-            if (evalFilters(plan, plan.filters, left, ci, r, nullptr, 0, 0)) {
+            if (passesSpatial(ci, r) &&
+                evalFilters(plan, plan.filters, left, ci, r, nullptr, 0, 0)) {
                 leftMatches.push_back(RowLoc{ci, r});
             }
         }
