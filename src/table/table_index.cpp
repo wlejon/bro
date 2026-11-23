@@ -16,6 +16,7 @@ std::shared_ptr<HashIndex> HashIndex::clone() const {
     copy->colType_ = colType_;
     copy->buckets_ = buckets_;
     copy->nodes_ = nodes_;
+    copy->freeHead_ = freeHead_;
     copy->usedBuckets_ = usedBuckets_;
     copy->entryCount_ = entryCount_;
     return copy;
@@ -27,6 +28,7 @@ void HashIndex::clear(size_t expectedKeys) {
     while (cap < minCap) cap <<= 1;
     buckets_.assign(cap, Bucket{});
     nodes_.clear();
+    freeHead_ = kInvalidNode;
     usedBuckets_ = 0;
     entryCount_ = 0;
 }
@@ -34,15 +36,18 @@ void HashIndex::clear(size_t expectedKeys) {
 void HashIndex::rehash(size_t newCap) {
     std::vector<Bucket> nextBuckets(newCap);
     const size_t mask = newCap - 1;
+    size_t liveBuckets = 0;
     for (const Bucket& b : buckets_) {
-        if (!b.occupied) continue;
+        if (!b.occupied || b.headNode == kInvalidNode) continue;
         size_t pos = static_cast<size_t>(mixHash64(b.key)) & mask;
         while (nextBuckets[pos].occupied) {
             pos = (pos + 1) & mask;
         }
         nextBuckets[pos] = b;
+        ++liveBuckets;
     }
     buckets_ = std::move(nextBuckets);
+    usedBuckets_ = liveBuckets;
 }
 
 size_t HashIndex::findSlot(uint64_t key) const {
@@ -58,19 +63,34 @@ size_t HashIndex::findSlot(uint64_t key) const {
 void HashIndex::insert(uint64_t key, RowLoc loc) {
     if (buckets_.empty()) clear(64);
     if ((usedBuckets_ + 1) * 10 >= buckets_.size() * 7) {
-        rehash(buckets_.size() * 2);
+        size_t liveBuckets = 0;
+        for (const Bucket& b : buckets_) {
+            if (b.occupied && b.headNode != kInvalidNode) ++liveBuckets;
+        }
+        const size_t nextCap = ((liveBuckets + 1) * 10 >= buckets_.size() * 6)
+                                   ? (buckets_.size() * 2)
+                                   : buckets_.size();
+        rehash(nextCap);
     }
     const size_t pos = findSlot(key);
     Bucket& b = buckets_[pos];
-    const uint32_t nodeIdx = static_cast<uint32_t>(nodes_.size());
+    uint32_t nodeIdx = kInvalidNode;
+    if (freeHead_ != kInvalidNode) {
+        nodeIdx = freeHead_;
+        freeHead_ = nodes_[nodeIdx].next;
+    } else {
+        nodeIdx = static_cast<uint32_t>(nodes_.size());
+        nodes_.emplace_back();
+    }
+    nodes_[nodeIdx].loc = loc;
     if (!b.occupied) {
         b.occupied = true;
         b.key = key;
         b.headNode = nodeIdx;
+        nodes_[nodeIdx].next = kInvalidNode;
         ++usedBuckets_;
-        nodes_.push_back(Node{loc, kInvalidNode});
     } else {
-        nodes_.push_back(Node{loc, b.headNode});
+        nodes_[nodeIdx].next = b.headNode;
         b.headNode = nodeIdx;
     }
     ++entryCount_;
@@ -90,6 +110,8 @@ bool HashIndex::erase(uint64_t key, RowLoc loc) {
             } else {
                 nodes_[prev].next = nodes_[cur].next;
             }
+            nodes_[cur].next = freeHead_;
+            freeHead_ = cur;
             --entryCount_;
             return true;
         }

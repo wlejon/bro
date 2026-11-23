@@ -39,8 +39,10 @@ struct CompiledKernel {
     brass::codegen::KernelFunction func;
     JitKernelFnPtr entry = nullptr;
     bool usesSimd = false;
+    uint16_t simdWidth = 0;
     std::vector<uint32_t> jittableFilterIndices;  // indices into plan.filters
     std::vector<uint32_t> residualFilterIndices;  // non-jittable filters (e.g. String ops)
+    std::vector<uint32_t> usedColIndices;
     bool allProjectsJittable = false;
 };
 

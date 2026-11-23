@@ -196,12 +196,14 @@ ScalarValue evalExpr(const ExprArena& arena, uint32_t exprId,
 
     case ExprOp::Neg: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeNull();
         if (colTypeIsFloat(n.valueType)) return wrapTyped(n.valueType, 0, 0, -asDouble(a));
         const int64_t iv = -asI64(a);
         return wrapTyped(n.valueType, iv, static_cast<uint64_t>(iv), static_cast<double>(iv));
     }
     case ExprOp::Abs: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeNull();
         if (colTypeIsFloat(n.valueType)) return wrapTyped(n.valueType, 0, 0, std::fabs(asDouble(a)));
         const int64_t iv = asI64(a);
         const int64_t av = iv < 0 ? -iv : iv;
@@ -209,18 +211,22 @@ ScalarValue evalExpr(const ExprArena& arena, uint32_t exprId,
     }
     case ExprOp::Sqrt: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeNull();
         return wrapTyped(n.valueType, 0, 0, std::sqrt(asDouble(a)));
     }
     case ExprOp::Floor: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeNull();
         return wrapTyped(n.valueType, 0, 0, std::floor(asDouble(a)));
     }
     case ExprOp::Ceil: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeNull();
         return wrapTyped(n.valueType, 0, 0, std::ceil(asDouble(a)));
     }
     case ExprOp::BitNot: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeNull();
         const int64_t iv = ~asI64(a);
         return wrapTyped(n.valueType, iv, ~asU64(a), static_cast<double>(iv));
     }
@@ -228,8 +234,22 @@ ScalarValue evalExpr(const ExprArena& arena, uint32_t exprId,
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
         return ScalarValue::makeBool(!scalarTruthy(a));
     }
+    case ExprOp::IsNull: {
+        ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        return ScalarValue::makeBool(a.isNull);
+    }
+    case ExprOp::IsNotNull: {
+        ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        return ScalarValue::makeBool(!a.isNull);
+    }
+    case ExprOp::Coalesce: {
+        ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (!a.isNull) return a;
+        return evalExpr(arena, n.rhs, left, lChunk, lRow, right, rChunk, rRow);
+    }
     case ExprOp::StrLen: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeNull();
         return ScalarValue::makeI32(static_cast<int32_t>(a.str.size()));
     }
 
@@ -240,6 +260,7 @@ ScalarValue evalExpr(const ExprArena& arena, uint32_t exprId,
     case ExprOp::Mod: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
         ScalarValue b = evalExpr(arena, n.rhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull || b.isNull) return ScalarValue::makeNull();
         if (colTypeIsFloat(n.valueType)) {
             const double da = asDouble(a);
             const double db = asDouble(b);
@@ -292,6 +313,7 @@ ScalarValue evalExpr(const ExprArena& arena, uint32_t exprId,
     case ExprOp::UShr: {
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
         ScalarValue b = evalExpr(arena, n.rhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull || b.isNull) return ScalarValue::makeNull();
         if (n.valueType == ColType::I64) {
             const int64_t ia = asI64(a);
             const uint32_t shift = static_cast<uint32_t>(asU64(b)) & 63u;
@@ -331,20 +353,21 @@ ScalarValue evalExpr(const ExprArena& arena, uint32_t exprId,
             ln.valueType == ColType::Dict && rn.op == ExprOp::Const &&
             rn.literal.type == ColType::String) {
             ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
-            const bool eq = (!a.isNull && rn.cachedDictId != kInvalidDictId &&
-                             a.u64 == rn.cachedDictId);
+            if (a.isNull) return ScalarValue::makeBool(false);
+            const bool eq = (rn.cachedDictId != kInvalidDictId && a.u64 == rn.cachedDictId);
             return ScalarValue::makeBool(n.op == ExprOp::Eq ? eq : !eq);
         }
         if ((n.op == ExprOp::Eq || n.op == ExprOp::Ne) &&
             rn.valueType == ColType::Dict && ln.op == ExprOp::Const &&
             ln.literal.type == ColType::String) {
             ScalarValue b = evalExpr(arena, n.rhs, left, lChunk, lRow, right, rChunk, rRow);
-            const bool eq = (!b.isNull && ln.cachedDictId != kInvalidDictId &&
-                             b.u64 == ln.cachedDictId);
+            if (b.isNull) return ScalarValue::makeBool(false);
+            const bool eq = (ln.cachedDictId != kInvalidDictId && b.u64 == ln.cachedDictId);
             return ScalarValue::makeBool(n.op == ExprOp::Eq ? eq : !eq);
         }
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
         ScalarValue b = evalExpr(arena, n.rhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull || b.isNull) return ScalarValue::makeBool(false);
         if (colTypeIsFloat(a.type) || colTypeIsFloat(b.type)) {
             const double da = asDouble(a);
             const double db = asDouble(b);
@@ -386,14 +409,15 @@ ScalarValue evalExpr(const ExprArena& arena, uint32_t exprId,
         const ExprNode& ln = arena.nodes[n.lhs];
         const ExprNode& rn = arena.nodes[n.rhs];
         ScalarValue a = evalExpr(arena, n.lhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (a.isNull) return ScalarValue::makeBool(false);
         if ((n.op == ExprOp::StrEq || n.op == ExprOp::StrNe) &&
             ln.valueType == ColType::Dict && rn.op == ExprOp::Const &&
             rn.literal.type == ColType::String) {
-            const bool eq = (!a.isNull && rn.cachedDictId != kInvalidDictId &&
-                             a.u64 == rn.cachedDictId);
+            const bool eq = (rn.cachedDictId != kInvalidDictId && a.u64 == rn.cachedDictId);
             return ScalarValue::makeBool(n.op == ExprOp::StrEq ? eq : !eq);
         }
         ScalarValue b = evalExpr(arena, n.rhs, left, lChunk, lRow, right, rChunk, rRow);
+        if (b.isNull) return ScalarValue::makeBool(false);
         const std::string sa = resolveText(ln, a, left, right);
         const std::string sb = resolveText(rn, b, left, right);
         bool match = false;
@@ -434,6 +458,34 @@ struct MatchPair {
 
 }  // namespace
 
+static bool rowPassesSpatialFilter(const SpatialIndex* spatialIdx,
+                                   const SpatialFilterSpec& sf,
+                                   const TableSnapshot& snap,
+                                   uint32_t ci,
+                                   uint32_t r) {
+    if (sf.kind == SpatialFilterSpec::Kind::None) return true;
+    if (!spatialIdx) return false;
+    const auto& cols = spatialIdx->cols();
+    double coords[3] = {0.0, 0.0, 0.0};
+    for (uint8_t d = 0; d < spatialIdx->dims(); ++d) {
+        ScalarValue sv = snap.getCell(cols[d], ci, r);
+        if (sv.isNull) return false;
+        if (colTypeIsFloat(sv.type)) coords[d] = sv.f64;
+        else if (colTypeIsUnsignedInt(sv.type)) coords[d] = static_cast<double>(sv.u64);
+        else coords[d] = static_cast<double>(sv.i64);
+    }
+    if (sf.kind == SpatialFilterSpec::Kind::AABB) {
+        for (uint8_t d = 0; d < spatialIdx->dims(); ++d) {
+            if (coords[d] < sf.a[d] || coords[d] > sf.b[d]) return false;
+        }
+        return true;
+    }
+    const double dx = coords[0] - sf.a[0];
+    const double dy = coords[1] - sf.a[1];
+    const double dz = (spatialIdx->dims() >= 3) ? (coords[2] - sf.a[2]) : 0.0;
+    return sf.radius >= 0.0 && (dx * dx + dy * dy + dz * dz <= sf.radius * sf.radius);
+}
+
 std::shared_ptr<Table> executePlanReference(const TableSnapshot& left, const QueryPlan& inPlan) {
     QueryPlan plan = inPlan;
     if (!plan.bound) {
@@ -450,42 +502,13 @@ std::shared_ptr<Table> executePlanReference(const TableSnapshot& left, const Que
     if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
         spatialIdx = left.findSpatialIndex(plan.spatialFilter.indexName);
     }
-    auto passesSpatial = [&](uint32_t ci, uint32_t r) -> bool {
-        if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::None || !spatialIdx) return true;
-        auto coord = [&](size_t colIdx) {
-            ScalarValue sv = left.getCell(colIdx, ci, r);
-            if (colTypeIsFloat(sv.type)) return sv.f64;
-            if (colTypeIsUnsignedInt(sv.type)) return static_cast<double>(sv.u64);
-            return static_cast<double>(sv.i64);
-        };
-        const auto& cols = spatialIdx->cols();
-        const double x = coord(cols[0]);
-        const double y = coord(cols[1]);
-        const double z = (spatialIdx->dims() >= 3) ? coord(cols[2]) : 0.0;
-        if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::AABB) {
-            if (x < plan.spatialFilter.a[0] || x > plan.spatialFilter.b[0] ||
-                y < plan.spatialFilter.a[1] || y > plan.spatialFilter.b[1]) {
-                return false;
-            }
-            if (spatialIdx->dims() >= 3 &&
-                (z < plan.spatialFilter.a[2] || z > plan.spatialFilter.b[2])) {
-                return false;
-            }
-            return true;
-        }
-        const double dx = x - plan.spatialFilter.a[0];
-        const double dy = y - plan.spatialFilter.a[1];
-        const double dz = (spatialIdx->dims() >= 3) ? (z - plan.spatialFilter.a[2]) : 0.0;
-        const double rad = plan.spatialFilter.radius;
-        return rad >= 0.0 && (dx * dx + dy * dy + dz * dz <= rad * rad);
-    };
 
     std::vector<RowLoc> leftMatches;
     for (uint32_t ci = 0; ci < left.chunks.size(); ++ci) {
         const auto& ch = left.chunks[ci];
         for (uint32_t r = 0; r < ch.rowCount; ++r) {
             if (!ch.isAlive(r)) continue;
-            if (passesSpatial(ci, r) &&
+            if (rowPassesSpatialFilter(spatialIdx, plan.spatialFilter, left, ci, r) &&
                 evalFilters(plan, plan.filters, left, ci, r, nullptr, 0, 0)) {
                 leftMatches.push_back(RowLoc{ci, r});
             }
@@ -570,6 +593,7 @@ std::shared_ptr<Table> executePlanReference(const TableSnapshot& left, const Que
             std::vector<ScalarValue> keys;
             std::vector<double> aggF;
             std::vector<int64_t> aggI;
+            std::vector<uint64_t> aggCounts;
             std::vector<ScalarValue> aggExt;
             uint64_t count = 0;
         };
@@ -581,6 +605,7 @@ std::shared_ptr<Table> executePlanReference(const TableSnapshot& left, const Que
                 GroupState g;
                 g.aggF.assign(plan.aggregates.size(), 0.0);
                 g.aggI.assign(plan.aggregates.size(), 0);
+                g.aggCounts.assign(plan.aggregates.size(), 0);
                 g.aggExt.assign(plan.aggregates.size(), ScalarValue::makeNull());
                 groups.push_back(std::move(g));
             }
@@ -620,31 +645,40 @@ std::shared_ptr<Table> executePlanReference(const TableSnapshot& left, const Que
                 g.keys = std::move(keys);
                 g.aggF.assign(plan.aggregates.size(), 0.0);
                 g.aggI.assign(plan.aggregates.size(), 0);
+                g.aggCounts.assign(plan.aggregates.size(), 0);
                 g.aggExt.assign(plan.aggregates.size(), ScalarValue::makeNull());
                 groups.push_back(std::move(g));
                 hashToGroup[h].push_back(gIdx);
             }
 
             GroupState& g = groups[gIdx];
-            const bool firstInGroup = (g.count == 0);
             ++g.count;
             for (size_t ai = 0; ai < plan.aggregates.size(); ++ai) {
                 const AggSpec& a = plan.aggregates[ai];
-                if (a.kind == AggSpec::Kind::Count) {
+                if (a.kind == AggSpec::Kind::Count && a.expr == kInvalidExpr) {
                     g.aggI[ai] += 1;
+                    g.aggCounts[ai] += 1;
                     continue;
                 }
                 ScalarValue val = evalExpr(plan.exprs, a.expr,
                                            left, p.left.chunkIdx, p.left.rowIdx,
                                            right, p.right.chunkIdx, p.right.rowIdx);
-                if (a.kind == AggSpec::Kind::Sum || a.kind == AggSpec::Kind::Avg) {
+                if (val.isNull) continue;
+                if (a.kind == AggSpec::Kind::Count) {
+                    g.aggI[ai] += 1;
+                } else if (a.kind == AggSpec::Kind::Sum || a.kind == AggSpec::Kind::Avg) {
                     if (a.outputType == ColType::I64) g.aggI[ai] += asI64(val);
                     else g.aggF[ai] += asDouble(val);
                 } else if (a.kind == AggSpec::Kind::Min) {
-                    if (firstInGroup || compareScalar(val, g.aggExt[ai]) < 0) g.aggExt[ai] = std::move(val);
+                    if (g.aggCounts[ai] == 0 || compareScalar(val, g.aggExt[ai]) < 0) {
+                        g.aggExt[ai] = std::move(val);
+                    }
                 } else if (a.kind == AggSpec::Kind::Max) {
-                    if (firstInGroup || compareScalar(val, g.aggExt[ai]) > 0) g.aggExt[ai] = std::move(val);
+                    if (g.aggCounts[ai] == 0 || compareScalar(val, g.aggExt[ai]) > 0) {
+                        g.aggExt[ai] = std::move(val);
+                    }
                 }
+                ++g.aggCounts[ai];
             }
         }
         ensureEmptyGlobalGroup();
@@ -663,7 +697,8 @@ std::shared_ptr<Table> executePlanReference(const TableSnapshot& left, const Que
                                       ? ScalarValue::makeI64(g.aggI[ai])
                                       : ScalarValue::makeF64(g.aggF[ai]));
                 } else if (a.kind == AggSpec::Kind::Avg) {
-                    const double avg = g.count > 0 ? (g.aggF[ai] / static_cast<double>(g.count)) : 0.0;
+                    const uint64_t cnt = g.aggCounts[ai];
+                    const double avg = cnt > 0 ? (g.aggF[ai] / static_cast<double>(cnt)) : 0.0;
                     row.push_back(ScalarValue::makeF64(avg));
                 } else {
                     row.push_back(g.aggExt[ai]);
@@ -773,11 +808,16 @@ size_t applyUpdateReference(Table& table, const QueryPlan& inPlan) {
         std::string err;
         if (!bindQueryPlan(plan, *snap, err)) return 0;
     }
+    const SpatialIndex* spatialIdx = nullptr;
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        spatialIdx = snap->findSpatialIndex(plan.spatialFilter.indexName);
+    }
     size_t updated = 0;
     for (uint32_t ci = 0; ci < snap->chunks.size(); ++ci) {
         const auto& ch = snap->chunks[ci];
         for (uint32_t r = 0; r < ch.rowCount; ++r) {
             if (!ch.isAlive(r)) continue;
+            if (!rowPassesSpatialFilter(spatialIdx, plan.spatialFilter, *snap, ci, r)) continue;
             if (!evalFilters(plan, plan.filters, *snap, ci, r, nullptr, 0, 0)) continue;
             std::vector<ScalarValue> nextVals(plan.updates.size());
             for (size_t ui = 0; ui < plan.updates.size(); ++ui) {
@@ -801,11 +841,16 @@ size_t applyDeleteReference(Table& table, const QueryPlan& inPlan) {
         std::string err;
         if (!bindQueryPlan(plan, *snap, err)) return 0;
     }
+    const SpatialIndex* spatialIdx = nullptr;
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        spatialIdx = snap->findSpatialIndex(plan.spatialFilter.indexName);
+    }
     size_t removed = 0;
     for (uint32_t ci = 0; ci < snap->chunks.size(); ++ci) {
         const auto& ch = snap->chunks[ci];
         for (uint32_t r = 0; r < ch.rowCount; ++r) {
             if (!ch.isAlive(r)) continue;
+            if (!rowPassesSpatialFilter(spatialIdx, plan.spatialFilter, *snap, ci, r)) continue;
             if (evalFilters(plan, plan.filters, *snap, ci, r, nullptr, 0, 0)) {
                 if (table.removeRow(RowLoc{ci, r})) ++removed;
             }

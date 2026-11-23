@@ -1,5 +1,6 @@
 #include "table/table.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace bro::table {
@@ -20,12 +21,54 @@ bool spatialUsesColumn(const SpatialIndex& si, size_t colIdx) {
     return false;
 }
 
+bool readSpatialCoords(const TableChunk& ch, const SpatialIndex& si, uint32_t row,
+                       double& x, double& y, double& z) {
+    const auto& cols = si.cols();
+    if (ch.columns[cols[0]]->isNull(row) || ch.columns[cols[1]]->isNull(row)) return false;
+    if (si.dims() >= 3 && ch.columns[cols[2]]->isNull(row)) return false;
+    x = readNumericCell(ch, cols[0], row);
+    y = readNumericCell(ch, cols[1], row);
+    z = (si.dims() >= 3) ? readNumericCell(ch, cols[2], row) : 0.0;
+    return true;
+}
+
+template <typename ChunkContainer>
+TableStats computeStatsCommon(const Schema& schema, const StringDictionary* dict,
+                              const ChunkContainer& chunks, uint64_t totalAliveRows,
+                              size_t hashCount, size_t rangeCount, size_t spatialCount) {
+    TableStats st;
+    st.rowCount = static_cast<size_t>(totalAliveRows);
+    st.chunkCount = chunks.size();
+    st.columnCount = schema.size();
+    st.dictEntries = dict ? dict->size() : 0;
+    st.hashIndexes = hashCount;
+    st.rangeIndexes = rangeCount;
+    st.spatialIndexes = spatialCount;
+    for (const auto& ch : chunks) {
+        st.allocatedRows += ch.rowCount;
+        st.tombstoneCount += (ch.rowCount >= ch.aliveCount) ? (ch.rowCount - ch.aliveCount) : 0;
+        for (size_t c = 0; c < schema.size() && c < ch.columns.size(); ++c) {
+            st.fixedBytes += static_cast<size_t>(ch.rowCount) * colTypeElemSize(schema.columns[c].type);
+            if (ch.columns[c]) {
+                st.stringArenaBytes += ch.columns[c]->stringArenaSize();
+                st.nullBitmapBytes += ch.columns[c]->nullBitmapBytes();
+            }
+        }
+    }
+    st.tombstoneRatio = (st.allocatedRows > 0)
+                            ? static_cast<double>(st.tombstoneCount) / static_cast<double>(st.allocatedRows)
+                            : 0.0;
+    return st;
+}
+
 }  // namespace
 
-void Schema::addColumn(std::string name, ColType type) {
+bool Schema::addColumn(std::string name, ColType type) {
+    if (nameToIndex.find(name) != nameToIndex.end()) return false;
     const size_t idx = columns.size();
     nameToIndex[name] = idx;
     columns.push_back(ColumnDef{std::move(name), type});
+    return true;
 }
 
 int Schema::findColumn(std::string_view name) const {
@@ -73,6 +116,40 @@ std::vector<uint32_t> TableSnapshot::dirtyChunksSince(uint64_t sinceVersion) con
     return out;
 }
 
+TableStats TableSnapshot::stats() const {
+    return computeStatsCommon(schema, dict.get(), chunks, totalAliveRows,
+                              indexes.size(), rangeIndexes.size(), spatialIndexes.size());
+}
+
+std::vector<size_t> TableSnapshot::hashIndexCols() const {
+    std::vector<size_t> cols;
+    for (const auto& kv : indexes) {
+        if (kv.second) cols.push_back(kv.first);
+    }
+    std::sort(cols.begin(), cols.end());
+    return cols;
+}
+
+std::vector<size_t> TableSnapshot::rangeIndexCols() const {
+    std::vector<size_t> cols;
+    for (const auto& kv : rangeIndexes) {
+        if (kv.second) cols.push_back(kv.first);
+    }
+    std::sort(cols.begin(), cols.end());
+    return cols;
+}
+
+std::vector<const SpatialIndex*> TableSnapshot::spatialIndexList() const {
+    std::vector<const SpatialIndex*> list;
+    for (const auto& kv : spatialIndexes) {
+        if (kv.second) list.push_back(kv.second.get());
+    }
+    std::sort(list.begin(), list.end(), [](const SpatialIndex* a, const SpatialIndex* b) {
+        return a->name() < b->name();
+    });
+    return list;
+}
+
 Table::Table(std::vector<ColumnDef> columns)
     : dict_(std::make_shared<StringDictionary>()) {
     for (auto& c : columns) {
@@ -100,6 +177,15 @@ std::shared_ptr<Table> Table::fromSnapshot(const TableSnapshot& snap) {
             ch.columns.push_back(col ? col->clone() : ColumnChunk::create(ColType::I32));
         }
         tbl->chunks_.push_back(std::move(ch));
+    }
+    for (const auto& kv : snap.indexes) {
+        if (kv.second) tbl->indexes_.emplace(kv.first, kv.second->clone());
+    }
+    for (const auto& kv : snap.rangeIndexes) {
+        if (kv.second) tbl->rangeIndexes_.emplace(kv.first, kv.second->clone());
+    }
+    for (const auto& kv : snap.spatialIndexes) {
+        if (kv.second) tbl->spatialIndexes_.emplace(kv.first, kv.second->clone());
     }
     return tbl;
 }
@@ -160,22 +246,22 @@ RowLoc Table::appendRow(std::span<const ScalarValue> values) {
     for (size_t c = 0; c < nCols; ++c) {
         if (c < values.size() && !values[c].isNull) {
             ch.columns[c]->writeCell(r, values[c], dict_.get());
-        }
-        if (auto it = indexes_.find(c); it != indexes_.end() && it->second) {
-            mutableIndex(c)->insert(HashIndex::cellKey(*ch.columns[c], r), loc);
-        }
-        if (auto rit = rangeIndexes_.find(c); rit != rangeIndexes_.end() && rit->second) {
-            mutableRangeIndex(c)->insert(*ch.columns[c], r, loc, dict_.get());
+            if (auto it = indexes_.find(c); it != indexes_.end() && it->second) {
+                mutableIndex(c)->insert(HashIndex::cellKey(*ch.columns[c], r), loc);
+            }
+            if (auto rit = rangeIndexes_.find(c); rit != rangeIndexes_.end() && rit->second) {
+                mutableRangeIndex(c)->insert(*ch.columns[c], r, loc, dict_.get());
+            }
+        } else {
+            ch.columns[c]->setNull(r, true);
         }
     }
     for (auto& kv : spatialIndexes_) {
         if (!kv.second) continue;
-        auto& si = mutableSpatialIndex(kv.first);
-        const auto& cols = si->cols();
-        const double x = readNumericCell(ch, cols[0], r);
-        const double y = readNumericCell(ch, cols[1], r);
-        const double z = (si->dims() >= 3) ? readNumericCell(ch, cols[2], r) : 0.0;
-        si->insert(x, y, z, loc);
+        double x = 0.0, y = 0.0, z = 0.0;
+        if (readSpatialCoords(ch, *kv.second, r, x, y, z)) {
+            mutableSpatialIndex(kv.first)->insert(x, y, z, loc);
+        }
     }
     ++totalAliveRows_;
     return loc;
@@ -196,12 +282,17 @@ void Table::appendTypedBatch(uint32_t count, const void* const* colData) {
         for (size_t c = 0; c < nCols; ++c) {
             const ColType t = schema_.columns[c].type;
             const void* src = colData ? colData[c] : nullptr;
+            auto& colPtr = ch.mutableColumn(c);
             if (src && colTypeHasTypedArray(t)) {
                 const size_t es = colTypeElemSize(t);
                 const uint8_t* srcBytes =
                     static_cast<const uint8_t*>(src) + static_cast<size_t>(offset) * es;
-                std::memcpy(ch.columns[c]->rawData() + static_cast<size_t>(startRow) * es,
+                std::memcpy(colPtr->rawData() + static_cast<size_t>(startRow) * es,
                             srcBytes, static_cast<size_t>(take) * es);
+            } else {
+                for (uint32_t i = 0; i < take; ++i) {
+                    colPtr->setNull(startRow + i, true);
+                }
             }
         }
         for (uint32_t i = 0; i < take; ++i) ch.setAlive(startRow + i, true);
@@ -215,7 +306,9 @@ void Table::appendTypedBatch(uint32_t count, const void* const* colData) {
                 const ColumnChunk& colChunk = *ch.columns[c];
                 for (uint32_t i = 0; i < take; ++i) {
                     const uint32_t r = startRow + i;
-                    idx->insert(HashIndex::cellKey(colChunk, r), RowLoc{chunkIdx, r});
+                    if (!colChunk.isNull(r)) {
+                        idx->insert(HashIndex::cellKey(colChunk, r), RowLoc{chunkIdx, r});
+                    }
                 }
             }
             if (auto rit = rangeIndexes_.find(c); rit != rangeIndexes_.end() && rit->second) {
@@ -223,20 +316,21 @@ void Table::appendTypedBatch(uint32_t count, const void* const* colData) {
                 const ColumnChunk& colChunk = *ch.columns[c];
                 for (uint32_t i = 0; i < take; ++i) {
                     const uint32_t r = startRow + i;
-                    ridx->insert(colChunk, r, RowLoc{chunkIdx, r}, dict_.get());
+                    if (!colChunk.isNull(r)) {
+                        ridx->insert(colChunk, r, RowLoc{chunkIdx, r}, dict_.get());
+                    }
                 }
             }
         }
         for (auto& kv : spatialIndexes_) {
             if (!kv.second) continue;
             auto& si = mutableSpatialIndex(kv.first);
-            const auto& cols = si->cols();
             for (uint32_t i = 0; i < take; ++i) {
                 const uint32_t r = startRow + i;
-                si->insert(readNumericCell(ch, cols[0], r),
-                           readNumericCell(ch, cols[1], r),
-                           (si->dims() >= 3) ? readNumericCell(ch, cols[2], r) : 0.0,
-                           RowLoc{chunkIdx, r});
+                double x = 0.0, y = 0.0, z = 0.0;
+                if (readSpatialCoords(ch, *si, r, x, y, z)) {
+                    si->insert(x, y, z, RowLoc{chunkIdx, r});
+                }
             }
         }
         offset += take;
@@ -251,40 +345,45 @@ bool Table::updateCell(RowLoc loc, size_t colIdx, const ScalarValue& v) {
     std::vector<std::pair<std::string, std::array<double, 3>>> oldSpatial;
     for (const auto& kv : spatialIndexes_) {
         if (kv.second && spatialUsesColumn(*kv.second, colIdx)) {
-            const auto& cols = kv.second->cols();
-            oldSpatial.emplace_back(
-                kv.first,
-                std::array<double, 3>{readNumericCell(ch, cols[0], loc.rowIdx),
-                                      readNumericCell(ch, cols[1], loc.rowIdx),
-                                      kv.second->dims() >= 3 ? readNumericCell(ch, cols[2], loc.rowIdx)
-                                                             : 0.0});
+            double ox = 0.0, oy = 0.0, oz = 0.0;
+            if (readSpatialCoords(ch, *kv.second, loc.rowIdx, ox, oy, oz)) {
+                oldSpatial.emplace_back(kv.first, std::array<double, 3>{ox, oy, oz});
+            }
         }
     }
 
     auto& colPtr = ch.mutableColumn(colIdx);
-    if (auto idxIt = indexes_.find(colIdx); idxIt != indexes_.end() && idxIt->second) {
-        mutableIndex(colIdx)->erase(HashIndex::cellKey(*colPtr, loc.rowIdx), loc);
-    }
-    if (auto rIt = rangeIndexes_.find(colIdx); rIt != rangeIndexes_.end() && rIt->second) {
-        mutableRangeIndex(colIdx)->erase(*colPtr, loc.rowIdx, loc, dict_.get());
+    const bool wasNull = colPtr->isNull(loc.rowIdx);
+    if (!wasNull) {
+        if (auto idxIt = indexes_.find(colIdx); idxIt != indexes_.end() && idxIt->second) {
+            mutableIndex(colIdx)->erase(HashIndex::cellKey(*colPtr, loc.rowIdx), loc);
+        }
+        if (auto rIt = rangeIndexes_.find(colIdx); rIt != rangeIndexes_.end() && rIt->second) {
+            mutableRangeIndex(colIdx)->erase(*colPtr, loc.rowIdx, loc, dict_.get());
+        }
     }
 
     colPtr->writeCell(loc.rowIdx, v, dict_.get());
 
-    if (auto idxIt = indexes_.find(colIdx); idxIt != indexes_.end() && idxIt->second) {
-        mutableIndex(colIdx)->insert(HashIndex::cellKey(*colPtr, loc.rowIdx), loc);
-    }
-    if (auto rIt = rangeIndexes_.find(colIdx); rIt != rangeIndexes_.end() && rIt->second) {
-        mutableRangeIndex(colIdx)->insert(*colPtr, loc.rowIdx, loc, dict_.get());
+    const bool isNowNull = colPtr->isNull(loc.rowIdx);
+    if (!isNowNull) {
+        if (auto idxIt = indexes_.find(colIdx); idxIt != indexes_.end() && idxIt->second) {
+            mutableIndex(colIdx)->insert(HashIndex::cellKey(*colPtr, loc.rowIdx), loc);
+        }
+        if (auto rIt = rangeIndexes_.find(colIdx); rIt != rangeIndexes_.end() && rIt->second) {
+            mutableRangeIndex(colIdx)->insert(*colPtr, loc.rowIdx, loc, dict_.get());
+        }
     }
     for (const auto& item : oldSpatial) {
-        auto& si = mutableSpatialIndex(item.first);
-        si->erase(item.second[0], item.second[1], item.second[2], loc);
-        const auto& cols = si->cols();
-        si->insert(readNumericCell(ch, cols[0], loc.rowIdx),
-                   readNumericCell(ch, cols[1], loc.rowIdx),
-                   si->dims() >= 3 ? readNumericCell(ch, cols[2], loc.rowIdx) : 0.0,
-                   loc);
+        mutableSpatialIndex(item.first)->erase(item.second[0], item.second[1], item.second[2], loc);
+    }
+    for (const auto& kv : spatialIndexes_) {
+        if (kv.second && spatialUsesColumn(*kv.second, colIdx)) {
+            double nx = 0.0, ny = 0.0, nz = 0.0;
+            if (readSpatialCoords(ch, *kv.second, loc.rowIdx, nx, ny, nz)) {
+                mutableSpatialIndex(kv.first)->insert(nx, ny, nz, loc);
+            }
+        }
     }
 
     ++version_;
@@ -298,6 +397,7 @@ bool Table::removeRow(RowLoc loc) {
     if (!ch.isAlive(loc.rowIdx)) return false;
 
     for (size_t c = 0; c < schema_.size(); ++c) {
+        if (ch.columns[c]->isNull(loc.rowIdx)) continue;
         if (auto idxIt = indexes_.find(c); idxIt != indexes_.end() && idxIt->second) {
             mutableIndex(c)->erase(HashIndex::cellKey(*ch.columns[c], loc.rowIdx), loc);
         }
@@ -307,12 +407,10 @@ bool Table::removeRow(RowLoc loc) {
     }
     for (const auto& kv : spatialIndexes_) {
         if (!kv.second) continue;
-        auto& si = mutableSpatialIndex(kv.first);
-        const auto& cols = si->cols();
-        si->erase(readNumericCell(ch, cols[0], loc.rowIdx),
-                  readNumericCell(ch, cols[1], loc.rowIdx),
-                  si->dims() >= 3 ? readNumericCell(ch, cols[2], loc.rowIdx) : 0.0,
-                  loc);
+        double x = 0.0, y = 0.0, z = 0.0;
+        if (readSpatialCoords(ch, *kv.second, loc.rowIdx, x, y, z)) {
+            mutableSpatialIndex(kv.first)->erase(x, y, z, loc);
+        }
     }
     ch.setAlive(loc.rowIdx, false);
     --totalAliveRows_;
@@ -409,6 +507,27 @@ void Table::compact() {
     for (const auto& nm : spatialNames) rebuildSpatialIndex(nm);
 }
 
+void Table::clear() {
+    chunks_.clear();
+    totalAliveRows_ = 0;
+    ++version_;
+    ++structureVersion_;
+    for (auto& kv : indexes_) {
+        if (kv.second) mutableIndex(kv.first)->clear(64);
+    }
+    for (auto& kv : rangeIndexes_) {
+        if (kv.second) mutableRangeIndex(kv.first)->clear();
+    }
+    for (auto& kv : spatialIndexes_) {
+        if (kv.second) mutableSpatialIndex(kv.first)->clear(64);
+    }
+}
+
+TableStats Table::stats() const {
+    return computeStatsCommon(schema_, dict_.get(), chunks_, totalAliveRows_,
+                              indexes_.size(), rangeIndexes_.size(), spatialIndexes_.size());
+}
+
 void Table::rebuildIndex(size_t colIdx) {
     auto idx = std::make_shared<HashIndex>(colIdx, schema_.columns[colIdx].type);
     idx->clear(totalAliveRows_);
@@ -416,7 +535,9 @@ void Table::rebuildIndex(size_t colIdx) {
         const TableChunk& ch = chunks_[ci];
         const ColumnChunk& colChunk = *ch.columns[colIdx];
         for (uint32_t r = 0; r < ch.rowCount; ++r) {
-            if (ch.isAlive(r)) idx->insert(HashIndex::cellKey(colChunk, r), RowLoc{ci, r});
+            if (ch.isAlive(r) && !colChunk.isNull(r)) {
+                idx->insert(HashIndex::cellKey(colChunk, r), RowLoc{ci, r});
+            }
         }
     }
     indexes_[colIdx] = std::move(idx);
@@ -428,7 +549,9 @@ void Table::rebuildRangeIndex(size_t colIdx) {
         const TableChunk& ch = chunks_[ci];
         const ColumnChunk& colChunk = *ch.columns[colIdx];
         for (uint32_t r = 0; r < ch.rowCount; ++r) {
-            if (ch.isAlive(r)) idx->insert(colChunk, r, RowLoc{ci, r}, dict_.get());
+            if (ch.isAlive(r) && !colChunk.isNull(r)) {
+                idx->insert(colChunk, r, RowLoc{ci, r}, dict_.get());
+            }
         }
     }
     idx->sortIfNeeded();
@@ -442,15 +565,14 @@ void Table::rebuildSpatialIndex(const std::string& name) {
                              it->second->cols().begin() + it->second->dims());
     auto si = std::make_shared<SpatialIndex>(name, std::move(cols), it->second->cellSize());
     si->clear(totalAliveRows_);
-    const auto& scols = si->cols();
     for (uint32_t ci = 0; ci < chunks_.size(); ++ci) {
         const TableChunk& ch = chunks_[ci];
         for (uint32_t r = 0; r < ch.rowCount; ++r) {
             if (!ch.isAlive(r)) continue;
-            si->insert(readNumericCell(ch, scols[0], r),
-                       readNumericCell(ch, scols[1], r),
-                       si->dims() >= 3 ? readNumericCell(ch, scols[2], r) : 0.0,
-                       RowLoc{ci, r});
+            double x = 0.0, y = 0.0, z = 0.0;
+            if (readSpatialCoords(ch, *si, r, x, y, z)) {
+                si->insert(x, y, z, RowLoc{ci, r});
+            }
         }
     }
     spatialIndexes_[name] = std::move(si);

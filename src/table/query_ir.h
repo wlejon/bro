@@ -25,6 +25,8 @@ enum class ExprOp : uint8_t {
     BitNot,
     Not,
     StrLen,
+    IsNull,
+    IsNotNull,
     // Binary numeric / bitwise
     Add,
     Sub,
@@ -44,9 +46,10 @@ enum class ExprOp : uint8_t {
     Le,
     Gt,
     Ge,
-    // Logical
+    // Logical / null handling
     And,
     Or,
+    Coalesce,
     // String comparisons / predicates
     StrEq,
     StrNe,

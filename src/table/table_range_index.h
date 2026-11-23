@@ -64,6 +64,8 @@ private:
     }
 
     static bool makeNumEntry(ColType colType, const ScalarValue& v, RowLoc loc, NumEntry& out);
+    static void convertBound(ColType colType, const ScalarValue& v, bool isLo, bool& inc,
+                             NumEntry& out, bool& alwaysEmpty, bool& unbounded);
     int compareNum(const NumEntry& a, const NumEntry& b) const;
 
     size_t colIdx_ = 0;
@@ -102,6 +104,7 @@ public:
     uint8_t dims() const { return dims_; }
     double cellSize() const { return cellSize_; }
     size_t entryCount() const { return entryCount_; }
+    size_t nodeCapacity() const { return nodes_.size(); }
 
 private:
     struct Bucket {
@@ -132,6 +135,7 @@ private:
     double cellSize_ = 16.0;
     std::vector<Bucket> buckets_;
     std::vector<Node> nodes_;
+    uint32_t freeHead_ = kInvalidNode;
     size_t usedBuckets_ = 0;
     size_t entryCount_ = 0;
 };

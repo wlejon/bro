@@ -21,6 +21,9 @@ add_library(bro_table STATIC
     query_jit_agg.cpp
     query_jit.h
     query_jit.cpp
+    query_jit_simd.cpp
+    query_groupby.h
+    query_groupby.cpp
     query_materialize.h
     query_materialize.cpp
     query_exec.h
@@ -53,4 +56,20 @@ if(BRO_BUILD_TESTS)
         bro_table
     )
     set_target_properties(bro_table_advanced_test PROPERTIES FOLDER "tests")
+
+    add_executable(bro_table_production_test
+        tests/test_table_production.cpp
+    )
+    target_link_libraries(bro_table_production_test PRIVATE
+        bro_table
+    )
+    set_target_properties(bro_table_production_test PROPERTIES FOLDER "tests")
+
+    add_executable(bro_table_bench
+        tests/bench_table.cpp
+    )
+    target_link_libraries(bro_table_bench PRIVATE
+        bro_table
+    )
+    set_target_properties(bro_table_bench PROPERTIES FOLDER "tests")
 endif()

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -37,11 +38,20 @@ int resolveColumnArg(const bro::table::Schema& schema, Value arg) {
     return -1;
 }
 
+bool tryIndexArg(std::span<const Value> args, size_t pos, size_t& outIdx) {
+    if (!hasArg(args, pos)) return false;
+    const double d = numAt(args, pos);
+    if (!std::isfinite(d) || d < 0.0) return false;
+    outIdx = static_cast<size_t>(d);
+    return true;
+}
+
 bool parseSchemaSpec(Value arg, std::vector<bro::table::ColumnDef>& outDefs, std::string& err) {
     if (!ev::isObject(arg)) {
         err = "schema must be an object or array";
         return false;
     }
+    std::unordered_set<std::string> seenNames;
     ev::Persistent root(arg);
     Value lenVal = ev::getProperty(root.get(), "length");
     if (isJsArray(root.get()) && !lenVal.isUndefined()) {
@@ -64,6 +74,10 @@ bool parseSchemaSpec(Value arg, std::vector<bro::table::ColumnDef>& outDefs, std
             bro::table::ColType ct{};
             if (name.empty() || !bro::table::parseColType(typeStr, ct)) {
                 err = "invalid column schema entry: " + name + ":" + typeStr;
+                return false;
+            }
+            if (!seenNames.insert(name).second) {
+                err = "duplicate column name '" + name + "'";
                 return false;
             }
             outDefs.push_back(bro::table::ColumnDef{std::move(name), ct});
@@ -90,8 +104,12 @@ bool parseSchemaSpec(Value arg, std::vector<bro::table::ColumnDef>& outDefs, std
         std::string name = ev::toUtf8(ev::getElement(keysArr.get(), i));
         std::string typeStr = ev::toUtf8(ev::getProperty(root.get(), name));
         bro::table::ColType ct{};
-        if (!bro::table::parseColType(typeStr, ct)) {
+        if (name.empty() || !bro::table::parseColType(typeStr, ct)) {
             err = "unknown column type '" + typeStr + "' for column '" + name + "'";
+            return false;
+        }
+        if (!seenNames.insert(name).second) {
+            err = "duplicate column name '" + name + "'";
             return false;
         }
         outDefs.push_back(bro::table::ColumnDef{std::move(name), ct});
@@ -252,7 +270,11 @@ void decorateTableProto(ev::ObjectBuilder& proto) {
                     uint32_t l = static_cast<uint32_t>(ev::toDouble(ev::getProperty(cv, "length")));
                     if (!foundAny) { batchLen = l; foundAny = true; }
                     else batchLen = std::min(batchLen, l);
+                } else {
+                    allTypedNumeric = false;
                 }
+            } else {
+                allTypedNumeric = false;
             }
         }
         if (!foundAny || batchLen == 0) return ev::fromDouble(0);
@@ -289,27 +311,37 @@ void decorateTableProto(ev::ObjectBuilder& proto) {
     proto.def("get", 2, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.get: invalid receiver");
+        size_t rowIdx = 0;
+        if (!tryIndexArg(args, 0, rowIdx)) return ev::undefined();
         const int colIdx = resolveColumnArg(tbl->schema(), argAt(args, 1));
         if (colIdx < 0) return ev::undefined();
         bro::table::RowLoc loc{};
-        if (!tbl->resolveAliveRow(static_cast<size_t>(numAt(args, 0)), loc)) return ev::undefined();
+        if (!tbl->resolveAliveRow(rowIdx, loc)) return ev::undefined();
         return scalarToJsValue(tbl->getCell(loc, static_cast<size_t>(colIdx)));
     });
 
     proto.def("row", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.row: invalid receiver");
+        size_t rowIdx = 0;
+        if (!tryIndexArg(args, 0, rowIdx)) return ev::undefined();
         bro::table::RowLoc loc{};
-        if (!tbl->resolveAliveRow(static_cast<size_t>(numAt(args, 0)), loc)) return ev::undefined();
-        auto snap = tbl->snapshot();
-        return tableRowToJsObject(*snap, loc.chunkIdx, loc.rowIdx);
+        if (!tbl->resolveAliveRow(rowIdx, loc)) return ev::undefined();
+        ObjectBuilder obj;
+        for (size_t c = 0; c < tbl->columnCount(); ++c) {
+            obj.set(tbl->schema().columns[c].name.c_str(),
+                    scalarToJsValue(tbl->getCell(loc, c)));
+        }
+        return obj.get();
     });
 
     proto.def("updateRow", 2, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.updateRow: invalid receiver");
+        size_t rowIdx = 0;
+        if (!tryIndexArg(args, 0, rowIdx)) return ev::fromBool(false);
         bro::table::RowLoc loc{};
-        if (!tbl->resolveAliveRow(static_cast<size_t>(numAt(args, 0)), loc)) return ev::fromBool(false);
+        if (!tbl->resolveAliveRow(rowIdx, loc)) return ev::fromBool(false);
         if (!hasArg(args, 1) || !ev::isObject(args[1])) return ev::fromBool(false);
         ev::Persistent patch(args[1]);
         bool any = false;
@@ -325,8 +357,10 @@ void decorateTableProto(ev::ObjectBuilder& proto) {
     proto.def("removeRow", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.removeRow: invalid receiver");
+        size_t rowIdx = 0;
+        if (!tryIndexArg(args, 0, rowIdx)) return ev::fromBool(false);
         bro::table::RowLoc loc{};
-        if (!tbl->resolveAliveRow(static_cast<size_t>(numAt(args, 0)), loc)) return ev::fromBool(false);
+        if (!tbl->resolveAliveRow(rowIdx, loc)) return ev::fromBool(false);
         return ev::fromBool(tbl->removeRow(loc));
     });
 
@@ -367,16 +401,16 @@ void decorateTableProto(ev::ObjectBuilder& proto) {
     proto.def("chunkRowCount", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::fromDouble(0);
-        const size_t ci = static_cast<size_t>(numAt(args, 0));
-        if (ci >= tbl->chunkCount()) return ev::fromDouble(0);
+        size_t ci = 0;
+        if (!tryIndexArg(args, 0, ci) || ci >= tbl->chunkCount()) return ev::fromDouble(0);
         return ev::fromDouble(tbl->chunk(ci).rowCount);
     });
 
     proto.def("chunkColumnView", 2, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.chunkColumnView: invalid receiver");
-        const size_t ci = static_cast<size_t>(numAt(args, 0));
-        if (ci >= tbl->chunkCount()) return ev::undefined();
+        size_t ci = 0;
+        if (!tryIndexArg(args, 0, ci) || ci >= tbl->chunkCount()) return ev::undefined();
         const int colIdx = resolveColumnArg(tbl->schema(), argAt(args, 1));
         if (colIdx < 0) return ev::undefined();
         const auto& ch = tbl->chunk(ci);
@@ -476,9 +510,10 @@ void decorateSnapshotProto(ev::ObjectBuilder& proto) {
     proto.def("get", 2, [](Value thisVal, std::span<const Value> args) -> Value {
         auto snap = hostTableSnapshotOf(thisVal);
         if (!snap) return ev::throwTypeError("TableSnapshot.get: invalid receiver");
+        size_t target = 0;
+        if (!tryIndexArg(args, 0, target)) return ev::undefined();
         const int colIdx = resolveColumnArg(snap->schema, argAt(args, 1));
         if (colIdx < 0) return ev::undefined();
-        size_t target = static_cast<size_t>(numAt(args, 0));
         size_t acc = 0;
         for (uint32_t ci = 0; ci < snap->chunks.size(); ++ci) {
             const auto& fc = snap->chunks[ci];
@@ -499,7 +534,8 @@ void decorateSnapshotProto(ev::ObjectBuilder& proto) {
     proto.def("row", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         auto snap = hostTableSnapshotOf(thisVal);
         if (!snap) return ev::throwTypeError("TableSnapshot.row: invalid receiver");
-        size_t target = static_cast<size_t>(numAt(args, 0));
+        size_t target = 0;
+        if (!tryIndexArg(args, 0, target)) return ev::undefined();
         size_t acc = 0;
         for (uint32_t ci = 0; ci < snap->chunks.size(); ++ci) {
             const auto& fc = snap->chunks[ci];
@@ -520,16 +556,16 @@ void decorateSnapshotProto(ev::ObjectBuilder& proto) {
     proto.def("chunkRowCount", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         auto snap = hostTableSnapshotOf(thisVal);
         if (!snap) return ev::fromDouble(0);
-        const size_t ci = static_cast<size_t>(numAt(args, 0));
-        if (ci >= snap->chunks.size()) return ev::fromDouble(0);
+        size_t ci = 0;
+        if (!tryIndexArg(args, 0, ci) || ci >= snap->chunks.size()) return ev::fromDouble(0);
         return ev::fromDouble(snap->chunks[ci].rowCount);
     });
 
     proto.def("chunkColumnView", 2, [](Value thisVal, std::span<const Value> args) -> Value {
         auto snap = hostTableSnapshotOf(thisVal);
         if (!snap) return ev::throwTypeError("TableSnapshot.chunkColumnView: invalid receiver");
-        const size_t ci = static_cast<size_t>(numAt(args, 0));
-        if (ci >= snap->chunks.size()) return ev::undefined();
+        size_t ci = 0;
+        if (!tryIndexArg(args, 0, ci) || ci >= snap->chunks.size()) return ev::undefined();
         const int colIdx = resolveColumnArg(snap->schema, argAt(args, 1));
         if (colIdx < 0) return ev::undefined();
         const auto& fc = snap->chunks[ci];

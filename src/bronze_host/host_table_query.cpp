@@ -227,6 +227,7 @@ void decorateExprProto(ev::ObjectBuilder& proto) {
     addBin("contains", ExprOp::StrContains);
     addBin("startsWith", ExprOp::StrStartsWith);
     addBin("endsWith", ExprOp::StrEndsWith);
+    addBin("coalesce", ExprOp::Coalesce);
 
     auto addUn = [&](const char* name, ExprOp op) {
         proto.def(name, 0, [op](Value thisVal, std::span<const Value>) -> Value {
@@ -241,6 +242,8 @@ void decorateExprProto(ev::ObjectBuilder& proto) {
     addUn("bitNot", ExprOp::BitNot);
     addUn("not", ExprOp::Not);
     addUn("len", ExprOp::StrLen);
+    addUn("isNull", ExprOp::IsNull);
+    addUn("isNotNull", ExprOp::IsNotNull);
 
     proto.def("selectAs", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         // Convenience object descriptor { alias, expr } for select() arrays.
@@ -460,15 +463,17 @@ void decorateQueryBuilderProto(ev::ObjectBuilder& proto) {
         if (!qb || !qb->mutableSource) {
             return ev::throwTypeError("Query.update: requires mutable Table query");
         }
-        return applyTableUpdateDirect(qb->mutableSource, qb->filters, argAt(args, 0));
+        return applyTableUpdateDirect(qb->mutableSource, qb->filters, argAt(args, 0),
+                                      &qb->spatial, parseExecOptions(args, 1));
     });
 
-    proto.def("remove", 1, [](Value thisVal, std::span<const Value>) -> Value {
+    proto.def("remove", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         HostQueryBuilder* qb = queryOf(thisVal);
         if (!qb || !qb->mutableSource) {
             return ev::throwTypeError("Query.remove: requires mutable Table query");
         }
-        return applyTableDeleteDirect(qb->mutableSource, qb->filters);
+        return applyTableDeleteDirect(qb->mutableSource, qb->filters,
+                                      &qb->spatial, parseExecOptions(args, 0));
     });
     attachQueryExtProto(proto);
 }
@@ -498,33 +503,45 @@ bool appendWhereCondition(Value condVal, std::vector<std::shared_ptr<const JsExp
 
 Value applyTableUpdateDirect(const std::shared_ptr<bro::table::Table>& tbl,
                              const std::vector<std::shared_ptr<const JsExprNode>>& filters,
-                             Value patchObj) {
+                             Value patchObj,
+                             const bro::table::SpatialFilterSpec* spatial,
+                             bro::table::ExecOptions opts) {
     if (!ev::isObject(patchObj)) return ev::throwTypeError("update: expected column map object");
     QueryPlan plan;
     for (const auto& f : filters) plan.filters.push_back(lowerExprTree(plan.exprs, f));
+    if (spatial) plan.spatialFilter = *spatial;
     ev::Persistent patch(patchObj);
     for (const std::string& col : getOwnObjectKeys(patch.get())) {
         Value rhsVal = ev::getProperty(patch.get(), col);
         auto rhsExpr = unwrapExprOr(rhsVal, false);
         plan.updates.push_back(UpdateAssignment{col, -1, lowerExprTree(plan.exprs, rhsExpr)});
     }
-    MutationExecResult res = executeUpdate(*tbl, std::move(plan));
+    MutationExecResult res = executeUpdate(*tbl, std::move(plan), opts);
     if (!res.ok) return ev::throwTypeError("update: " + res.error);
     ObjectBuilder obj;
     obj.set("affectedRows", ev::fromDouble(static_cast<double>(res.affectedRows)));
     obj.set("usedJit", ev::fromBool(res.usedJit));
+    obj.set("usedIndex", ev::fromBool(res.usedIndex));
+    obj.set("usedRangeIndex", ev::fromBool(res.usedRangeIndex));
+    obj.set("usedSpatialIndex", ev::fromBool(res.usedSpatialIndex));
     return obj.get();
 }
 
 Value applyTableDeleteDirect(const std::shared_ptr<bro::table::Table>& tbl,
-                             const std::vector<std::shared_ptr<const JsExprNode>>& filters) {
+                             const std::vector<std::shared_ptr<const JsExprNode>>& filters,
+                             const bro::table::SpatialFilterSpec* spatial,
+                             bro::table::ExecOptions opts) {
     QueryPlan plan;
     for (const auto& f : filters) plan.filters.push_back(lowerExprTree(plan.exprs, f));
-    MutationExecResult res = executeDelete(*tbl, std::move(plan));
+    if (spatial) plan.spatialFilter = *spatial;
+    MutationExecResult res = executeDelete(*tbl, std::move(plan), opts);
     if (!res.ok) return ev::throwTypeError("deleteWhere: " + res.error);
     ObjectBuilder obj;
     obj.set("affectedRows", ev::fromDouble(static_cast<double>(res.affectedRows)));
     obj.set("usedJit", ev::fromBool(res.usedJit));
+    obj.set("usedIndex", ev::fromBool(res.usedIndex));
+    obj.set("usedRangeIndex", ev::fromBool(res.usedRangeIndex));
+    obj.set("usedSpatialIndex", ev::fromBool(res.usedSpatialIndex));
     return obj.get();
 }
 
@@ -575,6 +592,8 @@ void populateQueryNamespace(ev::ObjectBuilder& ns) {
     regUn("bitNot", ExprOp::BitNot);
     regUn("not", ExprOp::Not);
     regUn("strLen", ExprOp::StrLen);
+    regUn("isNull", ExprOp::IsNull);
+    regUn("isNotNull", ExprOp::IsNotNull);
 
     auto regBin = [&](const char* name, ExprOp op) {
         ns.def(name, 2, [op](Value, std::span<const Value> args) -> Value {
@@ -604,6 +623,7 @@ void populateQueryNamespace(ev::ObjectBuilder& ns) {
     regBin("contains", ExprOp::StrContains);
     regBin("startsWith", ExprOp::StrStartsWith);
     regBin("endsWith", ExprOp::StrEndsWith);
+    regBin("coalesce", ExprOp::Coalesce);
 
     auto regVariadicLogic = [&](const char* name, ExprOp op) {
         ns.def(name, 2, [op](Value, std::span<const Value> args) -> Value {
@@ -619,7 +639,16 @@ void populateQueryNamespace(ev::ObjectBuilder& ns) {
     regVariadicLogic("and", ExprOp::And);
     regVariadicLogic("or", ExprOp::Or);
 
-    ns.def("count", 1, [](Value, std::span<const Value> args) -> Value {
+    ns.def("count", 2, [](Value, std::span<const Value> args) -> Value {
+        if (hasArg(args, 0) && g_exprClass.installed() && g_exprClass.unwrap(args[0]) != nullptr) {
+            auto ex = unwrapExprOr(args[0], true);
+            std::string alias = (hasArg(args, 1) && ev::isString(args[1])) ? ev::toUtf8(args[1]) : "";
+            if (alias.empty() && ex->op == ExprOp::ColRef) {
+                alias = "count_" + ex->colName;
+            }
+            if (alias.empty()) alias = "count";
+            return wrapAgg(JsAggNode{AggSpec::Kind::Count, std::move(alias), std::move(ex)});
+        }
         std::string alias = hasArg(args, 0) && ev::isString(args[0]) ? ev::toUtf8(args[0]) : "count";
         return wrapAgg(JsAggNode{AggSpec::Kind::Count, std::move(alias), nullptr});
     });

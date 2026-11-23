@@ -129,9 +129,13 @@ bool appendWhereCondition(Value condVal, std::vector<std::shared_ptr<const JsExp
 /// Executes update/delete shorthand against a mutable Table using filter + patch.
 Value applyTableUpdateDirect(const std::shared_ptr<bro::table::Table>& tbl,
                              const std::vector<std::shared_ptr<const JsExprNode>>& filters,
-                             Value patchObj);
+                             Value patchObj,
+                             const bro::table::SpatialFilterSpec* spatial = nullptr,
+                             bro::table::ExecOptions opts = {});
 Value applyTableDeleteDirect(const std::shared_ptr<bro::table::Table>& tbl,
-                             const std::vector<std::shared_ptr<const JsExprNode>>& filters);
+                             const std::vector<std::shared_ptr<const JsExprNode>>& filters,
+                             const bro::table::SpatialFilterSpec* spatial = nullptr,
+                             bro::table::ExecOptions opts = {});
 
 /// Shared helpers & extension prototype hooks (implemented in host_table_ext.cpp).
 int resolveTableColumnArg(const bro::table::Schema& schema, Value arg);

@@ -1,6 +1,7 @@
 #include "table/query_materialize.h"
 
 #include "table/query_eval.h"
+#include "table/query_groupby.h"
 
 #include <algorithm>
 #include <unordered_map>
@@ -139,6 +140,7 @@ std::shared_ptr<Table> buildGroupedTable(const QueryPlan& plan, const TableSnaps
         std::vector<ScalarValue> keys;
         std::vector<double> aggF;
         std::vector<int64_t> aggI;
+        std::vector<uint64_t> aggCounts;
         std::vector<ScalarValue> aggExt;
         uint64_t count = 0;
     };
@@ -175,34 +177,48 @@ std::shared_ptr<Table> buildGroupedTable(const QueryPlan& plan, const TableSnaps
             g.keys = std::move(keys);
             g.aggF.assign(plan.aggregates.size(), 0.0);
             g.aggI.assign(plan.aggregates.size(), 0);
+            g.aggCounts.assign(plan.aggregates.size(), 0);
             g.aggExt.assign(plan.aggregates.size(), ScalarValue::makeNull());
             groups.push_back(std::move(g));
             hashToGroup[h].push_back(gIdx);
         }
         GroupState& g = groups[gIdx];
-        const bool firstInGroup = (g.count == 0);
         ++g.count;
         for (size_t ai = 0; ai < plan.aggregates.size(); ++ai) {
             const AggSpec& a = plan.aggregates[ai];
-            if (a.kind == AggSpec::Kind::Count) {
+            if (a.kind == AggSpec::Kind::Count && a.expr == kInvalidExpr) {
                 g.aggI[ai] += 1;
+                g.aggCounts[ai] += 1;
                 continue;
             }
             ScalarValue val = evalExpr(plan.exprs, a.expr,
                                        left, p.left.chunkIdx, p.left.rowIdx,
                                        right, p.right.chunkIdx, p.right.rowIdx);
+            if (val.isNull) continue;
             double dv = colTypeIsFloat(val.type)
                             ? val.f64
                             : (colTypeIsUnsignedInt(val.type) ? static_cast<double>(val.u64)
                                                              : static_cast<double>(val.i64));
-            if (a.kind == AggSpec::Kind::Sum || a.kind == AggSpec::Kind::Avg) {
-                if (a.outputType == ColType::I64) g.aggI[ai] += val.i64;
-                else g.aggF[ai] += dv;
+            if (a.kind == AggSpec::Kind::Count) {
+                g.aggI[ai] += 1;
+            } else if (a.kind == AggSpec::Kind::Sum || a.kind == AggSpec::Kind::Avg) {
+                if (a.outputType == ColType::I64) {
+                    g.aggI[ai] += colTypeIsUnsignedInt(val.type)
+                                      ? static_cast<int64_t>(val.u64)
+                                      : val.i64;
+                } else {
+                    g.aggF[ai] += dv;
+                }
             } else if (a.kind == AggSpec::Kind::Min) {
-                if (firstInGroup || compareScalar(val, g.aggExt[ai]) < 0) g.aggExt[ai] = std::move(val);
+                if (g.aggCounts[ai] == 0 || compareScalar(val, g.aggExt[ai]) < 0) {
+                    g.aggExt[ai] = std::move(val);
+                }
             } else if (a.kind == AggSpec::Kind::Max) {
-                if (firstInGroup || compareScalar(val, g.aggExt[ai]) > 0) g.aggExt[ai] = std::move(val);
+                if (g.aggCounts[ai] == 0 || compareScalar(val, g.aggExt[ai]) > 0) {
+                    g.aggExt[ai] = std::move(val);
+                }
             }
+            ++g.aggCounts[ai];
         }
     }
 
@@ -210,6 +226,7 @@ std::shared_ptr<Table> buildGroupedTable(const QueryPlan& plan, const TableSnaps
         GroupState g;
         g.aggF.assign(plan.aggregates.size(), 0.0);
         g.aggI.assign(plan.aggregates.size(), 0);
+        g.aggCounts.assign(plan.aggregates.size(), 0);
         g.aggExt.assign(plan.aggregates.size(), ScalarValue::makeNull());
         groups.push_back(std::move(g));
     }
@@ -228,8 +245,9 @@ std::shared_ptr<Table> buildGroupedTable(const QueryPlan& plan, const TableSnaps
                 row.push_back(a.outputType == ColType::I64 ? ScalarValue::makeI64(g.aggI[ai])
                                                            : ScalarValue::makeF64(g.aggF[ai]));
             } else if (a.kind == AggSpec::Kind::Avg) {
+                const uint64_t cnt = g.aggCounts[ai];
                 row.push_back(ScalarValue::makeF64(
-                    g.count > 0 ? (g.aggF[ai] / static_cast<double>(g.count)) : 0.0));
+                    cnt > 0 ? (g.aggF[ai] / static_cast<double>(cnt)) : 0.0));
             } else {
                 row.push_back(g.aggExt[ai]);
             }
@@ -279,9 +297,14 @@ std::shared_ptr<Table> buildGroupedTable(const QueryPlan& plan, const TableSnaps
 
 std::shared_ptr<Table> finishPlanFromLeftMatchesImpl(
     const QueryPlan& plan, const TableSnapshot& left,
-    const std::vector<RowLoc>& leftMatches, bool* outUsedIndex) {
+    const std::vector<RowLoc>& leftMatches, bool* outUsedIndex, bool useParallel) {
     const bool hasJoin = plan.join.kind != JoinSpec::Kind::None && plan.join.rightTable;
     const bool hasAgg = !plan.groupKeys.empty() || !plan.aggregates.empty();
+    if (!hasJoin && hasAgg) {
+        if (auto fast = tryExecuteFastGroupBy(plan, left, leftMatches, useParallel)) {
+            return fast;
+        }
+    }
     const TableSnapshot* right = hasJoin ? plan.join.rightTable.get() : nullptr;
 
     std::vector<MatchPair> pairs;

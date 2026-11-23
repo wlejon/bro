@@ -99,6 +99,92 @@ Value materializeNearestTable(const TableSnapshot& snap, const std::string& inde
     return wrapHostTable(std::move(out));
 }
 
+Value tableStatsToJsObject(const TableStats& st) {
+    ObjectBuilder obj;
+    obj.set("rowCount", ev::fromDouble(static_cast<double>(st.rowCount)));
+    obj.set("allocatedRows", ev::fromDouble(static_cast<double>(st.allocatedRows)));
+    obj.set("tombstoneCount", ev::fromDouble(static_cast<double>(st.tombstoneCount)));
+    obj.set("chunkCount", ev::fromDouble(static_cast<double>(st.chunkCount)));
+    obj.set("columnCount", ev::fromDouble(static_cast<double>(st.columnCount)));
+    obj.set("fixedBytes", ev::fromDouble(static_cast<double>(st.fixedBytes)));
+    obj.set("stringArenaBytes", ev::fromDouble(static_cast<double>(st.stringArenaBytes)));
+    obj.set("nullBitmapBytes", ev::fromDouble(static_cast<double>(st.nullBitmapBytes)));
+    obj.set("totalBytes", ev::fromDouble(static_cast<double>(
+        st.fixedBytes + st.stringArenaBytes + st.nullBitmapBytes)));
+    obj.set("dictEntries", ev::fromDouble(static_cast<double>(st.dictEntries)));
+    obj.set("hashIndexes", ev::fromDouble(static_cast<double>(st.hashIndexes)));
+    obj.set("rangeIndexes", ev::fromDouble(static_cast<double>(st.rangeIndexes)));
+    obj.set("spatialIndexes", ev::fromDouble(static_cast<double>(st.spatialIndexes)));
+    obj.set("tombstoneRatio", ev::fromDouble(st.tombstoneRatio));
+    return obj.get();
+}
+
+Value materializeColumnArray(const TableSnapshot& snap, size_t colIdx) {
+    const ColType ct = snap.schema.columns[colIdx].type;
+    bool hasNulls = false;
+    for (const auto& fc : snap.chunks) {
+        if (fc.aliveCount > 0 && fc.columns[colIdx]->hasNulls()) {
+            hasNulls = true;
+            break;
+        }
+    }
+
+    if (!hasNulls) {
+        bronze::ElementKind kind{};
+        bool hasTyped = true;
+        switch (ct) {
+        case ColType::I32: kind = ev::elements::Int32; break;
+        case ColType::U32: kind = ev::elements::Uint32; break;
+        case ColType::I64: kind = ev::elements::BigInt64; break;
+        case ColType::F32: kind = ev::elements::Float32; break;
+        case ColType::F64: kind = ev::elements::Float64; break;
+        case ColType::Bool: kind = ev::elements::Uint8; break;
+        case ColType::Dict:
+        case ColType::String:
+            hasTyped = false;
+            break;
+        }
+        if (hasTyped) {
+            const size_t totalRows = snap.rowCount();
+            Value arr = ev::createTypedArray(kind, static_cast<uint32_t>(totalRows));
+            if (totalRows > 0) {
+                if (auto ta = ev::typedArrayInfo(arr); ta && ta.data) {
+                    uint8_t* dst = static_cast<uint8_t*>(ta.data);
+                    const size_t es = colTypeElemSize(ct);
+                    for (const auto& fc : snap.chunks) {
+                        if (fc.aliveCount == 0 || fc.rowCount == 0) continue;
+                        const uint8_t* src = fc.columns[colIdx]->rawData();
+                        if (fc.allAlive()) {
+                            std::memcpy(dst, src, static_cast<size_t>(fc.rowCount) * es);
+                            dst += static_cast<size_t>(fc.rowCount) * es;
+                        } else {
+                            for (uint32_t r = 0; r < fc.rowCount; ++r) {
+                                if (fc.isAlive(r)) {
+                                    std::memcpy(dst, src + static_cast<size_t>(r) * es, es);
+                                    dst += es;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return arr;
+        }
+    }
+
+    std::vector<RowLoc> locs;
+    locs.reserve(snap.rowCount());
+    for (uint32_t ci = 0; ci < snap.chunks.size(); ++ci) {
+        const auto& fc = snap.chunks[ci];
+        for (uint32_t r = 0; r < fc.rowCount; ++r) {
+            if (fc.isAlive(r)) locs.push_back(RowLoc{ci, r});
+        }
+    }
+    return hostArrayOf(locs.size(), [&snap, &locs, colIdx](size_t i) -> Value {
+        return scalarToJsValue(snap.getCell(colIdx, locs[i].chunkIdx, locs[i].rowIdx));
+    });
+}
+
 bool snapshotHasMappedChunk(const TableSnapshot& snap) {
     for (const auto& fc : snap.chunks) {
         for (const auto& col : fc.columns) {
@@ -309,6 +395,34 @@ void attachTableExtProto(ev::ObjectBuilder& proto) {
         return ev::undefined();
     });
 
+    proto.def("stats", 0, [](Value thisVal, std::span<const Value>) -> Value {
+        auto tbl = hostMutableTableOf(thisVal);
+        if (!tbl) return ev::throwTypeError("Table.stats: invalid receiver");
+        return tableStatsToJsObject(tbl->stats());
+    });
+
+    proto.def("clear", 0, [](Value thisVal, std::span<const Value>) -> Value {
+        auto tbl = hostMutableTableOf(thisVal);
+        if (!tbl) return ev::throwTypeError("Table.clear: invalid receiver");
+        tbl->clear();
+        return thisVal;
+    });
+
+    proto.def("clone", 0, [](Value thisVal, std::span<const Value>) -> Value {
+        auto tbl = hostMutableTableOf(thisVal);
+        if (!tbl) return ev::throwTypeError("Table.clone: invalid receiver");
+        return wrapHostTable(Table::fromSnapshot(*tbl->snapshot()));
+    });
+
+    proto.def("columnArray", 1, [](Value thisVal, std::span<const Value> args) -> Value {
+        auto tbl = hostMutableTableOf(thisVal);
+        if (!tbl) return ev::throwTypeError("Table.columnArray: invalid receiver");
+        int col = hasArg(args, 0) ? resolveTableColumnArg(tbl->schema(), args[0]) : -1;
+        if (col < 0) return ev::throwRangeError("Table.columnArray: invalid column");
+        auto snap = tbl->snapshot();
+        return materializeColumnArray(*snap, static_cast<size_t>(col));
+    });
+
     attachTableInteropProto(proto);
 }
 
@@ -392,6 +506,20 @@ void attachSnapshotExtProto(ev::ObjectBuilder& proto) {
         return wrapHostTable(Table::fromSnapshot(*snap));
     });
 
+    proto.def("stats", 0, [](Value thisVal, std::span<const Value>) -> Value {
+        auto snap = hostTableSnapshotOf(thisVal);
+        if (!snap) return ev::throwTypeError("TableSnapshot.stats: invalid receiver");
+        return tableStatsToJsObject(snap->stats());
+    });
+
+    proto.def("columnArray", 1, [](Value thisVal, std::span<const Value> args) -> Value {
+        auto snap = hostTableSnapshotOf(thisVal);
+        if (!snap) return ev::throwTypeError("TableSnapshot.columnArray: invalid receiver");
+        int col = hasArg(args, 0) ? resolveTableColumnArg(snap->schema, args[0]) : -1;
+        if (col < 0) return ev::throwRangeError("TableSnapshot.columnArray: invalid column");
+        return materializeColumnArray(*snap, static_cast<size_t>(col));
+    });
+
     attachSnapshotInteropProto(proto);
 }
 
@@ -456,10 +584,39 @@ void attachQueryExtProto(ev::ObjectBuilder& proto) {
         ob.set("table", tblVal.get());
         ob.set("usedJit", ev::fromBool(res.usedJit));
         ob.set("usedSimd", ev::fromBool(res.usedSimd));
+        ob.set("simdWidth", ev::fromDouble(static_cast<double>(res.simdWidth)));
         ob.set("usedJitAgg", ev::fromBool(res.usedJitAgg));
         ob.set("usedIndex", ev::fromBool(res.usedIndex));
         ob.set("usedRangeIndex", ev::fromBool(res.usedRangeIndex));
         ob.set("usedSpatialIndex", ev::fromBool(res.usedSpatialIndex));
+        return ob.get();
+    });
+
+    proto.def("explain", 1, [](Value thisVal, std::span<const Value> args) -> Value {
+        HostQueryBuilder* qb = hostQueryBuilderOf(thisVal);
+        if (!qb) return ev::throwTypeError("Query.explain: invalid receiver");
+        auto snap = qb->snapshotSource
+                        ? qb->snapshotSource
+                        : (qb->mutableSource ? qb->mutableSource->snapshot() : nullptr);
+        if (!snap) return ev::throwTypeError("Query.explain: missing table source");
+        QueryPlan plan = buildJsQueryPlan(*qb);
+        ExecOptions opts = parseQueryExecOptions(args, 0);
+        QueryExplainResult ex = explainQuery(*snap, std::move(plan), opts);
+        ObjectBuilder ob;
+        ob.set("ok", ev::fromBool(ex.ok));
+        if (!ex.error.empty()) ob.set("error", ev::fromUtf8(ex.error));
+        ob.set("strategy", ev::fromUtf8(ex.strategy));
+        ob.set("willUseJit", ev::fromBool(ex.willUseJit));
+        ob.set("willUseSimd", ev::fromBool(ex.willUseSimd));
+        ob.set("simdWidth", ev::fromDouble(static_cast<double>(ex.simdWidth)));
+        ob.set("willUseJitAgg", ev::fromBool(ex.willUseJitAgg));
+        ob.set("willUseIndex", ev::fromBool(ex.willUseIndex));
+        ob.set("willUseRangeIndex", ev::fromBool(ex.willUseRangeIndex));
+        ob.set("willUseSpatialIndex", ev::fromBool(ex.willUseSpatialIndex));
+        ob.set("hasNullsInPlanCols", ev::fromBool(ex.hasNullsInPlanCols));
+        if (!ex.indexColumn.empty()) ob.set("indexColumn", ev::fromUtf8(ex.indexColumn));
+        ob.set("residualFilters", uint32VectorToJsArray(ex.residualFilterIndices));
+        if (!ex.jitError.empty()) ob.set("jitError", ev::fromUtf8(ex.jitError));
         return ob.get();
     });
 

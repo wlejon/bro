@@ -38,11 +38,16 @@
 //   // Or ordered schema array: q.create([['id', 'i32'], ['hp', 'f32']])
 //
 //   tbl.insert({ id: 1, kind: 'hero', hp: 100, score: 42.5, active: true, name: 'A' });
+//   tbl.insert({ id: 2, kind: 'npc', hp: null, score: 0, active: false, name: null }); // nullable!
 //   tbl.insertMany([ ...rows ]);
 //   tbl.insertMany({ id: new Int32Array(...), hp: new Float32Array(...) }); // columnar fast path
 //   tbl.updateRow(aliveIdx, { hp: 90 });
 //   tbl.removeRow(aliveIdx);
 //   tbl.compact(); // packs tombstones, shrinks string arenas, rebuilds indexes
+//   tbl.clear();   // empties all chunks and indexes
+//   const copy = tbl.clone(); // independent COW table copy preserving schema + indexes
+//   const s = tbl.stats();    // { rowCount, allocatedRows, tombstoneCount, fixedBytes, stringArenaBytes, nullBitmapBytes, totalBytes, tombstoneRatio, ... }
+//   const denseCol = tbl.columnArray('hp'); // contiguous TypedArray when dense, or Array when nullable/string/dict
 //
 // ----------------------------------------------------------------------------
 // Secondary Indexes, Views & Snapshots
@@ -78,24 +83,35 @@
 //       .select({ id: 'left.id', bonus: 'right.bonus' })
 //       .run();
 //
-//   // Bulk in-place JIT mutations:
+//   // Nullability helpers & null-skipping aggregates:
+//   //   q.isNull(expr) / expr.isNull(), q.isNotNull(expr) / expr.isNotNull(),
+//   //   q.coalesce(expr, fallback) / expr.coalesce(fallback)
+//   //   q.count() counts all rows (`COUNT(*)`); q.count(col('hp')) counts non-null cells!
+//
+//   // Bulk in-place JIT & indexed/spatial mutations:
 //   tbl.updateWhere(q.lt('hp', 20), { hp: q.col('hp').add(10), active: false });
 //   tbl.deleteWhere(q.eq('active', false));
+//   tbl.query().whereInRadius('pos', [10, 20], 15).update({ hp: 100 });
+//   tbl.query().whereInAABB('pos', [0, 0], [5, 5]).remove();
 //
 //   // JIT cache inspection:
 //   const { hits, misses, entries } = bro.table.jitCacheStats();
 //   bro.table.clearJitCache();
 //
 // ----------------------------------------------------------------------------
-// SIMD Vectorization & Ungrouped JIT Aggregations
+// SIMD Vectorization (256-bit AVX2 / 128-bit), Aggregations & Explain
 // ----------------------------------------------------------------------------
-//   // Eligible filter predicates (`i32/u32/f32/i64/f64/dict`) and ungrouped
-//   // numeric aggregations (`count`, `sum`, `min`, `max`, `avg`) compile to
-//   // 128-bit brass SIMD / fused scalar-JIT chunk kernels. Inspect flags:
+//   // Eligible filter predicates (`i32/u32/f32/i64/f64/dict`, including uniform-width
+//   // vector arithmetic) and ungrouped numeric aggregations (`count`, `sum`, `min`,
+//   // `max`, `avg`) compile to 256-bit AVX2 (or 128-bit SSE2 fallback) brass kernels.
+//   // Chunks containing null values automatically fall back per-chunk while dense chunks stay SIMD.
 //   const stats = tbl.query()
 //       .agg({ cnt: q.count(), total: q.sum('score'), avg: q.avg('score') })
 //       .runWithStats();
-//   // stats = { table, usedJit, usedSimd, usedJitAgg, usedIndex, usedRangeIndex, usedSpatialIndex }
+//   // stats = { table, usedJit, usedSimd, simdWidth, usedJitAgg, usedIndex, usedRangeIndex, usedSpatialIndex }
+//
+//   const plan = tbl.query().where(q.gt('hp', 50)).explain();
+//   // plan = { ok, strategy, willUseJit, willUseSimd, simdWidth, willUseIndex, hasNullsInPlanCols, indexColumn, ... }
 //
 // ----------------------------------------------------------------------------
 // Range Indexes & 2D/3D Spatial Indexes
@@ -116,10 +132,10 @@
 //   // `.nearest(...)` also works directly on TableSnapshot.
 //
 // ----------------------------------------------------------------------------
-// Binary Persistence (.brotable) & Zero-Copy OS mmap
+// Binary Persistence (.brotable v2) & Zero-Copy OS mmap
 // ----------------------------------------------------------------------------
-//   tbl.save('world/entities.brotable');     // also snap.save(path)
-//   const bytes = tbl.toBytes();             // Uint8Array (.brotable v1, 64B aligned)
+//   tbl.save('world/entities.brotable');     // atomic write (.brotable v2 + FNV-1a checksum + index defs)
+//   const bytes = tbl.toBytes();             // Uint8Array (.brotable v2, 64B aligned columns & null bitmaps)
 //
 //   const loaded = bro.table.load('world/entities.brotable');
 //   const fromBuf = bro.table.fromBytes(bytes);

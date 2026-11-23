@@ -144,10 +144,31 @@ bool bindExprNode(ExprArena& arena, uint32_t id, const TableSnapshot& left,
         if (!bindExprNode(arena, n.lhs, left, right, err)) return false;
         n.valueType = ColType::Bool;
         return true;
+    case ExprOp::IsNull:
+    case ExprOp::IsNotNull:
+        if (!bindExprNode(arena, n.lhs, left, right, err)) return false;
+        n.valueType = ColType::Bool;
+        return true;
     case ExprOp::StrLen:
         if (!bindExprNode(arena, n.lhs, left, right, err)) return false;
         n.valueType = ColType::I32;
         return true;
+    case ExprOp::Coalesce: {
+        if (!bindExprNode(arena, n.lhs, left, right, err)) return false;
+        if (!bindExprNode(arena, n.rhs, left, right, err)) return false;
+        ColType lt = arena.nodes[n.lhs].valueType;
+        ColType rt = arena.nodes[n.rhs].valueType;
+        if (lt == ColType::String || rt == ColType::String) {
+            n.valueType = ColType::String;
+        } else if (lt == ColType::Dict && rt == ColType::Dict) {
+            n.valueType = ColType::Dict;
+        } else if (lt == rt) {
+            n.valueType = lt;
+        } else {
+            n.valueType = promoteNumericType(lt, rt);
+        }
+        return true;
+    }
 
     case ExprOp::Add:
     case ExprOp::Sub:
@@ -305,7 +326,7 @@ bool canJitExpr(const ExprArena& arena, uint32_t id, const TableSnapshot& snap) 
         return n.tableSide == 0 && n.resolvedCol >= 0 &&
                n.valueType != ColType::String;
     case ExprOp::Const:
-        return n.literal.type != ColType::String;
+        return !n.literal.isNull && n.literal.type != ColType::String;
     case ExprOp::StrEq:
     case ExprOp::StrNe: {
         // Jittable only when Dict ColRef == Const String resolved to dict ID!
@@ -319,6 +340,9 @@ bool canJitExpr(const ExprArena& arena, uint32_t id, const TableSnapshot& snap) 
     case ExprOp::StrStartsWith:
     case ExprOp::StrEndsWith:
     case ExprOp::StrLen:
+    case ExprOp::IsNull:
+    case ExprOp::IsNotNull:
+    case ExprOp::Coalesce:
         return false;
     case ExprOp::Eq:
     case ExprOp::Ne: {
@@ -573,7 +597,7 @@ std::string buildPlanCacheKey(const QueryPlan& plan, const TableSnapshot& left,
             appendExprKey(plan.exprs, u.expr, os);
             os << ";";
         }
-    } else if (modeTag == "A" || modeTag == "SA") {
+    } else if (modeTag == "A" || modeTag == "SA" || modeTag == "A128" || modeTag == "A256") {
         os << "|A=";
         for (const auto& a : plan.aggregates) {
             os << static_cast<int>(a.kind) << ":" << static_cast<int>(a.outputType) << ":";

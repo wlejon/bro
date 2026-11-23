@@ -5,6 +5,7 @@
 #include "table/query_materialize.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <queue>
 #include <unordered_map>
@@ -13,6 +14,23 @@
 namespace bro::table {
 
 namespace {
+
+bool chunkHasNullInCols(const TableSnapshot::FrozenChunk& ch,
+                        const std::vector<uint32_t>& cols) {
+    for (uint32_t c : cols) {
+        if (c < ch.columns.size() && ch.columns[c]->hasNulls()) return true;
+    }
+    return false;
+}
+
+bool snapshotHasNullInCols(const TableSnapshot& snap, const std::vector<uint32_t>& cols) {
+    if (cols.empty()) return false;
+    for (const auto& ch : snap.chunks) {
+        if (ch.aliveCount == 0 || ch.rowCount == 0) continue;
+        if (chunkHasNullInCols(ch, cols)) return true;
+    }
+    return false;
+}
 
 struct IndexProbeSpec {
     size_t filterIdx = 0;
@@ -33,7 +51,7 @@ IndexProbeSpec detectIndexProbe(const TableSnapshot& snap, const QueryPlan& plan
         if (colNode->op != ExprOp::ColRef || colNode->tableSide != 0 || colNode->resolvedCol < 0) {
             continue;
         }
-        if (litNode->op != ExprOp::Const) continue;
+        if (litNode->op != ExprOp::Const || litNode->literal.isNull) continue;
         const size_t colIdx = static_cast<size_t>(colNode->resolvedCol);
         const HashIndex* idx = snap.findIndex(colIdx);
         if (!idx) continue;
@@ -60,19 +78,19 @@ IndexProbeSpec detectIndexProbe(const TableSnapshot& snap, const QueryPlan& plan
     return {};
 }
 
-bool tryRangeIndexLookup(const TableSnapshot& snap, const QueryPlan& plan,
-                         std::vector<RowLoc>& outMatches) {
-    struct ColBounds {
-        bool hasLo = false;
-        bool incLo = true;
-        ScalarValue lo;
-        bool hasHi = false;
-        bool incHi = true;
-        ScalarValue hi;
-        bool empty = false;
-    };
+struct RangeProbePlan {
+    size_t colIdx = SIZE_MAX;
+    bool hasLo = false;
+    bool incLo = true;
+    ScalarValue lo;
+    bool hasHi = false;
+    bool incHi = true;
+    ScalarValue hi;
+    bool provablyEmpty = false;
+};
 
-    std::unordered_map<size_t, ColBounds> colBounds;
+bool detectRangeIndexProbe(const TableSnapshot& snap, const QueryPlan& plan, RangeProbePlan& out) {
+    std::unordered_map<size_t, RangeProbePlan> colBounds;
     for (uint32_t fid : plan.filters) {
         const ExprNode& n = plan.exprs.nodes[fid];
         if (n.op != ExprOp::Eq && n.op != ExprOp::Lt && n.op != ExprOp::Le &&
@@ -100,7 +118,8 @@ bool tryRangeIndexLookup(const TableSnapshot& snap, const QueryPlan& plan,
             const double d = colTypeIsFloat(bound.type) ? bound.f64 : static_cast<double>(bound.i64);
             if (std::isnan(d)) continue;
         }
-        ColBounds& b = colBounds[colIdx];
+        RangeProbePlan& b = colBounds[colIdx];
+        b.colIdx = colIdx;
         auto setLo = [&](const ScalarValue& sv, bool inc) {
             if (!b.hasLo) { b.hasLo = true; b.lo = sv; b.incLo = inc; }
             else {
@@ -124,48 +143,126 @@ bool tryRangeIndexLookup(const TableSnapshot& snap, const QueryPlan& plan,
         else if (op == ExprOp::Le) { setHi(bound, true); }
     }
 
+    if (colBounds.empty()) return false;
     size_t chosenCol = SIZE_MAX;
     for (const auto& kv : colBounds) {
         chosenCol = kv.first;
         if (kv.second.hasLo && kv.second.hasHi) break;
     }
-    if (chosenCol == SIZE_MAX) return false;
-
-    const ColBounds& b = colBounds[chosenCol];
-    const RangeIndex* ridx = snap.findRangeIndex(chosenCol);
-    std::vector<RowLoc> cands;
-    if (b.hasLo && b.hasHi) {
-        const int cmp = compareScalar(b.lo, b.hi);
-        if (cmp > 0 || (cmp == 0 && (!b.incLo || !b.incHi))) {
-            outMatches.clear();
-            return true;
+    out = colBounds[chosenCol];
+    if (out.hasLo && out.hasHi) {
+        const int cmp = compareScalar(out.lo, out.hi);
+        if (cmp > 0 || (cmp == 0 && (!out.incLo || !out.incHi))) {
+            out.provablyEmpty = true;
         }
-    }
-    ridx->lookupRange(b.hasLo ? &b.lo : nullptr, b.incLo,
-                      b.hasHi ? &b.hi : nullptr, b.incHi,
-                      snap.dict.get(), cands);
-    std::sort(cands.begin(), cands.end(), [](RowLoc a, RowLoc bLoc) {
-        return a.chunkIdx != bLoc.chunkIdx ? (a.chunkIdx < bLoc.chunkIdx) : (a.rowIdx < bLoc.rowIdx);
-    });
-    cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
-    for (RowLoc loc : cands) {
-        if (loc.chunkIdx >= snap.chunks.size() || !snap.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
-            continue;
-        }
-        bool ok = true;
-        for (uint32_t f : plan.filters) {
-            if (!scalarTruthy(evalExpr(plan.exprs, f, snap, loc.chunkIdx, loc.rowIdx))) {
-                ok = false;
-                break;
-            }
-        }
-        if (ok) outMatches.push_back(loc);
     }
     return true;
 }
 
-bool tryRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan,
-                          std::shared_ptr<Table>& outTable) {
+bool passesResidualFilters(const QueryPlan& plan, const std::vector<uint32_t>& filterIndices,
+                           const TableSnapshot& snap, uint32_t ci, uint32_t r) {
+    for (uint32_t fi : filterIndices) {
+        if (!scalarTruthy(evalExpr(plan.exprs, plan.filters[fi], snap, ci, r))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool passesAllFilters(const QueryPlan& plan, const std::vector<uint32_t>& flt,
+                      const TableSnapshot& left, uint32_t lc, uint32_t lr,
+                      const TableSnapshot* right, uint32_t rc, uint32_t rr) {
+    for (uint32_t f : flt) {
+        if (!scalarTruthy(evalExpr(plan.exprs, f, left, lc, lr, right, rc, rr))) return false;
+    }
+    return true;
+}
+
+enum class IndexProbeKind : uint8_t {
+    None = 0,
+    Spatial,
+    Hash,
+    Range,
+};
+
+struct CandidateLookupResult {
+    IndexProbeKind kind = IndexProbeKind::None;
+    std::string indexColName;
+    std::vector<RowLoc> matches;
+};
+
+void filterDedupCandidates(const TableSnapshot& snap, const QueryPlan& plan,
+                           std::vector<RowLoc>& candidates, std::vector<RowLoc>& outMatches) {
+    outMatches.clear();
+    std::sort(candidates.begin(), candidates.end(), [](const RowLoc& a, const RowLoc& b) {
+        return (a.chunkIdx != b.chunkIdx) ? (a.chunkIdx < b.chunkIdx) : (a.rowIdx < b.rowIdx);
+    });
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    outMatches.reserve(candidates.size());
+    for (const RowLoc& loc : candidates) {
+        if (loc.chunkIdx >= snap.chunks.size() || !snap.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
+            continue;
+        }
+        if (passesAllFilters(plan, plan.filters, snap, loc.chunkIdx, loc.rowIdx, nullptr, 0, 0)) {
+            outMatches.push_back(loc);
+        }
+    }
+}
+
+bool tryIndexCandidateLookup(const TableSnapshot& left, const QueryPlan& plan,
+                             const ExecOptions& opts, CandidateLookupResult& out) {
+    if (!opts.useIndexes) return false;
+
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        if (const SpatialIndex* si = left.findSpatialIndex(plan.spatialFilter.indexName)) {
+            std::vector<RowLoc> candidates;
+            if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::AABB) {
+                si->queryAABB(plan.spatialFilter.a[0], plan.spatialFilter.a[1], plan.spatialFilter.a[2],
+                              plan.spatialFilter.b[0], plan.spatialFilter.b[1], plan.spatialFilter.b[2],
+                              candidates);
+            } else {
+                si->queryRadius(plan.spatialFilter.a[0], plan.spatialFilter.a[1], plan.spatialFilter.a[2],
+                                plan.spatialFilter.radius, candidates);
+            }
+            filterDedupCandidates(left, plan, candidates, out.matches);
+            out.kind = IndexProbeKind::Spatial;
+            out.indexColName = plan.spatialFilter.indexName;
+            return true;
+        }
+        return false;
+    }
+
+    if (plan.filters.empty()) return false;
+
+    IndexProbeSpec hashProbe = detectIndexProbe(left, plan);
+    if (hashProbe.valid) {
+        const HashIndex* idx = left.findIndex(hashProbe.colIdx);
+        std::vector<RowLoc> candidates;
+        idx->lookupKey(hashProbe.key, candidates);
+        filterDedupCandidates(left, plan, candidates, out.matches);
+        out.kind = IndexProbeKind::Hash;
+        out.indexColName = left.schema.columns[hashProbe.colIdx].name;
+        return true;
+    }
+
+    RangeProbePlan rangeProbe;
+    if (detectRangeIndexProbe(left, plan, rangeProbe)) {
+        out.kind = IndexProbeKind::Range;
+        out.indexColName = left.schema.columns[rangeProbe.colIdx].name;
+        if (!rangeProbe.provablyEmpty) {
+            const RangeIndex* ridx = left.findRangeIndex(rangeProbe.colIdx);
+            std::vector<RowLoc> candidates;
+            ridx->lookupRange(rangeProbe.hasLo ? &rangeProbe.lo : nullptr, rangeProbe.incLo,
+                              rangeProbe.hasHi ? &rangeProbe.hi : nullptr, rangeProbe.incHi,
+                              left.dict.get(), candidates);
+            filterDedupCandidates(left, plan, candidates, out.matches);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool detectRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan, size_t* outCol = nullptr) {
     if (!plan.filters.empty() || plan.join.kind != JoinSpec::Kind::None ||
         !plan.groupKeys.empty() || !plan.aggregates.empty() ||
         plan.orderBy.size() != 1 || plan.limit < 0) {
@@ -175,6 +272,15 @@ bool tryRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan,
     if (on.op != ExprOp::ColRef || on.tableSide != 0 || on.resolvedCol < 0) return false;
     const RangeIndex* ridx = left.findRangeIndex(static_cast<size_t>(on.resolvedCol));
     if (!ridx || ridx->size() != left.totalAliveRows) return false;
+    if (outCol) *outCol = static_cast<size_t>(on.resolvedCol);
+    return true;
+}
+
+bool tryRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan,
+                          std::shared_ptr<Table>& outTable) {
+    size_t colIdx = 0;
+    if (!detectRangeTopKFastPath(left, plan, &colIdx)) return false;
+    const RangeIndex* ridx = left.findRangeIndex(colIdx);
 
     const size_t start = static_cast<size_t>(std::max<int64_t>(0, plan.offset));
     const size_t need = start + static_cast<size_t>(plan.limit);
@@ -189,9 +295,9 @@ bool tryRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan,
             return true;
         }
         if (desc && locs.size() >= need) {
-            ScalarValue cur = left.getCell(static_cast<size_t>(on.resolvedCol), loc.chunkIdx, loc.rowIdx);
+            ScalarValue cur = left.getCell(colIdx, loc.chunkIdx, loc.rowIdx);
             if (!haveBound) {
-                boundKey = left.getCell(static_cast<size_t>(on.resolvedCol), locs.back().chunkIdx, locs.back().rowIdx);
+                boundKey = left.getCell(colIdx, locs.back().chunkIdx, locs.back().rowIdx);
                 haveBound = true;
             }
             if (compareScalar(cur, boundKey) != 0) return false;
@@ -202,8 +308,8 @@ bool tryRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan,
 
     if (desc && locs.size() > 1) {
         std::stable_sort(locs.begin(), locs.end(), [&](RowLoc a, RowLoc bLoc) {
-            ScalarValue ka = left.getCell(static_cast<size_t>(on.resolvedCol), a.chunkIdx, a.rowIdx);
-            ScalarValue kb = left.getCell(static_cast<size_t>(on.resolvedCol), bLoc.chunkIdx, bLoc.rowIdx);
+            ScalarValue ka = left.getCell(colIdx, a.chunkIdx, a.rowIdx);
+            ScalarValue kb = left.getCell(colIdx, bLoc.chunkIdx, bLoc.rowIdx);
             const int cmp = compareScalar(ka, kb);
             if (cmp != 0) return cmp > 0;
             return a.chunkIdx != bLoc.chunkIdx ? (a.chunkIdx < bLoc.chunkIdx) : (a.rowIdx < bLoc.rowIdx);
@@ -228,25 +334,6 @@ bool tryRangeTopKFastPath(const TableSnapshot& left, const QueryPlan& plan,
     return true;
 }
 
-bool passesResidualFilters(const QueryPlan& plan, const std::vector<uint32_t>& filterIndices,
-                           const TableSnapshot& snap, uint32_t ci, uint32_t r) {
-    for (uint32_t fi : filterIndices) {
-        if (!scalarTruthy(evalExpr(plan.exprs, plan.filters[fi], snap, ci, r))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool passesAllFilters(const QueryPlan& plan, const std::vector<uint32_t>& flt,
-                      const TableSnapshot& left, uint32_t lc, uint32_t lr,
-                      const TableSnapshot* right, uint32_t rc, uint32_t rr) {
-    for (uint32_t f : flt) {
-        if (!scalarTruthy(evalExpr(plan.exprs, f, left, lc, lr, right, rc, rr))) return false;
-    }
-    return true;
-}
-
 struct ChunkScanOutput {
     std::vector<uint32_t> matchRows;
     std::shared_ptr<TableChunk> projectedChunk;  // populated in FilterAndProject fast path
@@ -263,6 +350,19 @@ void runFilterKernelParallel(const CompiledKernel& kernel, const QueryPlan& plan
         const auto& ch = snap.chunks[ci];
         if (ch.aliveCount == 0 || ch.rowCount == 0) return;
         std::vector<uint32_t>& matches = chunkMatches[ci];
+
+        // Nullable chunk fallback ensures SQL-like null propagation on predicates.
+        if (chunkHasNullInCols(ch, kernel.usedColIndices)) {
+            for (uint32_t r = 0; r < ch.rowCount; ++r) {
+                if (ch.isAlive(r) &&
+                    passesAllFilters(plan, plan.filters, snap,
+                                     static_cast<uint32_t>(ci), r, nullptr, 0, 0)) {
+                    matches.push_back(r);
+                }
+            }
+            return;
+        }
+
         matches.resize(ch.rowCount);
         std::vector<const void*> colPtrs(nCols);
         for (size_t c = 0; c < nCols; ++c) colPtrs[c] = ch.columns[c]->rawData();
@@ -302,6 +402,23 @@ void runFilterKernelParallel(const CompiledKernel& kernel, const QueryPlan& plan
     }
 }
 
+bool shouldWantDirectProject(const QueryPlan& plan, const TableSnapshot& left,
+                             const ExecOptions& opts) {
+    const bool hasJoin = plan.join.kind != JoinSpec::Kind::None && plan.join.rightTable;
+    const bool hasAgg = !plan.groupKeys.empty() || !plan.aggregates.empty();
+    if (!opts.useJit || hasJoin || hasAgg || !plan.orderBy.empty() ||
+        plan.spatialFilter.kind != SpatialFilterSpec::Kind::None ||
+        plan.selectItems.empty()) {
+        return false;
+    }
+    for (const SelectItem& si : plan.selectItems) {
+        if (si.expr != kInvalidExpr && plan.exprs.nodes[si.expr].op != ExprOp::ColRef) {
+            return true;
+        }
+    }
+    return !canCompileSimdFilter(plan, left);
+}
+
 }  // namespace
 
 QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOptions opts) {
@@ -314,83 +431,20 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
     const bool hasJoin = plan.join.kind != JoinSpec::Kind::None && plan.join.rightTable;
     const bool hasAgg = !plan.groupKeys.empty() || !plan.aggregates.empty();
 
-    // Only bypass SIMD filter into FilterAndProject if outputs perform real computation or SIMD filter doesn't apply.
-    bool hasComputedSelect = false;
-    for (const SelectItem& si : plan.selectItems) {
-        if (si.expr != kInvalidExpr && plan.exprs.nodes[si.expr].op != ExprOp::ColRef) {
-            hasComputedSelect = true;
-            break;
-        }
-    }
-    const bool wantsDirectProject =
-        opts.useJit && !hasJoin && !hasAgg && plan.orderBy.empty() &&
-        plan.spatialFilter.kind == SpatialFilterSpec::Kind::None &&
-        !plan.selectItems.empty() &&
-        (hasComputedSelect || !canCompileSimdFilter(plan, left));
-
     std::vector<RowLoc> leftMatches;
     bool usedIndex = false;
 
-    // Priority 1: SpatialIndex probe
-    if (opts.useIndexes && plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
-        if (const SpatialIndex* si = left.findSpatialIndex(plan.spatialFilter.indexName)) {
-            std::vector<RowLoc> candidates;
-            if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::AABB) {
-                si->queryAABB(plan.spatialFilter.a[0], plan.spatialFilter.a[1], plan.spatialFilter.a[2],
-                              plan.spatialFilter.b[0], plan.spatialFilter.b[1], plan.spatialFilter.b[2],
-                              candidates);
-            } else {
-                si->queryRadius(plan.spatialFilter.a[0], plan.spatialFilter.a[1], plan.spatialFilter.a[2],
-                                plan.spatialFilter.radius, candidates);
-            }
-            std::sort(candidates.begin(), candidates.end(), [](const RowLoc& a, const RowLoc& b) {
-                return (a.chunkIdx != b.chunkIdx) ? (a.chunkIdx < b.chunkIdx) : (a.rowIdx < b.rowIdx);
-            });
-            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-            for (const RowLoc& loc : candidates) {
-                if (loc.chunkIdx >= left.chunks.size() || !left.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
-                    continue;
-                }
-                if (passesAllFilters(plan, plan.filters, left, loc.chunkIdx, loc.rowIdx, nullptr, 0, 0)) {
-                    leftMatches.push_back(loc);
-                }
-            }
-            usedIndex = true;
-            res.usedSpatialIndex = true;
-        }
-    }
-
-    // Priority 2: HashIndex equality probe
-    if (!usedIndex && opts.useIndexes && !plan.filters.empty() &&
-        plan.spatialFilter.kind == SpatialFilterSpec::Kind::None) {
-        IndexProbeSpec probe = detectIndexProbe(left, plan);
-        if (probe.valid) {
-            const HashIndex* idx = left.findIndex(probe.colIdx);
-            std::vector<RowLoc> candidates;
-            idx->lookupKey(probe.key, candidates);
-            std::sort(candidates.begin(), candidates.end(), [](const RowLoc& a, const RowLoc& b) {
-                return (a.chunkIdx != b.chunkIdx) ? (a.chunkIdx < b.chunkIdx) : (a.rowIdx < b.rowIdx);
-            });
-            candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
-            for (const RowLoc& loc : candidates) {
-                if (loc.chunkIdx >= left.chunks.size() || !left.chunks[loc.chunkIdx].isAlive(loc.rowIdx)) {
-                    continue;
-                }
-                if (passesAllFilters(plan, plan.filters, left, loc.chunkIdx, loc.rowIdx, nullptr, 0, 0)) {
-                    leftMatches.push_back(loc);
-                }
-            }
-            usedIndex = true;
-            res.usedIndex = true;
-        }
-    }
-
-    // Priority 3: RangeIndex probe or Top-K fast path
-    if (!usedIndex && opts.useIndexes && plan.spatialFilter.kind == SpatialFilterSpec::Kind::None) {
-        if (!plan.filters.empty() && tryRangeIndexLookup(left, plan, leftMatches)) {
-            usedIndex = true;
-            res.usedRangeIndex = true;
-        } else if (tryRangeTopKFastPath(left, plan, res.table)) {
+    // Priority 1..3a: SpatialIndex, HashIndex, RangeIndex probes
+    CandidateLookupResult idxLookup;
+    if (tryIndexCandidateLookup(left, plan, opts, idxLookup)) {
+        usedIndex = true;
+        leftMatches = std::move(idxLookup.matches);
+        if (idxLookup.kind == IndexProbeKind::Spatial) res.usedSpatialIndex = true;
+        else if (idxLookup.kind == IndexProbeKind::Hash) res.usedIndex = true;
+        else if (idxLookup.kind == IndexProbeKind::Range) res.usedRangeIndex = true;
+    } else if (opts.useIndexes && plan.spatialFilter.kind == SpatialFilterSpec::Kind::None) {
+        // Priority 3b: RangeIndex Top-K fast path
+        if (tryRangeTopKFastPath(left, plan, res.table)) {
             res.usedRangeIndex = true;
             return res;
         }
@@ -402,31 +456,43 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
         plan.orderBy.empty() && opts.useJit) {
         std::string aggErr;
         if (auto aggKernel = CompiledPlanCache::instance().getOrCompileAgg(plan, left, &aggErr)) {
-            res.table = runCompiledAgg(*aggKernel, plan, left, opts.useParallel);
-            res.usedJit = true;
-            res.usedJitAgg = true;
-            res.usedSimd = aggKernel->usesSimd;
-            return res;
+            if (!aggSnapshotHasNulls(*aggKernel, left)) {
+                res.table = runCompiledAgg(*aggKernel, plan, left, opts.useParallel);
+                res.usedJit = true;
+                res.usedJitAgg = true;
+                res.usedSimd = aggKernel->usesSimd;
+                res.simdWidth = aggKernel->simdWidth;
+                return res;
+            }
         }
     }
 
-    // Priority 5: JIT (128-bit SIMD Filter or Scalar Filter/Project) parallel chunk scan
+    // Priority 5: JIT (256/128-bit SIMD Filter or Scalar Filter/Project) parallel chunk scan
     if (!usedIndex) {
         if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
             res.table = executePlanReference(left, plan);
             return res;
         }
         const size_t nChunks = left.chunks.size();
+        const bool wantsDirect = shouldWantDirectProject(plan, left, opts);
         std::shared_ptr<const CompiledKernel> kernel;
         if (opts.useJit) {
             std::string jitErr;
             kernel = CompiledPlanCache::instance().getOrCompile(
                 plan, left,
-                wantsDirectProject ? JitMode::FilterAndProject : JitMode::Filter,
+                wantsDirect ? JitMode::FilterAndProject : JitMode::Filter,
                 &jitErr);
+            // If direct projection touches nullable columns, downgrade to Filter + materializer
+            // so dense chunks keep SIMD filtering while nulls materialize accurately.
+            if (kernel && kernel->mode == JitMode::FilterAndProject &&
+                snapshotHasNullInCols(left, kernel->usedColIndices)) {
+                kernel = CompiledPlanCache::instance().getOrCompile(
+                    plan, left, JitMode::Filter, &jitErr);
+            }
             if (kernel) {
                 res.usedJit = true;
                 res.usedSimd = kernel->usesSimd;
+                res.simdWidth = kernel->simdWidth;
             } else {
                 res.jitError = jitErr;
             }
@@ -443,8 +509,18 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
                 if (ch.aliveCount == 0 || ch.rowCount == 0) return;
 
                 ChunkScanOutput& out = chunkOuts[ci];
-                out.matchRows.resize(ch.rowCount);
+                if (!direct && chunkHasNullInCols(ch, kernel->usedColIndices)) {
+                    for (uint32_t r = 0; r < ch.rowCount; ++r) {
+                        if (ch.isAlive(r) &&
+                            passesAllFilters(plan, plan.filters, left,
+                                             static_cast<uint32_t>(ci), r, nullptr, 0, 0)) {
+                            out.matchRows.push_back(r);
+                        }
+                    }
+                    return;
+                }
 
+                out.matchRows.resize(ch.rowCount);
                 std::vector<const void*> colPtrs(nCols);
                 for (size_t c = 0; c < nCols; ++c) colPtrs[c] = ch.columns[c]->rawData();
 
@@ -554,9 +630,96 @@ QueryExecResult executeQuery(const TableSnapshot& left, QueryPlan plan, ExecOpti
     }
 
     bool joinUsedIdx = false;
-    res.table = finishPlanFromLeftMatches(plan, left, leftMatches, &joinUsedIdx);
+    res.table = finishPlanFromLeftMatches(plan, left, leftMatches, &joinUsedIdx, opts.useParallel);
     if (joinUsedIdx) res.usedIndex = true;
     return res;
+}
+
+QueryExplainResult explainQuery(const TableSnapshot& left, QueryPlan plan, ExecOptions opts) {
+    QueryExplainResult out;
+    if (!plan.bound && !bindQueryPlan(plan, left, out.error)) {
+        out.ok = false;
+        out.strategy = "invalid";
+        return out;
+    }
+
+    const bool hasJoin = plan.join.kind != JoinSpec::Kind::None && plan.join.rightTable;
+    const bool hasAgg = !plan.groupKeys.empty() || !plan.aggregates.empty();
+
+    if (opts.useIndexes) {
+        if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None &&
+            left.findSpatialIndex(plan.spatialFilter.indexName) != nullptr) {
+            out.strategy = "spatial_index";
+            out.willUseSpatialIndex = true;
+            out.indexColumn = plan.spatialFilter.indexName;
+            return out;
+        }
+        if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::None && !plan.filters.empty()) {
+            IndexProbeSpec hashProbe = detectIndexProbe(left, plan);
+            if (hashProbe.valid) {
+                out.strategy = "hash_index";
+                out.willUseIndex = true;
+                out.indexColumn = left.schema.columns[hashProbe.colIdx].name;
+                return out;
+            }
+            RangeProbePlan rp;
+            if (detectRangeIndexProbe(left, plan, rp)) {
+                out.strategy = "range_index";
+                out.willUseRangeIndex = true;
+                out.indexColumn = left.schema.columns[rp.colIdx].name;
+                return out;
+            }
+        }
+        size_t topKCol = 0;
+        if (plan.spatialFilter.kind == SpatialFilterSpec::Kind::None &&
+            detectRangeTopKFastPath(left, plan, &topKCol)) {
+            out.strategy = "range_topk";
+            out.willUseRangeIndex = true;
+            out.indexColumn = left.schema.columns[topKCol].name;
+            return out;
+        }
+    }
+
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None || !opts.useJit) {
+        out.strategy = "reference";
+        return out;
+    }
+
+    if (!hasJoin && plan.groupKeys.empty() && !plan.aggregates.empty() && plan.orderBy.empty()) {
+        if (auto aggKernel = CompiledPlanCache::instance().getOrCompileAgg(plan, left, &out.jitError)) {
+            out.hasNullsInPlanCols = aggSnapshotHasNulls(*aggKernel, left);
+            out.residualFilterIndices = aggKernel->residualFilterIndices;
+            if (!out.hasNullsInPlanCols) {
+                out.strategy = "jit_agg";
+                out.willUseJit = true;
+                out.willUseJitAgg = true;
+                out.willUseSimd = aggKernel->usesSimd;
+                out.simdWidth = aggKernel->simdWidth;
+                return out;
+            }
+        }
+    }
+
+    const bool wantsDirect = shouldWantDirectProject(plan, left, opts);
+    auto kernel = CompiledPlanCache::instance().getOrCompile(
+        plan, left, wantsDirect ? JitMode::FilterAndProject : JitMode::Filter, &out.jitError);
+    if (kernel && kernel->mode == JitMode::FilterAndProject &&
+        snapshotHasNullInCols(left, kernel->usedColIndices)) {
+        kernel = CompiledPlanCache::instance().getOrCompile(
+            plan, left, JitMode::Filter, &out.jitError);
+    }
+    if (kernel) {
+        out.willUseJit = true;
+        out.willUseSimd = kernel->usesSimd;
+        out.simdWidth = kernel->simdWidth;
+        out.residualFilterIndices = kernel->residualFilterIndices;
+        out.hasNullsInPlanCols = snapshotHasNullInCols(left, kernel->usedColIndices);
+        out.strategy = kernel->usesSimd ? "jit_simd" : "jit_scalar";
+        return out;
+    }
+
+    out.strategy = "reference";
+    return out;
 }
 
 void scanSingleChunkMatches(const CompiledKernel* kernel, const QueryPlan& boundPlan,
@@ -567,7 +730,7 @@ void scanSingleChunkMatches(const CompiledKernel* kernel, const QueryPlan& bound
     const auto& ch = snap.chunks[ci];
     if (ch.aliveCount == 0 || ch.rowCount == 0) return;
 
-    if (kernel) {
+    if (kernel && !chunkHasNullInCols(ch, kernel->usedColIndices)) {
         const size_t nCols = snap.schema.size();
         outMatches.resize(ch.rowCount);
         std::vector<const void*> colPtrs(nCols);
@@ -609,8 +772,9 @@ void scanSingleChunkMatches(const CompiledKernel* kernel, const QueryPlan& bound
 std::shared_ptr<Table> finishPlanFromLeftMatches(const QueryPlan& plan,
                                                    const TableSnapshot& left,
                                                    const std::vector<RowLoc>& leftMatches,
-                                                   bool* outUsedIndex) {
-    return finishPlanFromLeftMatchesImpl(plan, left, leftMatches, outUsedIndex);
+                                                   bool* outUsedIndex,
+                                                   bool useParallel) {
+    return finishPlanFromLeftMatchesImpl(plan, left, leftMatches, outUsedIndex, useParallel);
 }
 
 MutationExecResult executeUpdate(Table& table, QueryPlan plan, ExecOptions opts) {
@@ -621,6 +785,31 @@ MutationExecResult executeUpdate(Table& table, QueryPlan plan, ExecOptions opts)
         return res;
     }
     if (plan.updates.empty()) return res;
+
+    // Fast path 1: indexed / spatial candidate update
+    CandidateLookupResult idxLookup;
+    if (tryIndexCandidateLookup(*snap, plan, opts, idxLookup)) {
+        if (idxLookup.kind == IndexProbeKind::Spatial) res.usedSpatialIndex = true;
+        else if (idxLookup.kind == IndexProbeKind::Hash) res.usedIndex = true;
+        else if (idxLookup.kind == IndexProbeKind::Range) res.usedRangeIndex = true;
+
+        std::vector<ScalarValue> nextVals(plan.updates.size());
+        for (const RowLoc& loc : idxLookup.matches) {
+            for (size_t ui = 0; ui < plan.updates.size(); ++ui) {
+                nextVals[ui] = evalExpr(plan.exprs, plan.updates[ui].expr, *snap, loc.chunkIdx, loc.rowIdx);
+            }
+            for (size_t ui = 0; ui < plan.updates.size(); ++ui) {
+                table.updateCell(loc, static_cast<size_t>(plan.updates[ui].colIdx), nextVals[ui]);
+            }
+            ++res.affectedRows;
+        }
+        return res;
+    }
+
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        res.affectedRows = applyUpdateReference(table, plan);
+        return res;
+    }
 
     bool allJittable = opts.useJit;
     for (const UpdateAssignment& up : plan.updates) {
@@ -644,28 +833,49 @@ MutationExecResult executeUpdate(Table& table, QueryPlan plan, ExecOptions opts)
     }
     res.usedJit = true;
 
+    std::vector<uint32_t> targetCols;
+    targetCols.reserve(plan.updates.size());
+    for (const UpdateAssignment& up : plan.updates) targetCols.push_back(static_cast<uint32_t>(up.colIdx));
+
     const size_t nChunks = snap->chunks.size();
     const size_t nCols = snap->schema.size();
     std::vector<std::vector<uint32_t>> chunkMatches;
     runFilterKernelParallel(*filterKernel, plan, *snap, opts.useParallel, chunkMatches);
 
-    // Track which columns changed so HashIndexes on modified columns rebuild cleanly.
-    std::unordered_set<size_t> modifiedIndexedCols;
+    std::unordered_set<size_t> scatterModifiedCols;
     std::vector<const void*> oldPtrs(nCols);
     std::vector<void*> targetPtrs(plan.updates.size());
+    std::vector<ScalarValue> nextVals(plan.updates.size());
 
     for (size_t ci = 0; ci < nChunks; ++ci) {
         auto& matches = chunkMatches[ci];
         if (matches.empty()) continue;
 
         const auto& frozen = snap->chunks[ci];
+        // Chunks containing nulls in source or target columns use updateCell so null bitmaps & indexes stay exact.
+        if (chunkHasNullInCols(frozen, updateKernel->usedColIndices) ||
+            chunkHasNullInCols(frozen, targetCols)) {
+            for (uint32_t r : matches) {
+                for (size_t ui = 0; ui < plan.updates.size(); ++ui) {
+                    nextVals[ui] = evalExpr(plan.exprs, plan.updates[ui].expr, *snap,
+                                            static_cast<uint32_t>(ci), r);
+                }
+                for (size_t ui = 0; ui < plan.updates.size(); ++ui) {
+                    table.updateCell(RowLoc{static_cast<uint32_t>(ci), r},
+                                     static_cast<size_t>(plan.updates[ui].colIdx), nextVals[ui]);
+                }
+            }
+            res.affectedRows += matches.size();
+            continue;
+        }
+
         for (size_t c = 0; c < nCols; ++c) oldPtrs[c] = frozen.columns[c]->rawData();
 
         TableChunk& mutChunk = table.chunkMut(ci);
         for (size_t k = 0; k < plan.updates.size(); ++k) {
             const size_t colIdx = static_cast<size_t>(plan.updates[k].colIdx);
             targetPtrs[k] = mutChunk.mutableColumn(colIdx)->rawData();
-            modifiedIndexedCols.insert(colIdx);
+            scatterModifiedCols.insert(colIdx);
         }
 
         JitChunkContext uctx;
@@ -678,7 +888,7 @@ MutationExecResult executeUpdate(Table& table, QueryPlan plan, ExecOptions opts)
         res.affectedRows += matches.size();
     }
 
-    for (size_t c : modifiedIndexedCols) {
+    for (size_t c : scatterModifiedCols) {
         table.notifyColumnUpdated(c);
     }
     return res;
@@ -689,6 +899,22 @@ MutationExecResult executeDelete(Table& table, QueryPlan plan, ExecOptions opts)
     auto snap = table.snapshot();
     if (!bindQueryPlan(plan, *snap, res.error)) {
         res.ok = false;
+        return res;
+    }
+
+    CandidateLookupResult idxLookup;
+    if (tryIndexCandidateLookup(*snap, plan, opts, idxLookup)) {
+        if (idxLookup.kind == IndexProbeKind::Spatial) res.usedSpatialIndex = true;
+        else if (idxLookup.kind == IndexProbeKind::Hash) res.usedIndex = true;
+        else if (idxLookup.kind == IndexProbeKind::Range) res.usedRangeIndex = true;
+        for (const RowLoc& loc : idxLookup.matches) {
+            if (table.removeRow(loc)) ++res.affectedRows;
+        }
+        return res;
+    }
+
+    if (plan.spatialFilter.kind != SpatialFilterSpec::Kind::None) {
+        res.affectedRows = applyDeleteReference(table, plan);
         return res;
     }
 

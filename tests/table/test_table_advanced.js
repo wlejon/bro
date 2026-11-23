@@ -281,4 +281,116 @@ if (bro.tensor && bro.tensor.available) {
            'fromTensor round-trips tensor back into off-heap Table');
 }
 
+// ----------------------------------------------------------------------------
+// 7. Production APIs: duplicate schema guard, negative index guard, stats/clone/clear/columnArray
+// ----------------------------------------------------------------------------
+let dupThrew = false;
+try {
+    q.create({ a: 'i32', a: 'f64' });
+} catch (e) {
+    // JS object literals deduplicate keys before native call; test array schema!
+}
+try {
+    q.create([['a', 'i32'], ['a', 'f64']]);
+} catch (e) {
+    dupThrew = true;
+}
+assert(dupThrew === true, 'duplicate column in schema throws');
+
+assert(tbl.row(-1) === undefined && tbl.get(-5, 'id') === undefined, 'negative Table indices return undefined');
+assert(tbl.updateRow(-1, { hp: 1 }) === false && tbl.removeRow(-1) === false, 'negative mutations return false');
+assert(tbl.row(10).id === 11, 'Table.row returns expected row without snapshotting');
+
+const tblStats = tbl.stats();
+assert(tblStats.rowCount === 9000 && tblStats.nullBitmapBytes === 0 && tblStats.rangeIndexes === 1,
+       'dense table stats have zero nullBitmapBytes');
+
+const cloned = tbl.clone();
+assert(cloned.rowCount === tbl.rowCount && cloned.hasRangeIndex('score') === true, 'clone copies rows and indexes');
+cloned.clear();
+assert(cloned.rowCount === 0 && cloned.chunkCount === 0 && tbl.rowCount === 9000, 'clear empties clone cleanly');
+
+const denseHp = tbl.columnArray('hp');
+assert(denseHp instanceof Float32Array && denseHp.length === 9000, 'columnArray returns contiguous Float32Array when dense');
+const dictKinds = tbl.columnArray('kind');
+assert(Array.isArray(dictKinds) && dictKinds.length === 9000 && typeof dictKinds[0] === 'string',
+       'columnArray returns string Array for Dict columns');
+
+// ----------------------------------------------------------------------------
+// 8. Nullability, isNull / isNotNull / coalesce, count(col) & SIMD simdWidth / explain()
+// ----------------------------------------------------------------------------
+const nt = q.create({ id: 'i32', grp: 'dict', val: 'f64', x: 'f64', y: 'f64' });
+nt.insertMany([
+    { id: 1, grp: 'a', val: 10.0, x: 1.0, y: 1.0 },
+    { id: 2, grp: 'a', val: null, x: 2.0, y: 2.0 },
+    { id: 3, grp: null, val: 30.0, x: 3.0, y: 3.0 },
+    { id: 4, grp: 'b', val: 40.0, x: 50.0, y: 50.0 },
+]);
+nt.createIndex('id');
+nt.createRangeIndex('val');
+nt.createSpatialIndex('sp', ['x', 'y'], 10.0);
+
+const ntColArr = nt.columnArray('val');
+assert(Array.isArray(ntColArr) && ntColArr.length === 4 && ntColArr[1] === null && ntColArr[2] === 30.0,
+       'columnArray falls back to Array preserving null when column has nulls');
+
+const isNullRows = nt.query().where(q.isNull('val')).toArray();
+assert(isNullRows.length === 1 && isNullRows[0].id === 2, 'isNull predicate matches null row');
+const coalRows = nt.query()
+    .where(q.col('val').isNull())
+    .select({ id: 'id', c: q.col('val').coalesce(-7.5), added: q.col('val').add(1.0) })
+    .toArray();
+assert(coalRows.length === 1 && coalRows[0].c === -7.5 && coalRows[0].added === null,
+       'coalesce & arithmetic null propagation work');
+
+const cntBoth = nt.query()
+    .agg({ total: q.count(), nonNullVal: q.count(q.col('val'), 'nonNullVal'), sumVal: q.sum('val'), avgVal: q.avg('val') })
+    .toArray()[0];
+assert(cntBoth.total === 4 && cntBoth.nonNullVal === 3 && cntBoth.sumVal === 80 &&
+       Math.abs(cntBoth.avgVal - 80 / 3) < 1e-6,
+       'count(col) skips nulls while count() counts all rows');
+
+const exSimd = tbl.query().where(q.gt('hp', 50)).explain();
+assert(exSimd.strategy === 'jit_simd' && exSimd.willUseSimd === true &&
+       (exSimd.simdWidth === 256 || exSimd.simdWidth === 128),
+       'explain reports jit_simd and simdWidth');
+const runSimd = tbl.query().where(q.gt('hp', 50)).runWithStats();
+assert(runSimd.simdWidth === exSimd.simdWidth, 'runWithStats matches explain simdWidth');
+
+const exHash = nt.query().where(q.eq('id', 1)).explain();
+assert(exHash.strategy === 'hash_index' && exHash.willUseIndex === true && exHash.indexColumn === 'id',
+       'explain reports hash_index');
+const exSpatial = nt.query().whereInRadius('sp', [0, 0], 5).explain();
+assert(exSpatial.strategy === 'spatial_index' && exSpatial.willUseSpatialIndex === true,
+       'explain reports spatial_index');
+
+// ----------------------------------------------------------------------------
+// 9. Spatial query update() & remove() + .brotable v2 index/null persistence
+// ----------------------------------------------------------------------------
+const spUpd = nt.query().whereInAABB('sp', [0, 0], [5, 5]).update({ val: q.coalesce(q.col('val'), 0).add(5) });
+assert(spUpd.usedSpatialIndex === true && spUpd.affectedRows === 3, 'spatial AABB update works');
+assert(nt.get(1, 'val') === 5.0, 'null row transitioned to 5.0 via coalesce+update');
+
+const ntFile = path.join(os.tmpdir(), 'bro_table_v2_js_test.brotable');
+try {
+    nt.save(ntFile);
+    const reloaded = q.load(ntFile);
+    assert(reloaded.hasIndex('id') && reloaded.hasRangeIndex('val') && reloaded.hasSpatialIndex('sp'),
+           '.brotable v2 restored Hash, Range, and Spatial indexes on load');
+    assert(reloaded.get(2, 'grp') === null && reloaded.get(1, 'val') === 5.0,
+           '.brotable v2 preserved nulls and updated cells');
+
+    const mSnap = q.mmap(ntFile);
+    assert(mSnap.isMapped === true && mSnap.hasSpatialIndex('sp') === true && mSnap.stats().nullBitmapBytes > 0,
+           '.brotable v2 mmap preserves indexes and zero-copy null bitmap');
+    assert(mSnap.row(2).grp === null && mSnap.get(0, 'val') === 15.0, 'mmap row/get preserves null semantics');
+    mSnap.close();
+} finally {
+    try { fs.unlinkSync(ntFile); } catch (e) {}
+}
+
+const spDel = nt.query().whereInRadius('sp', [50, 50], 2).remove();
+assert(spDel.usedSpatialIndex === true && spDel.affectedRows === 1 && nt.rowCount === 3,
+       'spatial radius remove deleted target row');
+
 console.log('test_table_advanced OK');

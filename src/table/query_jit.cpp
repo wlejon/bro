@@ -1,5 +1,6 @@
 #include "table/query_jit.h"
 
+#include "brass/target/host_cpu.hpp"
 #include "table/query_jit_emit.h"
 
 #include <cstddef>
@@ -52,6 +53,7 @@ std::shared_ptr<CompiledKernel> compileKernelImpl(const QueryPlan& plan, const T
     } else {
         out->mode = canDirectProject ? JitMode::FilterAndProject : JitMode::Filter;
     }
+    out->usedColIndices = collectUsedColIndices(usedCols);
 
     Module mod("table_query");
     Builder b(mod);
@@ -238,13 +240,15 @@ CompiledPlanCache& CompiledPlanCache::instance() {
 std::shared_ptr<const CompiledKernel> CompiledPlanCache::getOrCompile(
     const QueryPlan& plan, const TableSnapshot& snap, JitMode requestedMode,
     std::string* outError) {
+    const bool useAvx2 = brass::host_has_avx2();
     const bool trySimdFilter =
         (requestedMode == JitMode::Filter) && canCompileSimdFilter(plan, snap);
+    const char* simdTag = useAvx2 ? "SF256" : "SF128";
     const char* modeTag = (requestedMode == JitMode::ScatterUpdate)
                               ? "U"
                               : (requestedMode == JitMode::FilterAndProject
                                      ? "FP"
-                                     : (trySimdFilter ? "SF" : "F"));
+                                     : (trySimdFilter ? simdTag : "F"));
     const std::string key = buildPlanCacheKey(plan, snap, modeTag);
 
     {
@@ -259,12 +263,7 @@ std::shared_ptr<const CompiledKernel> CompiledPlanCache::getOrCompile(
     misses_.fetch_add(1, std::memory_order_relaxed);
     std::shared_ptr<const CompiledKernel> compiled;
     if (trySimdFilter) {
-        auto simd = compileSimdFilterKernel(plan, snap, outError);
-        if (simd) {
-            auto mut = std::make_shared<CompiledKernel>(*simd);
-            mut->usesSimd = true;
-            compiled = std::move(mut);
-        }
+        compiled = compileSimdFilterKernel(plan, snap, outError);
     }
     if (!compiled) {
         compiled = compileKernelImpl(plan, snap, requestedMode, outError);
@@ -286,7 +285,8 @@ std::shared_ptr<const CompiledKernel> CompiledPlanCache::getOrCompile(
 std::shared_ptr<const CompiledAggKernel> CompiledPlanCache::getOrCompileAgg(
     const QueryPlan& plan, const TableSnapshot& snap, std::string* outError) {
     if (!canCompileAggKernel(plan, snap)) return nullptr;
-    const std::string key = buildPlanCacheKey(plan, snap, "A");
+    const char* aggTag = brass::host_has_avx2() ? "A256" : "A128";
+    const std::string key = buildPlanCacheKey(plan, snap, aggTag);
 
     {
         std::shared_lock<std::shared_mutex> lock(mutex_);

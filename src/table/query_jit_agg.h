@@ -34,22 +34,27 @@ struct CompiledAggKernel {
     brass::codegen::KernelFunction func;
     JitAggFnPtr entry = nullptr;
     bool usesSimd = false;
+    uint16_t simdWidth = 0;
     std::vector<uint32_t> residualFilterIndices;
+    std::vector<uint32_t> usedColIndices;
 };
 
-/// Returns true when the query's filters can compile to a 128-bit SIMD filter loop.
+/// Returns true when the query's filters can compile to a SIMD (AVX2 256-bit or 128-bit) filter loop.
 bool canCompileSimdFilter(const QueryPlan& plan, const TableSnapshot& snap);
 
 /// Returns true when an ungrouped numeric/bool aggregation query can JIT cleanly.
 bool canCompileAggKernel(const QueryPlan& plan, const TableSnapshot& snap);
 
-/// Compiles a 128-bit SIMD chunk filter kernel matching `JitKernelFnPtr` signature.
+/// Compiles a 256-bit AVX2 / 128-bit SIMD chunk filter kernel matching `JitKernelFnPtr`.
 std::shared_ptr<const struct CompiledKernel> compileSimdFilterKernel(
     const QueryPlan& plan, const TableSnapshot& snap, std::string* outError);
 
-/// Compiles a fused filter + ungrouped aggregation kernel (with 128-bit SIMD reduction when eligible).
+/// Compiles a fused filter + ungrouped aggregation kernel (with 256-bit AVX2 / 128-bit SIMD reduction).
 std::shared_ptr<const CompiledAggKernel> compileAggKernel(
     const QueryPlan& plan, const TableSnapshot& snap, std::string* outError);
+
+/// Returns true if any used column across snapshot chunks contains null cells.
+bool aggSnapshotHasNulls(const CompiledAggKernel& kernel, const TableSnapshot& snap);
 
 /// Executes a compiled ungrouped aggregation kernel across snapshot chunks in parallel.
 std::shared_ptr<class Table> runCompiledAgg(

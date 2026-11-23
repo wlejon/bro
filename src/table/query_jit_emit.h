@@ -368,6 +368,42 @@ inline void storeTypedOutput(Builder& b, MirVal v, ColType dstType, Value* dstPt
     b.build_store_indexed(mirStorageType(dstType), dstPtr, idx64, colScale(dstType), 0, castV.val);
 }
 
+inline Type vecTypeForCol(ColType ct, bool useAvx2) {
+    if (useAvx2) {
+        switch (ct) {
+        case ColType::I32:
+        case ColType::U32:
+        case ColType::Dict: return Type::i32x8();
+        case ColType::F32: return Type::f32x8();
+        case ColType::I64: return Type::i64x4();
+        case ColType::F64: return Type::f64x4();
+        default: return Type::i32x8();
+        }
+    }
+    switch (ct) {
+    case ColType::I32:
+    case ColType::U32:
+    case ColType::Dict: return Type::i32x4();
+    case ColType::F32: return Type::f32x4();
+    case ColType::I64: return Type::i64x2();
+    case ColType::F64: return Type::f64x2();
+    default: return Type::i32x4();
+    }
+}
+
+inline Type simdMaskVecType(uint32_t laneBytes, bool useAvx2) {
+    if (useAvx2) return (laneBytes == 8) ? Type::i64x4() : Type::i32x8();
+    return (laneBytes == 8) ? Type::i64x2() : Type::i32x4();
+}
+
+inline std::vector<uint32_t> collectUsedColIndices(const std::vector<bool>& usedCols) {
+    std::vector<uint32_t> indices;
+    for (size_t c = 0; c < usedCols.size(); ++c) {
+        if (usedCols[c]) indices.push_back(static_cast<uint32_t>(c));
+    }
+    return indices;
+}
+
 inline void collectUsedCols(const ExprArena& arena, uint32_t id, std::vector<bool>& used) {
     if (id == kInvalidExpr || id >= arena.nodes.size()) return;
     const ExprNode& n = arena.nodes[id];

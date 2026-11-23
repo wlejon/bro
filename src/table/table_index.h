@@ -33,6 +33,7 @@ public:
     size_t colIdx() const { return colIdx_; }
     ColType colType() const { return colType_; }
     size_t entryCount() const { return entryCount_; }
+    size_t nodeCapacity() const { return nodes_.size(); }
 
     /// Extracts canonical uint64 key from a ScalarValue or column chunk cell.
     static bool scalarToKey(ColType colType, const ScalarValue& v,
@@ -58,6 +59,7 @@ private:
     ColType colType_ = ColType::I32;
     std::vector<Bucket> buckets_;
     std::vector<Node> nodes_;
+    uint32_t freeHead_ = kInvalidNode;
     size_t usedBuckets_ = 0;
     size_t entryCount_ = 0;
 };

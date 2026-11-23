@@ -53,13 +53,27 @@ public:
     static std::shared_ptr<ColumnChunk> createMapped(
         ColType type, const uint8_t* fixedData, size_t fixedBytes,
         const uint8_t* strArena, size_t strArenaBytes,
-        std::shared_ptr<const void> owner);
+        std::shared_ptr<const void> owner,
+        const uint64_t* nullWords = nullptr);
 
     /// Clones into fresh owned aligned storage (safe to mutate even from mapped chunks).
     std::shared_ptr<ColumnChunk> clone() const;
 
     ColType type() const { return type_; }
     bool isMapped() const { return mappedOwner_ != nullptr; }
+    bool hasNulls() const { return nullCount_ > 0; }
+    bool isNull(uint32_t row) const {
+        if (!hasNulls() || row >= kChunkRows) return false;
+        const uint64_t* nw = nullWordsData();
+        return nw && ((nw[row >> 6] >> (row & 63)) & 1ULL) != 0;
+    }
+    void setNull(uint32_t row, bool isNullVal);
+    const uint64_t* nullWordsData() const {
+        return mappedNullWords_ ? mappedNullWords_ : (nullWords_ ? nullWords_->data() : nullptr);
+    }
+    size_t nullBitmapBytes() const {
+        return hasNulls() ? sizeof(std::array<uint64_t, kChunkAliveWords>) : 0;
+    }
     uint8_t* rawData() { return fixedData_; }
     const uint8_t* rawData() const { return fixedData_; }
     size_t fixedByteCapacity() const { return fixedByteCapacity_; }
@@ -101,15 +115,19 @@ private:
     explicit ColumnChunk(ColType type);
     ColumnChunk(ColType type, const uint8_t* fixedData, size_t fixedBytes,
                 const uint8_t* strArena, size_t strArenaBytes,
-                std::shared_ptr<const void> owner);
+                std::shared_ptr<const void> owner,
+                const uint64_t* nullWords);
 
     ColType type_;
     uint8_t* fixedData_ = nullptr;
     size_t fixedByteCapacity_ = 0;
     std::vector<char> stringArena_;
+    std::unique_ptr<std::array<uint64_t, kChunkAliveWords>> nullWords_;
     std::shared_ptr<const void> mappedOwner_;
     const uint8_t* mappedStringArena_ = nullptr;
     size_t mappedStringArenaSize_ = 0;
+    const uint64_t* mappedNullWords_ = nullptr;
+    uint32_t nullCount_ = 0;
 };
 
 /// One chunk across all columns of a Table (max kChunkRows rows).

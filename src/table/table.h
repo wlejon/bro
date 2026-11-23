@@ -19,10 +19,26 @@ struct Schema {
     std::vector<ColumnDef> columns;
     std::unordered_map<std::string, size_t> nameToIndex;
 
-    void addColumn(std::string name, ColType type);
+    bool addColumn(std::string name, ColType type);
     int findColumn(std::string_view name) const;
     size_t size() const { return columns.size(); }
     uint64_t computeHash() const;
+};
+
+struct TableStats {
+    size_t rowCount = 0;
+    size_t allocatedRows = 0;
+    size_t tombstoneCount = 0;
+    size_t chunkCount = 0;
+    size_t columnCount = 0;
+    size_t fixedBytes = 0;
+    size_t stringArenaBytes = 0;
+    size_t nullBitmapBytes = 0;
+    size_t dictEntries = 0;
+    size_t hashIndexes = 0;
+    size_t rangeIndexes = 0;
+    size_t spatialIndexes = 0;
+    double tombstoneRatio = 0.0;
 };
 
 /// Immutable COW snapshot of a Table. Safe to share across threads / Workers.
@@ -63,6 +79,10 @@ public:
     const RangeIndex* findRangeIndex(size_t colIdx) const;
     const SpatialIndex* findSpatialIndex(std::string_view name) const;
     std::vector<uint32_t> dirtyChunksSince(uint64_t sinceVersion) const;
+    TableStats stats() const;
+    std::vector<size_t> hashIndexCols() const;
+    std::vector<size_t> rangeIndexCols() const;
+    std::vector<const SpatialIndex*> spatialIndexList() const;
 };
 
 /// Mutable off-heap chunked columnar table with COW snapshots, indexes & dirty tracking.
@@ -110,6 +130,12 @@ public:
 
     /// Packs out tombstones, reclaims dead string bytes, and rebuilds indexes.
     void compact();
+
+    /// Removes all rows while preserving schema and index registrations.
+    void clear();
+
+    /// Returns memory/layout/index telemetry for this table.
+    TableStats stats() const;
 
     /// Creates or returns existing secondary HashIndex on column `colIdx`.
     bool createIndex(size_t colIdx);

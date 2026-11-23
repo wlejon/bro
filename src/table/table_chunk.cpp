@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -72,13 +73,21 @@ ColumnChunk::ColumnChunk(ColType type) : type_(type) {
 
 ColumnChunk::ColumnChunk(ColType type, const uint8_t* fixedData, size_t fixedBytes,
                          const uint8_t* strArena, size_t strArenaBytes,
-                         std::shared_ptr<const void> owner)
+                         std::shared_ptr<const void> owner,
+                         const uint64_t* nullWords)
     : type_(type),
       fixedData_(const_cast<uint8_t*>(fixedData)),
       fixedByteCapacity_(fixedBytes),
       mappedOwner_(std::move(owner)),
       mappedStringArena_(strArena),
-      mappedStringArenaSize_(strArenaBytes) {}
+      mappedStringArenaSize_(strArenaBytes),
+      mappedNullWords_(nullWords) {
+    if (mappedNullWords_) {
+        for (uint32_t w = 0; w < kChunkAliveWords; ++w) {
+            nullCount_ += static_cast<uint32_t>(std::popcount(mappedNullWords_[w]));
+        }
+    }
+}
 
 ColumnChunk::~ColumnChunk() {
     if (!mappedOwner_) {
@@ -94,9 +103,11 @@ std::shared_ptr<ColumnChunk> ColumnChunk::create(ColType type) {
 std::shared_ptr<ColumnChunk> ColumnChunk::createMapped(
     ColType type, const uint8_t* fixedData, size_t fixedBytes,
     const uint8_t* strArena, size_t strArenaBytes,
-    std::shared_ptr<const void> owner) {
+    std::shared_ptr<const void> owner,
+    const uint64_t* nullWords) {
     return std::shared_ptr<ColumnChunk>(
-        new ColumnChunk(type, fixedData, fixedBytes, strArena, strArenaBytes, std::move(owner)));
+        new ColumnChunk(type, fixedData, fixedBytes, strArena, strArenaBytes,
+                        std::move(owner), nullWords));
 }
 
 std::shared_ptr<ColumnChunk> ColumnChunk::clone() const {
@@ -104,6 +115,16 @@ std::shared_ptr<ColumnChunk> ColumnChunk::clone() const {
     if (fixedData_ && copy->fixedData_) {
         const size_t n = std::min(fixedByteCapacity_, copy->fixedByteCapacity_);
         std::memcpy(copy->fixedData_, fixedData_, n);
+    }
+    if (hasNulls()) {
+        const uint64_t* srcNw = nullWordsData();
+        copy->nullWords_ = std::make_unique<std::array<uint64_t, kChunkAliveWords>>();
+        if (srcNw) {
+            std::memcpy(copy->nullWords_->data(), srcNw, sizeof(*copy->nullWords_));
+        } else {
+            copy->nullWords_->fill(0);
+        }
+        copy->nullCount_ = nullCount_;
     }
     if (mappedOwner_) {
         if (mappedStringArena_ && mappedStringArenaSize_ > 0) {
@@ -115,6 +136,25 @@ std::shared_ptr<ColumnChunk> ColumnChunk::clone() const {
         copy->stringArena_ = stringArena_;
     }
     return copy;
+}
+
+void ColumnChunk::setNull(uint32_t row, bool isNullVal) {
+    if (row >= kChunkRows) return;
+    if (!isNullVal && !nullWords_) return;
+    if (!nullWords_) {
+        nullWords_ = std::make_unique<std::array<uint64_t, kChunkAliveWords>>();
+        nullWords_->fill(0);
+    }
+    const uint64_t mask = 1ULL << (row & 63);
+    uint64_t& word = (*nullWords_)[row >> 6];
+    const bool wasNull = (word & mask) != 0;
+    if (isNullVal && !wasNull) {
+        word |= mask;
+        ++nullCount_;
+    } else if (!isNullVal && wasNull) {
+        word &= ~mask;
+        --nullCount_;
+    }
 }
 
 std::string_view ColumnChunk::getString(uint32_t row) const {
@@ -152,12 +192,19 @@ void ColumnChunk::compactStrings(const uint32_t* keptRows, uint32_t keptCount,
     if (type_ != ColType::String || src.type_ != ColType::String) return;
     stringArena_.clear();
     std::memset(fixedData_, 0, fixedByteCapacity_);
+    nullWords_.reset();
+    nullCount_ = 0;
     for (uint32_t dst = 0; dst < keptCount; ++dst) {
-        setString(dst, src.getString(keptRows[dst]));
+        if (src.isNull(keptRows[dst])) {
+            setNull(dst, true);
+        } else {
+            setString(dst, src.getString(keptRows[dst]));
+        }
     }
 }
 
 ScalarValue ColumnChunk::readCell(uint32_t row, const StringDictionary* dict) const {
+    if (isNull(row)) return ScalarValue::makeNull();
     switch (type_) {
     case ColType::I32: return ScalarValue::makeI32(as<int32_t>()[row]);
     case ColType::U32: return ScalarValue::makeU32(as<uint32_t>()[row]);
@@ -175,6 +222,15 @@ ScalarValue ColumnChunk::readCell(uint32_t row, const StringDictionary* dict) co
 }
 
 void ColumnChunk::writeCell(uint32_t row, const ScalarValue& v, StringDictionary* dict) {
+    if (v.isNull) {
+        setNull(row, true);
+        if (fixedData_ && row < kChunkRows) {
+            const size_t elemBytes = colTypeElemSize(type_);
+            std::memset(fixedData_ + static_cast<size_t>(row) * elemBytes, 0, elemBytes);
+        }
+        return;
+    }
+    setNull(row, false);
     switch (type_) {
     case ColType::I32:
         as<int32_t>()[row] = (v.type == ColType::F32 || v.type == ColType::F64)
@@ -216,6 +272,15 @@ void ColumnChunk::writeCell(uint32_t row, const ScalarValue& v, StringDictionary
 }
 
 void ColumnChunk::copyRowFrom(uint32_t dstRow, const ColumnChunk& src, uint32_t srcRow) {
+    if (src.isNull(srcRow)) {
+        setNull(dstRow, true);
+        if (fixedData_ && dstRow < kChunkRows) {
+            const size_t elemBytes = colTypeElemSize(type_);
+            std::memset(fixedData_ + static_cast<size_t>(dstRow) * elemBytes, 0, elemBytes);
+        }
+        return;
+    }
+    setNull(dstRow, false);
     if (type_ == ColType::String) {
         setString(dstRow, src.getString(srcRow));
         return;

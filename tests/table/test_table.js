@@ -177,7 +177,7 @@ const leftJ = entities.query()
     .select({ id: 'left.id', mult: 'right.mult' })
     .orderBy('id', 'asc')
     .toArray();
-assert(leftJ.length === 4 && leftJ[0].mult === 3.0 && leftJ[1].mult === 0, 'left join unmatched zero-filled');
+assert(leftJ.length === 4 && leftJ[0].mult === 3.0 && leftJ[1].mult === null, 'left join unmatched is null');
 
 // 7. In-place JIT updateWhere + deleteWhere + compact
 const upd = entities.updateWhere(q.eq('kind', 'boss'), { hp: q.col('hp').add(50) });

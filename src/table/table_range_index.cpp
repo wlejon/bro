@@ -1,6 +1,8 @@
 #include "table/table_range_index.h"
 
 #include <algorithm>
+#include <cfloat>
+#include <climits>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -110,9 +112,140 @@ int RangeIndex::compareNum(const NumEntry& a, const NumEntry& b) const {
     return 0;
 }
 
+void RangeIndex::convertBound(ColType colType, const ScalarValue& v, bool isLo, bool& inc,
+                              NumEntry& out, bool& alwaysEmpty, bool& unbounded) {
+    alwaysEmpty = false;
+    unbounded = false;
+    out = NumEntry{};
+    if (v.isNull) {
+        alwaysEmpty = true;
+        return;
+    }
+
+    if (colTypeIsFloat(colType)) {
+        const double dv = colTypeIsFloat(v.type)
+                              ? v.f64
+                              : (colTypeIsUnsignedInt(v.type) ? static_cast<double>(v.u64)
+                                                              : static_cast<double>(v.i64));
+        if (std::isnan(dv)) {
+            alwaysEmpty = true;
+            return;
+        }
+        if (colType == ColType::F32) {
+            constexpr double kF32Max = static_cast<double>(FLT_MAX);
+            if (dv > kF32Max) {
+                if (isLo) alwaysEmpty = true;
+                else unbounded = true;
+                return;
+            }
+            if (dv < -kF32Max) {
+                if (isLo) unbounded = true;
+                else alwaysEmpty = true;
+                return;
+            }
+            const float fv = static_cast<float>(dv);
+            if (static_cast<double>(fv) != dv) inc = true;
+            out.fKey = (fv == 0.0f) ? 0.0 : static_cast<double>(fv);
+            return;
+        }
+        out.fKey = (dv == 0.0) ? 0.0 : dv;
+        return;
+    }
+
+    // Integer / Bool target column
+    if (colTypeIsFloat(v.type)) {
+        const double d = v.f64;
+        if (std::isnan(d)) {
+            alwaysEmpty = true;
+            return;
+        }
+        double loLim = 0.0;
+        double hiLim = 0.0;
+        bool hiExclusiveLim = false;
+        if (colType == ColType::I32) {
+            loLim = -2147483648.0;
+            hiLim = 2147483647.0;
+        } else if (colType == ColType::U32) {
+            loLim = 0.0;
+            hiLim = 4294967295.0;
+        } else if (colType == ColType::Bool) {
+            loLim = 0.0;
+            hiLim = 1.0;
+        } else {  // ColType::I64
+            loLim = -9223372036854775808.0;
+            hiLim = 9223372036854775808.0;  // 2^63 (exact IEEE double, INT64_MAX + 1)
+            hiExclusiveLim = true;
+        }
+        if (d < loLim) {
+            if (isLo) unbounded = true;
+            else alwaysEmpty = true;
+            return;
+        }
+        if (hiExclusiveLim ? (d >= hiLim) : (d > hiLim)) {
+            if (isLo) alwaysEmpty = true;
+            else unbounded = true;
+            return;
+        }
+        double snapped = d;
+        if (std::trunc(d) != d) {
+            snapped = isLo ? std::ceil(d) : std::floor(d);
+            inc = true;
+        }
+        if (colType == ColType::U32 || colType == ColType::Bool) {
+            out.uKey = static_cast<uint64_t>(snapped);
+        } else {
+            out.iKey = static_cast<int64_t>(snapped);
+        }
+        return;
+    }
+
+    if (colType == ColType::I64) {
+        out.iKey = colTypeIsUnsignedInt(v.type) ? static_cast<int64_t>(v.u64) : v.i64;
+        return;
+    }
+
+    if (colType == ColType::U32 || colType == ColType::Bool) {
+        if (!colTypeIsUnsignedInt(v.type) && v.i64 < 0) {
+            if (isLo) unbounded = true;
+            else alwaysEmpty = true;
+            return;
+        }
+        const uint64_t uv = colTypeIsUnsignedInt(v.type) ? v.u64 : static_cast<uint64_t>(v.i64);
+        const uint64_t maxU = (colType == ColType::Bool) ? 1ULL : static_cast<uint64_t>(UINT32_MAX);
+        if (uv > maxU) {
+            if (isLo) alwaysEmpty = true;
+            else unbounded = true;
+            return;
+        }
+        out.uKey = uv;
+        return;
+    }
+
+    // ColType::I32
+    if (colTypeIsUnsignedInt(v.type) && v.u64 > static_cast<uint64_t>(INT32_MAX)) {
+        if (isLo) alwaysEmpty = true;
+        else unbounded = true;
+        return;
+    }
+    const int64_t iv = colTypeIsUnsignedInt(v.type) ? static_cast<int64_t>(v.u64) : v.i64;
+    if (iv < INT32_MIN) {
+        if (isLo) unbounded = true;
+        else alwaysEmpty = true;
+        return;
+    }
+    if (iv > INT32_MAX) {
+        if (isLo) alwaysEmpty = true;
+        else unbounded = true;
+        return;
+    }
+    out.iKey = iv;
+}
+
 void RangeIndex::insert(const ColumnChunk& chunk, uint32_t row, RowLoc loc,
                         const StringDictionary* dict) {
+    if (chunk.isNull(row)) return;
     ScalarValue sv = chunk.readCell(row, dict);
+    if (sv.isNull) return;
     if (isStringOrdered()) {
         StrEntry e{std::move(sv.str), loc};
         if (sorted_ && !strEntries_.empty()) {
@@ -138,7 +271,9 @@ void RangeIndex::insert(const ColumnChunk& chunk, uint32_t row, RowLoc loc,
 
 bool RangeIndex::erase(const ColumnChunk& chunk, uint32_t row, RowLoc loc,
                        const StringDictionary* dict) {
+    if (chunk.isNull(row)) return false;
     ScalarValue sv = chunk.readCell(row, dict);
+    if (sv.isNull) return false;
     if (isStringOrdered()) {
         sortIfNeeded();
         auto loIt = std::lower_bound(
@@ -226,29 +361,41 @@ void RangeIndex::lookupRange(const ScalarValue* lo, bool incLo,
     auto last = numEntries_.end();
     if (lo) {
         NumEntry loEntry;
-        if (!makeNumEntry(colType_, *lo, RowLoc{}, loEntry)) return;
-        first = incLo
-                    ? std::lower_bound(first, last, loEntry,
-                                       [this](const NumEntry& a, const NumEntry& b) {
-                                           return compareNum(a, b) < 0;
-                                       })
-                    : std::upper_bound(first, last, loEntry,
-                                       [this](const NumEntry& a, const NumEntry& b) {
-                                           return compareNum(a, b) < 0;
-                                       });
+        bool alwaysEmpty = false;
+        bool unbounded = false;
+        bool incLoAdj = incLo;
+        convertBound(colType_, *lo, true, incLoAdj, loEntry, alwaysEmpty, unbounded);
+        if (alwaysEmpty) return;
+        if (!unbounded) {
+            first = incLoAdj
+                        ? std::lower_bound(first, last, loEntry,
+                                           [this](const NumEntry& a, const NumEntry& b) {
+                                               return compareNum(a, b) < 0;
+                                           })
+                        : std::upper_bound(first, last, loEntry,
+                                           [this](const NumEntry& a, const NumEntry& b) {
+                                               return compareNum(a, b) < 0;
+                                           });
+        }
     }
     if (hi && first < last) {
         NumEntry hiEntry;
-        if (!makeNumEntry(colType_, *hi, RowLoc{}, hiEntry)) return;
-        last = incHi
-                   ? std::upper_bound(first, last, hiEntry,
-                                      [this](const NumEntry& a, const NumEntry& b) {
-                                          return compareNum(a, b) < 0;
-                                      })
-                   : std::lower_bound(first, last, hiEntry,
-                                      [this](const NumEntry& a, const NumEntry& b) {
-                                          return compareNum(a, b) < 0;
-                                      });
+        bool alwaysEmpty = false;
+        bool unbounded = false;
+        bool incHiAdj = incHi;
+        convertBound(colType_, *hi, false, incHiAdj, hiEntry, alwaysEmpty, unbounded);
+        if (alwaysEmpty) return;
+        if (!unbounded) {
+            last = incHiAdj
+                       ? std::upper_bound(first, last, hiEntry,
+                                          [this](const NumEntry& a, const NumEntry& b) {
+                                              return compareNum(a, b) < 0;
+                                          })
+                       : std::lower_bound(first, last, hiEntry,
+                                          [this](const NumEntry& a, const NumEntry& b) {
+                                              return compareNum(a, b) < 0;
+                                          });
+        }
     }
     for (auto it = first; it < last; ++it) {
         out.push_back(it->loc);
@@ -299,6 +446,7 @@ std::shared_ptr<SpatialIndex> SpatialIndex::clone() const {
     copy->cellSize_ = cellSize_;
     copy->buckets_ = buckets_;
     copy->nodes_ = nodes_;
+    copy->freeHead_ = freeHead_;
     copy->usedBuckets_ = usedBuckets_;
     copy->entryCount_ = entryCount_;
     return copy;
@@ -310,6 +458,7 @@ void SpatialIndex::clear(size_t expectedItems) {
     while (cap < minCap) cap <<= 1;
     buckets_.assign(cap, Bucket{});
     nodes_.clear();
+    freeHead_ = kInvalidNode;
     usedBuckets_ = 0;
     entryCount_ = 0;
 }
@@ -331,13 +480,16 @@ uint64_t SpatialIndex::hashCell(int32_t cx, int32_t cy, int32_t cz) {
 void SpatialIndex::rehash(size_t newCap) {
     std::vector<Bucket> next(newCap);
     const size_t mask = newCap - 1;
+    size_t liveBuckets = 0;
     for (const Bucket& b : buckets_) {
-        if (!b.occupied) continue;
+        if (!b.occupied || b.headNode == kInvalidNode) continue;
         size_t pos = static_cast<size_t>(hashCell(b.cx, b.cy, b.cz)) & mask;
         while (next[pos].occupied) pos = (pos + 1) & mask;
         next[pos] = b;
+        ++liveBuckets;
     }
     buckets_ = std::move(next);
+    usedBuckets_ = liveBuckets;
 }
 
 size_t SpatialIndex::findSlot(int32_t cx, int32_t cy, int32_t cz) const {
@@ -361,14 +513,29 @@ void SpatialIndex::insert(double x, double y, double z, RowLoc loc) {
     if (!extractCoords(x, y, z, dims_)) return;
     if (buckets_.empty()) clear(64);
     if ((usedBuckets_ + 1) * 10 >= buckets_.size() * 7) {
-        rehash(buckets_.size() * 2);
+        size_t liveBuckets = 0;
+        for (const Bucket& b : buckets_) {
+            if (b.occupied && b.headNode != kInvalidNode) ++liveBuckets;
+        }
+        const size_t nextCap = ((liveBuckets + 1) * 10 >= buckets_.size() * 6)
+                                   ? (buckets_.size() * 2)
+                                   : buckets_.size();
+        rehash(nextCap);
     }
     const int32_t cx = cellCoord(x);
     const int32_t cy = cellCoord(y);
     const int32_t cz = (dims_ >= 3) ? cellCoord(z) : 0;
     const size_t pos = findSlot(cx, cy, cz);
     Bucket& b = buckets_[pos];
-    const uint32_t nodeIdx = static_cast<uint32_t>(nodes_.size());
+    uint32_t nodeIdx = kInvalidNode;
+    if (freeHead_ != kInvalidNode) {
+        nodeIdx = freeHead_;
+        freeHead_ = nodes_[nodeIdx].next;
+    } else {
+        nodeIdx = static_cast<uint32_t>(nodes_.size());
+        nodes_.emplace_back();
+    }
+    nodes_[nodeIdx] = Node{loc, x, y, z, kInvalidNode};
     if (!b.occupied) {
         b.occupied = true;
         b.cx = cx;
@@ -376,9 +543,8 @@ void SpatialIndex::insert(double x, double y, double z, RowLoc loc) {
         b.cz = cz;
         b.headNode = nodeIdx;
         ++usedBuckets_;
-        nodes_.push_back(Node{loc, x, y, z, kInvalidNode});
     } else {
-        nodes_.push_back(Node{loc, x, y, z, b.headNode});
+        nodes_[nodeIdx].next = b.headNode;
         b.headNode = nodeIdx;
     }
     ++entryCount_;
@@ -398,6 +564,8 @@ bool SpatialIndex::erase(double x, double y, double z, RowLoc loc) {
         if (locEq(nodes_[cur].loc, loc)) {
             if (prev == kInvalidNode) b.headNode = nodes_[cur].next;
             else nodes_[prev].next = nodes_[cur].next;
+            nodes_[cur].next = freeHead_;
+            freeHead_ = cur;
             --entryCount_;
             return true;
         }
@@ -544,7 +712,7 @@ void SpatialIndex::queryNearest(double cx, double cy, double cz, size_t k, doubl
 
     // Expand grid rings until heap kth distance fits inside next ring's minimum box distance.
     int32_t ring = 0;
-    bool scannedAll = false;
+    bool provedOptimal = false;
     while (ring <= maxRing && ring <= 32) {
         const int32_t zLo = (dims_ >= 3) ? (gcz - ring) : 0;
         const int32_t zHi = (dims_ >= 3) ? (gcz + ring) : 0;
@@ -565,15 +733,14 @@ void SpatialIndex::queryNearest(double cx, double cy, double cz, size_t k, doubl
         }
         if (heap.size() == k) {
             const double minNextDist = std::max(0.0, static_cast<double>(ring) * cellSize_ - cellSize_);
-            if (heap.top().dist2 <= minNextDist * minNextDist) break;
+            if (heap.top().dist2 <= minNextDist * minNextDist) {
+                provedOptimal = true;
+                break;
+            }
         }
         ++ring;
     }
-    if (ring > 32 && (heap.size() < k || !hasMaxR)) {
-        scannedAll = true;
-    } else if (!hasMaxR && heap.size() < k && entryCount_ > heap.size()) {
-        scannedAll = true;
-    }
+    const bool scannedAll = !provedOptimal && (!hasMaxR || ring <= maxRing);
 
     if (scannedAll) {
         while (!heap.empty()) heap.pop();
