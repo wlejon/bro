@@ -198,7 +198,7 @@ private:
             }
             off += written;
 #else
-            ssize_t n = write(fd_, src + off, size - off);
+            ssize_t n = ::write(fd_, src + off, size - off);
             if (n <= 0) {
                 fail("failed writing .brotable temp file: " + tmpPath_);
                 return false;
