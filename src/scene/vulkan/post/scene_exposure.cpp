@@ -74,8 +74,7 @@ bool SceneExposure::setup(SceneGpu& gpu) {
         !gpu.allocator.createBuffer(kStateBytes, kStorage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, state_))
         return false;
     for (Readback& r : readbacks_) {
-        if (!gpu.allocator.createBuffer(kStateBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        if (!gpu.allocator.createBuffer(kStateBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpu.allocator.readbackMemory(),
                                         r.buffer) ||
             !r.buffer.mappedData)
             return false;

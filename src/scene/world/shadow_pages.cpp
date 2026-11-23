@@ -41,6 +41,7 @@ void ShadowPages::configure(const ShadowPagesConfig& config) {
     config_.overlayPages = std::max(config_.overlayPages, 0);
     entries_.assign(static_cast<size_t>(clipFirst(true)) + static_cast<size_t>(config_.levels) * SP_LEVEL_ENTRIES,
                     Entry{});
+    touched_.clear();
     owner_.assign(static_cast<size_t>(total), -1);
     free_.clear();
     for (int p = total - 1; p >= 0; --p) free_.push_back(p);
@@ -138,11 +139,14 @@ void ShadowPages::beginFrame(const bromath::Vec3& eye) {
     invalid_.clear();
     sun_.on = false;
     for (LocalSlot& s : locals_) s.seen = false;
-    for (Entry& e : entries_) {
+    // (Only the entries last frame flagged: the rest hold none.)
+    for (const int32_t i : touched_) {
+        Entry& e = entries_[static_cast<size_t>(i)];
         e.fresh = false;
         e.dynamic = false;
         e.overlay = 0;
     }
+    touched_.clear();
 }
 
 void ShadowPages::release(int index) {
@@ -483,8 +487,7 @@ void ShadowPages::planeRect(const Sun& sun, const bromath::AABB3& box, double re
     }
 }
 
-template <class F>
-void ShadowPages::forLevelRect(const Map& m, const double rect[4], F&& f) {
+bool ShadowPages::levelRect(const Map& m, const double rect[4], int64_t r[4]) const {
     const int level = m.level;
     const double size = pageSize(level), border = static_cast<double>(m.texel) * SP_BORDER;
     const Sun& sun = sunOf(m.next);
@@ -495,25 +498,37 @@ void ShadowPages::forLevelRect(const Map& m, const double rect[4], F&& f) {
     };
     if (rect[1] + border < ox * size || rect[0] - border >= (ox + SP_WINDOW) * size ||
         rect[3] + border < oy * size || rect[2] - border >= (oy + SP_WINDOW) * size)
-        return;
-    const int64_t x0 = clampPage(rect[0] - border, ox), x1 = clampPage(rect[1] + border, ox);
-    const int64_t y0 = clampPage(rect[2] - border, oy), y1 = clampPage(rect[3] + border, oy);
-    for (int64_t y = y0; y <= y1; ++y)
-        for (int64_t x = x0; x <= x1; ++x) f(m.first + static_cast<int>(wrap(y) * SP_WINDOW + wrap(x)));
+        return false;
+    r[0] = clampPage(rect[0] - border, ox);
+    r[1] = clampPage(rect[1] + border, ox);
+    r[2] = clampPage(rect[2] - border, oy);
+    r[3] = clampPage(rect[3] + border, oy);
+    return true;
 }
 
 template <class F>
-void ShadowPages::forPages(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f) {
+void ShadowPages::forLevelRect(const Map& m, const double rect[4], F&& f) {
+    int64_t r[4];
+    if (!levelRect(m, rect, r)) return;
+    for (int64_t y = r[2]; y <= r[3]; ++y)
+        for (int64_t x = r[0]; x <= r[1]; ++x) f(m.first + static_cast<int>(wrap(y) * SP_WINDOW + wrap(x)));
+}
+
+template <class F>
+void ShadowPages::forPageRects(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f) {
     if (bromath::aisEmpty(box)) return;
     double cs[8][3];
     corners(box, cs);
     double rect[4], nextRect[4];
     if (sun_.on) planeRect(sun_, box, rect);
     if (sun_.on && building_) planeRect(next_, box, nextRect);
-    for (const Map& m : maps_) {
+    for (size_t mi = 0; mi < maps_.size(); ++mi) {
+        const Map& m = maps_[mi];
         if (m.kind == SP_KIND_CLIPMAP) {
             if (m.next && !next) continue;
-            if (m.level >= minLevel && m.level <= maxLevel) forLevelRect(m, m.next ? nextRect : rect, f);
+            int64_t r[4];
+            if (m.level >= minLevel && m.level <= maxLevel && levelRect(m, m.next ? nextRect : rect, r))
+                f(static_cast<int>(mi), 0, r);
         } else {
             // The box's corners in the face's (u, v); a corner behind the
             // light covers the face.
@@ -546,11 +561,26 @@ void ShadowPages::forPages(const bromath::AABB3& box, int minLevel, int maxLevel
                 const int x1 = std::clamp(static_cast<int>(std::floor((u1 + border) * n)), 0, n - 1);
                 const int y0 = std::clamp(static_cast<int>(std::floor((v0 - border) * n)), 0, n - 1);
                 const int y1 = std::clamp(static_cast<int>(std::floor((v1 + border) * n)), 0, n - 1);
-                for (int y = y0; y <= y1; ++y)
-                    for (int x = x0; x <= x1; ++x) f(m.first + mipFirst(mip) + y * n + x);
+                const int64_t r[4] = {x0, x1, y0, y1};
+                f(static_cast<int>(mi), mip, r);
             }
         }
     }
+}
+
+template <class F>
+void ShadowPages::forPages(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f) {
+    forPageRects(box, minLevel, maxLevel, next, [&](int mi, int mip, const int64_t* r) {
+        const Map& m = maps_[static_cast<size_t>(mi)];
+        if (m.kind == SP_KIND_CLIPMAP) {
+            for (int64_t y = r[2]; y <= r[3]; ++y)
+                for (int64_t x = r[0]; x <= r[1]; ++x) f(m.first + static_cast<int>(wrap(y) * SP_WINDOW + wrap(x)));
+        } else {
+            const int n = SP_LOCAL >> mip;
+            for (int64_t y = r[2]; y <= r[3]; ++y)
+                for (int64_t x = r[0]; x <= r[1]; ++x) f(m.first + mipFirst(mip) + static_cast<int>(y * n + x));
+        }
+    });
 }
 
 void ShadowPages::invalidate(const bromath::AABB3& box) {
@@ -581,9 +611,10 @@ int ShadowPages::searchLevel() const {
 
 void ShadowPages::addDynamic(const bromath::AABB3& box, bool sways) { dynamic_.push_back({box, sways}); }
 
-void ShadowPages::markDynamic() {
+void ShadowPages::markDynamic(std::vector<int>& pages) {
     // A sway-level page is wanted for its overlay when it is needed or a
     // needed page finer than it lies under it (the finer levels read its).
+    if (dynamic_.empty()) return;
     const int s = swayLevel();
     std::vector<uint8_t> under;
     if (sun_.on) {
@@ -596,12 +627,60 @@ void ShadowPages::markDynamic() {
                 if (a >= 0) under[static_cast<size_t>(a - s * SP_LEVEL_ENTRIES)] = 1;
             }
     }
-    for (const Dynamic& d : dynamic_)
-        forPages(d.box, s, d.sways ? s : SP_MAX_LEVELS, false, [&](int i) {
-            Entry& e = entries_[static_cast<size_t>(i)];
-            const bool atSway = i >= s * SP_LEVEL_ENTRIES && i < (s + 1) * SP_LEVEL_ENTRIES;
-            if (neededNow(e) || (atSway && under[static_cast<size_t>(i - s * SP_LEVEL_ENTRIES)])) e.dynamic = true;
+    // The pages that would take an overlay, each tested against the boxes'
+    // page rects: a box over the city spans every page of the coarse levels,
+    // the wanted pages are a few hundred.
+    struct Want {
+        int entry, map, mip;
+    };
+    std::vector<Want> wanted;
+    for (size_t mi = 0; mi < maps_.size(); ++mi) {
+        const Map& m = maps_[mi];
+        if (m.next) continue;
+        if (m.kind == SP_KIND_CLIPMAP) {
+            if (m.level < s) continue;
+            for (int k = 0; k < SP_LEVEL_ENTRIES; ++k) {
+                const Entry& e = entries_[static_cast<size_t>(m.first + k)];
+                if (e.occupied && (neededNow(e) || (m.level == s && under[static_cast<size_t>(k)])))
+                    wanted.push_back({m.first + k, static_cast<int>(mi), 0});
+            }
+        } else {
+            for (int j = 0; j < SP_LOCAL_ENTRIES; ++j)
+                if (neededNow(entries_[static_cast<size_t>(m.first + j)]))
+                    wanted.push_back({m.first + j, static_cast<int>(mi), j >= 84 ? 3 : j >= 80 ? 2 : j >= 64 ? 1 : 0});
+        }
+    }
+    if (wanted.empty()) return;
+    std::vector<uint8_t> hit(wanted.size(), 0);
+    // One box's rects: (map, mip) -> its pages.
+    std::vector<int64_t> rects(maps_.size() * SP_LOCAL_MIPS * 4);
+    std::vector<uint8_t> has(maps_.size() * SP_LOCAL_MIPS);
+    for (const Dynamic& d : dynamic_) {
+        std::fill(has.begin(), has.end(), 0);
+        bool any = false;
+        forPageRects(d.box, s, d.sways ? s : SP_MAX_LEVELS, false, [&](int mi, int mip, const int64_t* r) {
+            const size_t k = static_cast<size_t>(mi) * SP_LOCAL_MIPS + static_cast<size_t>(mip);
+            std::memcpy(&rects[k * 4], r, 4 * sizeof(int64_t));
+            has[k] = 1;
+            any = true;
         });
+        if (!any) continue;
+        for (size_t n = 0; n < wanted.size(); ++n) {
+            const Want& w = wanted[n];
+            const size_t k = static_cast<size_t>(w.map) * SP_LOCAL_MIPS + static_cast<size_t>(w.mip);
+            if (!has[k]) continue;
+            const Entry& e = entries_[static_cast<size_t>(w.entry)];
+            const int64_t* r = &rects[k * 4];
+            if (e.x >= r[0] && e.x <= r[1] && e.y >= r[2] && e.y <= r[3]) hit[n] = 1;
+        }
+    }
+    // (In the maps' order, each map's entries in order: the finest first.)
+    for (size_t n = 0; n < wanted.size(); ++n) {
+        if (!hit[n]) continue;
+        entries_[static_cast<size_t>(wanted[n].entry)].dynamic = true;
+        touched_.push_back(wanted[n].entry);
+        pages.push_back(wanted[n].entry);
+    }
 }
 
 void ShadowPages::setSeen(const bromath::AABB3& box) { seen_ = box; }
@@ -699,8 +778,5 @@ void ShadowPages::request(uint64_t serial, std::span<const uint32_t> bits) {
     }
 }
 
-bool ShadowPages::neededNow(const Entry& e) const {
-    return (e.needed != 0 && e.needed + 1 >= newestRequest_) || e.base == serial_;
-}
 
 }  // namespace bro::scene

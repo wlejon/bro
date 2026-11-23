@@ -163,14 +163,8 @@ void ShadowPages::plan(ShadowPlan& out) {
     // The overlays: the pages what moves touches that want one, the finest
     // first while overlayPages allows.
     markBase();
-    markDynamic();
     std::vector<int> dynamicPages;
-    for (const Map& m : maps_) {
-        if (m.next) continue;
-        const int count = m.kind == SP_KIND_CLIPMAP ? SP_LEVEL_ENTRIES : SP_LOCAL_ENTRIES;
-        for (int i = m.first; i < m.first + count; ++i)
-            if (entries_[static_cast<size_t>(i)].dynamic) dynamicPages.push_back(i);
-    }
+    markDynamic(dynamicPages);
     if (static_cast<int>(dynamicPages.size()) > config_.overlayPages) {
         // (Clipmap entries run finest level first, a local map's finest mip first.)
         for (size_t k = static_cast<size_t>(config_.overlayPages); k < dynamicPages.size(); ++k)
@@ -205,6 +199,7 @@ void ShadowPages::plan(ShadowPlan& out) {
         if (chosen[key] || !e.occupied || mapOfEntry(i, mip) < 0 || !neededNow(e) || (e.drawn && !e.dirty)) continue;
         if (e.physical < 0) {
             e.fresh = true;   // (kept from eviction while the frame allocates)
+            touched_.push_back(i);
             const int p = allocate();
             if (p < 0) {
                 e.fresh = false;
@@ -362,6 +357,7 @@ void ShadowPages::plan(ShadowPlan& out) {
                 c.scratchY = v.scratchY + (y - r.y) * SP_PAGE;
                 if (r.dynamic) {
                     // Sampled in place: its page's first texel (past the border).
+                    touched_.push_back(i);
                     e.overlay = SP_RESIDENT | static_cast<uint32_t>(c.scratchX + SP_BORDER) |
                                 (static_cast<uint32_t>(c.scratchY + SP_BORDER) << SP_OVERLAY_BITS);
                     ++stats_.dynamic;
@@ -393,6 +389,7 @@ void ShadowPages::plan(ShadowPlan& out) {
         Entry& e = entries_[static_cast<size_t>(i)];
         if (!(inView[static_cast<size_t>(i)] & 2)) continue;
         e.fresh = !e.drawn;
+        touched_.push_back(i);
         e.drawn = true;
         e.dirty = false;
         ++stats_.drawn;

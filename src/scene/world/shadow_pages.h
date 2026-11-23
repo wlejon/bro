@@ -333,6 +333,13 @@ private:
     /// border) `box` touches, the clipmap levels minLevel to maxLevel (the
     /// built clipmap's too with `next`).
     template <class F> void forPages(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f);
+    /// Calls f(map index, mip, pages[4]) with the pages (x0, x1, y0, y1) of
+    /// each map forPages walks: a clipmap level's absolute plane pages (mip
+    /// 0), a local map's mip's cells.
+    template <class F> void forPageRects(const bromath::AABB3& box, int minLevel, int maxLevel, bool next, F&& f);
+    /// The pages (x0, x1, y0, y1) of clipmap level map `m` the plane rect
+    /// (padded by the border) touches; false when it misses the window.
+    bool levelRect(const Map& m, const double rect[4], int64_t r[4]) const;
     /// `sun`'s plane rect (a0, a1, b0, b1) of `box`.
     static void planeRect(const Sun& sun, const bromath::AABB3& box, double rect[4]);
     /// Calls f(entry) for each page of clipmap level map `m` the plane rect
@@ -340,10 +347,12 @@ private:
     template <class F> void forLevelRect(const Map& m, const double rect[4], F&& f);
     /// Flag the pages the frame's moving bounds touch that want an overlay:
     /// needed ones, and the sway level's over a needed finer page.
-    void markDynamic();
+    void markDynamic(std::vector<int>& pages /* the flagged ones, appended */);
     /// Flag the frame's base pages (setSeen).
     void markBase();
-    bool neededNow(const Entry& e) const;
+    bool neededNow(const Entry& e) const {
+        return (e.needed != 0 && e.needed + 1 >= newestRequest_) || e.base == serial_;
+    }
     int allocate();
     void viewMatrix(const Map& m, const Rect& r, ShadowViewPlan& v) const;
 
@@ -360,6 +369,7 @@ private:
     LocalSlot locals_[kLocalSlots];
     std::vector<Map> maps_;           // this frame's: the sun's levels, then local faces
     std::vector<Dynamic> dynamic_;
+    std::vector<int32_t> touched_;    // entries flagged fresh/dynamic/overlay since beginFrame
     std::vector<bromath::AABB3> invalid_;   // invalidate()s met before endLights(), applied there
     /// A plants page's units: its texels.
     static constexpr double kPlantUnits = static_cast<double>(SP_PAGE) * SP_PAGE;

@@ -60,8 +60,9 @@ bool SceneShadowPages::ensureRequests(SceneGpu& gpu, VkDeviceSize bytes) {
                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, requests_))
         return false;
     for (Readback& r : ring_) {
-        if (!gpu.allocator.createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        // (Cached: request() reads every word, and uncached reads cost a
+        // millisecond a frame.)
+        if (!gpu.allocator.createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpu.allocator.readbackMemory(),
                                         r.buffer) ||
             !r.buffer.mappedData)
             return false;
