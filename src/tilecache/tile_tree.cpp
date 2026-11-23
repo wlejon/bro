@@ -610,7 +610,17 @@ void TileTree::coverInto(int32_t node, std::vector<DrawTile>& out, bool& ok) con
         // view, or the capacity held its parent whole) ramps in from its
         // parent over kBlendRampFrames rather than popping to where the
         // view has come: it starts as its parent showed.
-        if (n.shownLast + 1 < frame_ || n.shownFrom == 0) n.shownFrom = frame_;
+        // A tile taking over from its children (drawn the frame before: the
+        // view moved out past their split) is no late arrival: they showed it
+        // as it is (their blend about 0 there), so it comes in ramped, not
+        // from its own parent's shape (a jump a level coarser on every merge).
+        if (n.shownLast + 1 < frame_ || n.shownFrom == 0) {
+            bool merged = false;
+            for (uint32_t i = 0; i < 4 && !merged; ++i)
+                merged = n.child[i] >= 0 && nodes_[n.child[i]].shownLast + 1 == frame_;
+            const auto ramp = static_cast<uint64_t>(kBlendRampFrames);
+            n.shownFrom = merged && frame_ > ramp ? frame_ - ramp : frame_;
+        }
         n.shownLast = frame_;
         if (n.parent >= 0 && nodes_[n.parent].state == State::Ready)
             d.blend = std::min(d.blend, static_cast<float>(frame_ - n.shownFrom) / kBlendRampFrames);
