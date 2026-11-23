@@ -937,7 +937,7 @@ pub fn ambient(s: Surface) -> vec3<f32> {
             sky = mix(sky, sky_along(r), sharp);
         }
         let specular = sky * spec_w * specular_occ * enc.sky_vis;
-        return (kd * irradiance + kd_open * bounce) * s.base_color + env_fill + mix(specular, probe_spec, probe_w);
+        return (kd * irradiance + kd_open * bounce * enc.sun_vis) * s.base_color + env_fill + mix(specular, probe_spec, probe_w);
     }
     if lighting.ibl_params.x > 0.5 {
         let rotation = lighting.ibl_params.z;
@@ -945,9 +945,9 @@ pub fn ambient(s: Surface) -> vec3<f32> {
         let irradiance = open_sky_irradiance(s.position, ni) * enc.sky_vis + glow * enc.sun_vis;
         let prefiltered = prefilter_map.sample_lod(linear, rotate_y(r, rotation), s.roughness * lighting.ibl_params.w).xyz;
         let specular = prefiltered * spec_w * intensity * specular_occ * enc.sky_vis;
-        return (kd * irradiance + kd_open * bounce) * s.base_color + env_fill + mix(specular, probe_spec, probe_w);
+        return (kd * irradiance + kd_open * bounce * enc.sun_vis) * s.base_color + env_fill + mix(specular, probe_spec, probe_w);
     }
-    return ((lighting.ambient_color.xyz * enc.sky_vis + glow * enc.sun_vis) * diffuse_occ + bounce) * s.base_color * (1.0 - s.metallic) + env_fill + probe_spec * probe_w;
+    return ((lighting.ambient_color.xyz * enc.sky_vis + glow * enc.sun_vis) * diffuse_occ + bounce * enc.sun_vis) * s.base_color * (1.0 - s.metallic) + env_fill + probe_spec * probe_w;
 }
 
 pub fn cell_shade(pos: vec3<f32>, geom_normal: vec3<f32>) -> f32 {

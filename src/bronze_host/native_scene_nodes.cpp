@@ -131,6 +131,9 @@ void bro_scene_SceneNode_rotation_set(void* self, const double* v, uint32_t v_le
         std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]) && std::isfinite(v[3])) {
         n->setRotation(bromath::Quat(static_cast<float>(v[0]), static_cast<float>(v[1]),
                                      static_cast<float>(v[2]), static_cast<float>(v[3])));
+    } else if (n && v && v_len == 3 && std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2])) {
+        // [rx, ry, rz] Euler radians, as the setter documents.
+        n->setRotationEuler(static_cast<float>(v[0]), static_cast<float>(v[1]), static_cast<float>(v[2]));
     }
 }
 
