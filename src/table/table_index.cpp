@@ -10,12 +10,54 @@ HashIndex::HashIndex(size_t colIdx, ColType colType)
     clear(64);
 }
 
+std::shared_ptr<HashIndex> HashIndex::createMapped(
+    size_t colIdx, ColType colType,
+    const Bucket* buckets, size_t bucketCount,
+    const Node* nodes, size_t nodeCount,
+    size_t usedBuckets, size_t entryCount,
+    std::shared_ptr<const void> owner) {
+    auto idx = std::make_shared<HashIndex>();
+    idx->colIdx_ = colIdx;
+    idx->colType_ = colType;
+    idx->mappedOwner_ = std::move(owner);
+    idx->mappedBuckets_ = buckets;
+    idx->mappedBucketCount_ = bucketCount;
+    idx->mappedNodes_ = nodes;
+    idx->mappedNodeCount_ = nodeCount;
+    idx->usedBuckets_ = usedBuckets;
+    idx->entryCount_ = entryCount;
+    return idx;
+}
+
+void HashIndex::ensureOwned() {
+    if (!mappedOwner_) return;
+    if (mappedBuckets_ && mappedBucketCount_ > 0) {
+        buckets_.assign(mappedBuckets_, mappedBuckets_ + mappedBucketCount_);
+    } else {
+        buckets_.clear();
+    }
+    if (mappedNodes_ && mappedNodeCount_ > 0) {
+        nodes_.assign(mappedNodes_, mappedNodes_ + mappedNodeCount_);
+    } else {
+        nodes_.clear();
+    }
+    mappedOwner_.reset();
+    mappedBuckets_ = nullptr;
+    mappedBucketCount_ = 0;
+    mappedNodes_ = nullptr;
+    mappedNodeCount_ = 0;
+}
+
 std::shared_ptr<HashIndex> HashIndex::clone() const {
     auto copy = std::make_shared<HashIndex>();
     copy->colIdx_ = colIdx_;
     copy->colType_ = colType_;
-    copy->buckets_ = buckets_;
-    copy->nodes_ = nodes_;
+    if (const Bucket* bp = bucketData(); bp && bucketCount() > 0) {
+        copy->buckets_.assign(bp, bp + bucketCount());
+    }
+    if (const Node* np = nodeData(); np && nodeCount() > 0) {
+        copy->nodes_.assign(np, np + nodeCount());
+    }
     copy->freeHead_ = freeHead_;
     copy->usedBuckets_ = usedBuckets_;
     copy->entryCount_ = entryCount_;
@@ -23,6 +65,11 @@ std::shared_ptr<HashIndex> HashIndex::clone() const {
 }
 
 void HashIndex::clear(size_t expectedKeys) {
+    mappedOwner_.reset();
+    mappedBuckets_ = nullptr;
+    mappedBucketCount_ = 0;
+    mappedNodes_ = nullptr;
+    mappedNodeCount_ = 0;
     size_t cap = 64;
     const size_t minCap = (expectedKeys * 10) / 6 + 16;
     while (cap < minCap) cap <<= 1;
@@ -34,6 +81,7 @@ void HashIndex::clear(size_t expectedKeys) {
 }
 
 void HashIndex::rehash(size_t newCap) {
+    ensureOwned();
     std::vector<Bucket> nextBuckets(newCap);
     const size_t mask = newCap - 1;
     size_t liveBuckets = 0;
@@ -51,16 +99,21 @@ void HashIndex::rehash(size_t newCap) {
 }
 
 size_t HashIndex::findSlot(uint64_t key) const {
-    if (buckets_.empty()) return 0;
-    const size_t mask = buckets_.size() - 1;
+    const Bucket* bp = bucketData();
+    const size_t n = bucketCount();
+    if (!bp || n == 0) return 0;
+    const size_t mask = n - 1;
     size_t pos = static_cast<size_t>(mixHash64(key)) & mask;
-    while (buckets_[pos].occupied && buckets_[pos].key != key) {
+    size_t steps = 0;
+    while (bp[pos].occupied && bp[pos].key != key && steps < n) {
         pos = (pos + 1) & mask;
+        ++steps;
     }
     return pos;
 }
 
 void HashIndex::insert(uint64_t key, RowLoc loc) {
+    ensureOwned();
     if (buckets_.empty()) clear(64);
     if ((usedBuckets_ + 1) * 10 >= buckets_.size() * 7) {
         size_t liveBuckets = 0;
@@ -84,7 +137,7 @@ void HashIndex::insert(uint64_t key, RowLoc loc) {
     }
     nodes_[nodeIdx].loc = loc;
     if (!b.occupied) {
-        b.occupied = true;
+        b.occupied = 1;
         b.key = key;
         b.headNode = nodeIdx;
         nodes_[nodeIdx].next = kInvalidNode;
@@ -97,6 +150,7 @@ void HashIndex::insert(uint64_t key, RowLoc loc) {
 }
 
 bool HashIndex::erase(uint64_t key, RowLoc loc) {
+    ensureOwned();
     if (buckets_.empty()) return false;
     const size_t pos = findSlot(key);
     Bucket& b = buckets_[pos];
@@ -122,14 +176,20 @@ bool HashIndex::erase(uint64_t key, RowLoc loc) {
 }
 
 void HashIndex::lookupKey(uint64_t key, std::vector<RowLoc>& out) const {
-    if (buckets_.empty() || entryCount_ == 0) return;
+    const Bucket* bp = bucketData();
+    const size_t bCnt = bucketCount();
+    const Node* np = nodeData();
+    const size_t nCnt = nodeCount();
+    if (!bp || bCnt == 0 || !np || nCnt == 0 || entryCount_ == 0) return;
     const size_t pos = findSlot(key);
-    const Bucket& b = buckets_[pos];
-    if (!b.occupied) return;
+    const Bucket& b = bp[pos];
+    if (!b.occupied || b.key != key) return;
     uint32_t cur = b.headNode;
-    while (cur != kInvalidNode) {
-        out.push_back(nodes_[cur].loc);
-        cur = nodes_[cur].next;
+    size_t steps = 0;
+    while (cur != kInvalidNode && cur < nCnt && steps < nCnt) {
+        out.push_back(np[cur].loc);
+        cur = np[cur].next;
+        ++steps;
     }
 }
 

@@ -38,6 +38,7 @@ struct TableStats {
     size_t hashIndexes = 0;
     size_t rangeIndexes = 0;
     size_t spatialIndexes = 0;
+    size_t mappedIndexes = 0;
     double tombstoneRatio = 0.0;
 };
 

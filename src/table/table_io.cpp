@@ -1,15 +1,21 @@
 #include "table/table_io.h"
 
+#include "table/table_io_internal.h"
+
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstring>
-#include <fstream>
-#include <limits>
 #include <unordered_set>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -22,88 +28,14 @@ namespace bro::table {
 
 namespace {
 
-constexpr char kMagicV1[8] = {'B', 'R', 'O', 'T', 'B', 'L', '0', '1'};
-constexpr char kMagicV2[8] = {'B', 'R', 'O', 'T', 'B', 'L', '0', '2'};
-constexpr uint32_t kFormatVersionV1 = 1;
-constexpr uint32_t kFormatVersionV2 = 2;
-constexpr uint32_t kMaxCols = 4096;
-constexpr uint32_t kMaxChunks = 1048576;
-constexpr uint32_t kMaxDictEntries = 16777216;
-constexpr size_t kNullBitmapBytes = sizeof(std::array<uint64_t, kChunkAliveWords>);
+using namespace io_internal;
 
-#pragma pack(push, 1)
-struct FileHeaderV1 {
-    char magic[8];
-    uint32_t version;
-    uint32_t colCount;
-    uint32_t chunkCount;
-    uint32_t reserved;
-    uint64_t totalAliveRows;
-    uint32_t dictCount;
-    uint32_t reserved2;
-    uint64_t payloadBytes;
-};
-
-struct FileHeaderV2 {
-    char magic[8];
-    uint32_t version;
-    uint32_t colCount;
-    uint32_t chunkCount;
-    uint32_t hashIndexCount;
-    uint64_t totalAliveRows;
-    uint32_t dictCount;
-    uint32_t rangeIndexCount;
-    uint32_t spatialIndexCount;
-    uint32_t reserved;
-    uint64_t payloadBytes;
-    uint64_t checksum;
-};
-#pragma pack(pop)
-
-struct SpatialMetaSpec {
-    std::string name;
-    std::vector<size_t> cols;
-    double cellSize = 16.0;
-};
-
-struct PersistedIndexSpecs {
-    std::vector<size_t> hashCols;
-    std::vector<size_t> rangeCols;
-    std::vector<SpatialMetaSpec> spatials;
-};
+constexpr size_t kStreamBufBytes = 4u * 1024u * 1024u;
 
 uint64_t computeRawFnv1a64(const uint8_t* data, size_t size) {
-    uint64_t h = 14695981039346656037ULL;
-    for (size_t i = 0; i < size; ++i) {
-        h ^= data[i];
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
-
-void appendU8(std::vector<uint8_t>& buf, uint8_t v) { buf.push_back(v); }
-
-void appendU32(std::vector<uint8_t>& buf, uint32_t v) {
-    const size_t off = buf.size();
-    buf.resize(off + sizeof(v));
-    std::memcpy(buf.data() + off, &v, sizeof(v));
-}
-
-void appendU64(std::vector<uint8_t>& buf, uint64_t v) {
-    const size_t off = buf.size();
-    buf.resize(off + sizeof(v));
-    std::memcpy(buf.data() + off, &v, sizeof(v));
-}
-
-void appendF64(std::vector<uint8_t>& buf, double v) {
-    const size_t off = buf.size();
-    buf.resize(off + sizeof(v));
-    std::memcpy(buf.data() + off, &v, sizeof(v));
-}
-
-void padToAlign64(std::vector<uint8_t>& buf) {
-    const size_t rem = buf.size() & 63u;
-    if (rem != 0) buf.resize(buf.size() + (64u - rem), 0);
+    IncrementalFnv1a64 hasher;
+    hasher.update(data, size);
+    return hasher.finish();
 }
 
 struct MappedFileOwner {
@@ -127,30 +59,260 @@ struct MappedFileOwner {
     }
 };
 
-struct ByteCursor {
-    const uint8_t* ptr = nullptr;
-    size_t size = 0;
-    size_t pos = 0;
+class VectorByteSink final : public ByteSink {
+public:
+    explicit VectorByteSink(std::vector<uint8_t>& buf) : buf_(buf) {}
 
-    bool has(size_t n) const { return pos <= size && n <= (size - pos); }
-
-    template <typename T>
-    bool read(T& out) {
-        if (!has(sizeof(T))) return false;
-        std::memcpy(&out, ptr + pos, sizeof(T));
-        pos += sizeof(T);
+    bool finalizeHeader(const FileHeaderV3& hdr) {
+        if (!ok_ || buf_.size() < sizeof(FileHeaderV3)) return false;
+        std::memcpy(buf_.data(), &hdr, sizeof(FileHeaderV3));
         return true;
     }
 
-    bool skipToAlign64() {
-        const size_t rem = pos & 63u;
-        if (rem == 0) return true;
-        const size_t add = 64u - rem;
-        if (!has(add)) return false;
-        pos += add;
-        return true;
+protected:
+    void writeBytesRaw(const void* data, size_t size) override {
+        const size_t off = buf_.size();
+        buf_.resize(off + size);
+        std::memcpy(buf_.data() + off, data, size);
     }
+
+private:
+    std::vector<uint8_t>& buf_;
 };
+
+#ifdef _WIN32
+std::wstring utf8ToWide(const std::string& s) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring ws(wlen > 0 ? wlen - 1 : 0, L'\0');
+    if (wlen > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, ws.data(), wlen);
+    return ws;
+}
+#endif
+
+class FileByteSink final : public ByteSink {
+public:
+    FileByteSink(const std::string& finalPath, const std::string& tmpPath)
+        : finalPath_(finalPath), tmpPath_(tmpPath), buf_(kStreamBufBytes) {
+#ifdef _WIN32
+        wtmp_ = utf8ToWide(tmpPath_);
+        wfinal_ = utf8ToWide(finalPath_);
+        h_ = CreateFileW(wtmp_.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h_ == INVALID_HANDLE_VALUE) {
+            fail("failed to open temp file for writing: " + tmpPath_);
+        }
+#else
+        fd_ = open(tmpPath_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd_ < 0) {
+            fail("failed to open temp file for writing: " + tmpPath_);
+        }
+#endif
+    }
+
+    ~FileByteSink() override { abortCleanup(); }
+
+    bool finalize(const FileHeaderV3& hdr) {
+        if (!ok_) {
+            abortCleanup();
+            return false;
+        }
+        flushBuffer();
+        if (!ok_) {
+            abortCleanup();
+            return false;
+        }
+#ifdef _WIN32
+        LARGE_INTEGER zero{};
+        if (!SetFilePointerEx(h_, zero, nullptr, FILE_BEGIN)) {
+            fail("failed seeking to .brotable header: " + tmpPath_);
+            abortCleanup();
+            return false;
+        }
+        if (!writeAllRaw(&hdr, sizeof(hdr))) {
+            abortCleanup();
+            return false;
+        }
+        FlushFileBuffers(h_);
+        CloseHandle(h_);
+        h_ = INVALID_HANDLE_VALUE;
+        if (!MoveFileExW(wtmp_.c_str(), wfinal_.c_str(),
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            DeleteFileW(wtmp_.c_str());
+            fail("failed atomic replace of .brotable file: " + finalPath_);
+            return false;
+        }
+        committed_ = true;
+        return true;
+#else
+        if (lseek(fd_, 0, SEEK_SET) != 0 || !writeAllRaw(&hdr, sizeof(hdr))) {
+            abortCleanup();
+            return false;
+        }
+        fsync(fd_);
+        close(fd_);
+        fd_ = -1;
+        if (rename(tmpPath_.c_str(), finalPath_.c_str()) != 0) {
+            unlink(tmpPath_.c_str());
+            fail("failed atomic rename of .brotable file: " + finalPath_);
+            return false;
+        }
+        committed_ = true;
+        return true;
+#endif
+    }
+
+protected:
+    void writeBytesRaw(const void* data, size_t size) override {
+        const auto* src = static_cast<const uint8_t*>(data);
+        size_t remaining = size;
+        while (remaining > 0 && ok_) {
+            const size_t space = buf_.size() - bufPos_;
+            if (space == 0) {
+                flushBuffer();
+                continue;
+            }
+            if (bufPos_ == 0 && remaining >= buf_.size()) {
+                writeAllRaw(src, remaining);
+                return;
+            }
+            const size_t take = std::min(space, remaining);
+            std::memcpy(buf_.data() + bufPos_, src, take);
+            bufPos_ += take;
+            src += take;
+            remaining -= take;
+        }
+    }
+
+private:
+    bool writeAllRaw(const void* data, size_t size) {
+        const auto* src = static_cast<const uint8_t*>(data);
+        size_t off = 0;
+        while (off < size) {
+#ifdef _WIN32
+            const DWORD chunk =
+                static_cast<DWORD>(std::min<size_t>(size - off, 64u * 1024u * 1024u));
+            DWORD written = 0;
+            if (!WriteFile(h_, src + off, chunk, &written, nullptr) || written != chunk) {
+                fail("failed writing .brotable temp file: " + tmpPath_);
+                return false;
+            }
+            off += written;
+#else
+            ssize_t n = write(fd_, src + off, size - off);
+            if (n <= 0) {
+                fail("failed writing .brotable temp file: " + tmpPath_);
+                return false;
+            }
+            off += static_cast<size_t>(n);
+#endif
+        }
+        return true;
+    }
+
+    void flushBuffer() {
+        if (!ok_ || bufPos_ == 0) return;
+        writeAllRaw(buf_.data(), bufPos_);
+        bufPos_ = 0;
+    }
+
+    void abortCleanup() {
+        if (committed_) return;
+#ifdef _WIN32
+        if (h_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(h_);
+            h_ = INVALID_HANDLE_VALUE;
+            DeleteFileW(wtmp_.c_str());
+        }
+#else
+        if (fd_ >= 0) {
+            close(fd_);
+            fd_ = -1;
+            unlink(tmpPath_.c_str());
+        }
+#endif
+    }
+
+    std::string finalPath_;
+    std::string tmpPath_;
+    std::vector<uint8_t> buf_;
+    size_t bufPos_ = 0;
+    bool committed_ = false;
+#ifdef _WIN32
+    std::wstring wtmp_;
+    std::wstring wfinal_;
+    HANDLE h_ = INVALID_HANDLE_VALUE;
+#else
+    int fd_ = -1;
+#endif
+};
+
+bool writeSnapshotV3ToSink(const TableSnapshot& snap, ByteSink& sink, FileHeaderV3& outHdr) {
+    const std::vector<size_t> hashCols = snap.hashIndexCols();
+    const std::vector<size_t> rangeCols = snap.rangeIndexCols();
+    const std::vector<const SpatialIndex*> spatials = snap.spatialIndexList();
+
+    outHdr = FileHeaderV3{};
+    std::memcpy(outHdr.magic, kMagicV3, 8);
+    outHdr.version = kFormatVersionV3;
+    outHdr.colCount = static_cast<uint32_t>(snap.schema.size());
+    outHdr.chunkCount = static_cast<uint32_t>(snap.chunks.size());
+    outHdr.hashIndexCount = static_cast<uint32_t>(hashCols.size());
+    outHdr.totalAliveRows = snap.totalAliveRows;
+    outHdr.dictCount = snap.dict ? static_cast<uint32_t>(snap.dict->size()) : 0u;
+    outHdr.rangeIndexCount = static_cast<uint32_t>(rangeCols.size());
+    outHdr.spatialIndexCount = static_cast<uint32_t>(spatials.size());
+
+    sink.write(&outHdr, sizeof(FileHeaderV3));
+    sink.beginChecksums();
+
+    for (const ColumnDef& cd : snap.schema.columns) {
+        sink.writeMetaU32(static_cast<uint32_t>(cd.name.size()));
+        sink.writeMetaU8(static_cast<uint8_t>(cd.type));
+        sink.writeMeta(cd.name.data(), cd.name.size());
+    }
+    if (snap.dict) {
+        const uint32_t n = static_cast<uint32_t>(snap.dict->size());
+        for (uint32_t id = 0; id < n; ++id) {
+            std::string s = snap.dict->get(id);
+            sink.writeMetaU32(static_cast<uint32_t>(s.size()));
+            sink.writeMeta(s.data(), s.size());
+        }
+    }
+
+    for (const auto& fc : snap.chunks) {
+        sink.writeMetaU32(fc.rowCount);
+        sink.writeMetaU32(fc.aliveCount);
+        sink.writeMeta(fc.aliveWords.data(), sizeof(fc.aliveWords));
+
+        for (size_t c = 0; c < snap.schema.size(); ++c) {
+            const ColumnChunk& col = *fc.columns[c];
+            const size_t fixedBytes = static_cast<size_t>(fc.rowCount) * colTypeElemSize(col.type());
+            const size_t strBytes = (col.type() == ColType::String) ? col.stringArenaSize() : 0u;
+            const bool hasNulls = col.hasNulls() && col.nullWordsData() != nullptr;
+            sink.writeMetaU64(fixedBytes);
+            sink.writeMetaU64(strBytes);
+            sink.writeMetaU8(hasNulls ? 1u : 0u);
+            sink.padToAlign64();
+            if (fixedBytes > 0) sink.write(col.rawData(), fixedBytes);
+            if (strBytes > 0) sink.write(col.stringArenaData(), strBytes);
+            if (hasNulls) {
+                sink.padToAlign64();
+                sink.write(col.nullWordsData(), kNullBitmapBytes);
+            }
+            if (!sink.ok()) return false;
+        }
+    }
+
+    sink.padToAlign64();
+    outHdr.indexSectionOffset = sink.bytesWritten();
+    writeIndexSectionV3(snap, sink);
+    if (!sink.ok()) return false;
+
+    outHdr.payloadBytes = sink.bytesWritten();
+    outHdr.metaChecksum = sink.metaChecksum();
+    outHdr.payloadChecksum = sink.payloadChecksum();
+    return true;
+}
 
 bool validateAliveWords(const std::array<uint64_t, kChunkAliveWords>& words,
                         uint32_t rowCount, uint32_t aliveCount) {
@@ -168,12 +330,13 @@ bool validateAliveWords(const std::array<uint64_t, kChunkAliveWords>& words,
 
 bool validateColumnPayload(ColType type, uint32_t rowCount, const uint8_t* fixedPtr,
                            size_t fixedBytes, size_t strBytes, const uint64_t* nullWords,
-                           size_t dictSize, std::string* err) {
+                           size_t dictSize, bool fullScan, std::string* err) {
     const size_t expectedFixed = static_cast<size_t>(rowCount) * colTypeElemSize(type);
     if (fixedBytes != expectedFixed) {
         if (err) *err = "corrupted .brotable fixed payload size";
         return false;
     }
+    if (!fullScan) return true;
     if (type == ColType::String) {
         const auto* spans = reinterpret_cast<const StringSpan*>(fixedPtr);
         for (uint32_t r = 0; r < rowCount; ++r) {
@@ -209,12 +372,13 @@ bool parseSchemaAndDict(ByteCursor& cur, uint32_t colCount, uint32_t dictCount,
     for (uint32_t c = 0; c < colCount; ++c) {
         uint32_t nameLen = 0;
         uint8_t typeByte = 0;
-        if (!cur.read(nameLen) || !cur.read(typeByte) || nameLen == 0 || nameLen > 65536 ||
+        if (!cur.readMeta(nameLen) || !cur.readMeta(typeByte) || nameLen == 0 || nameLen > 65536 ||
             typeByte > static_cast<uint8_t>(ColType::String) || !cur.has(nameLen)) {
             if (err) *err = "corrupted .brotable column schema";
             return false;
         }
         std::string name(reinterpret_cast<const char*>(cur.ptr + cur.pos), nameLen);
+        if (cur.metaHasher) cur.metaHasher->update(name.data(), nameLen);
         cur.pos += nameLen;
         if (!seenNames.insert(name).second) {
             if (err) *err = "duplicate column in .brotable schema: " + name;
@@ -225,13 +389,69 @@ bool parseSchemaAndDict(ByteCursor& cur, uint32_t colCount, uint32_t dictCount,
     outDict = std::make_shared<StringDictionary>();
     for (uint32_t i = 0; i < dictCount; ++i) {
         uint32_t len = 0;
-        if (!cur.read(len) || len > 16777216u || !cur.has(len)) {
+        if (!cur.readMeta(len) || len > 16777216u || !cur.has(len)) {
             if (err) *err = "corrupted .brotable dictionary";
             return false;
         }
         std::string_view sv(reinterpret_cast<const char*>(cur.ptr + cur.pos), len);
+        if (cur.metaHasher) cur.metaHasher->update(sv.data(), len);
         cur.pos += len;
         outDict->intern(sv);
+    }
+    return true;
+}
+
+bool parseLegacyV2Specs(ByteCursor& cur, uint32_t colCount, const std::vector<ColumnDef>& cols,
+                        uint32_t hashCount, uint32_t rangeCount, uint32_t spatialCount,
+                        PersistedIndexSpecs& outSpecs, std::string* err) {
+    for (uint32_t i = 0; i < hashCount; ++i) {
+        uint32_t col = 0;
+        if (!cur.read(col) || col >= colCount) {
+            if (err) *err = "corrupted .brotable hash index spec";
+            return false;
+        }
+        outSpecs.hashCols.push_back(col);
+    }
+    for (uint32_t i = 0; i < rangeCount; ++i) {
+        uint32_t col = 0;
+        if (!cur.read(col) || col >= colCount) {
+            if (err) *err = "corrupted .brotable range index spec";
+            return false;
+        }
+        outSpecs.rangeCols.push_back(col);
+    }
+    for (uint32_t i = 0; i < spatialCount; ++i) {
+        uint32_t nameLen = 0;
+        uint8_t dims = 0;
+        double cellSize = 0.0;
+        if (!cur.read(nameLen) || nameLen == 0 || nameLen > 4096 || !cur.has(nameLen)) {
+            if (err) *err = "corrupted .brotable spatial index name";
+            return false;
+        }
+        SpatialMetaSpec sp;
+        sp.name.assign(reinterpret_cast<const char*>(cur.ptr + cur.pos), nameLen);
+        cur.pos += nameLen;
+        if (!cur.read(dims) || !cur.read(cellSize) || (dims != 2 && dims != 3) ||
+            !std::isfinite(cellSize) || cellSize <= 0.0) {
+            if (err) *err = "corrupted .brotable spatial index dimensions";
+            return false;
+        }
+        sp.cellSize = cellSize;
+        sp.cols.resize(dims);
+        for (uint8_t d = 0; d < dims; ++d) {
+            uint32_t col = 0;
+            if (!cur.read(col) || col >= colCount) {
+                if (err) *err = "corrupted .brotable spatial index column";
+                return false;
+            }
+            const ColType ct = cols[col].type;
+            if (ct == ColType::String || ct == ColType::Dict || ct == ColType::Bool) {
+                if (err) *err = "invalid non-numeric spatial index column";
+                return false;
+            }
+            sp.cols[d] = col;
+        }
+        outSpecs.spatials.push_back(std::move(sp));
     }
     return true;
 }
@@ -239,44 +459,72 @@ bool parseSchemaAndDict(ByteCursor& cur, uint32_t colCount, uint32_t dictCount,
 std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t size,
                                                  std::shared_ptr<const void> owner,
                                                  PersistedIndexSpecs* outIdxSpecs,
+                                                 bool verifyFullPayload,
+                                                 uint32_t* outFormatVersion,
                                                  std::string* err) {
     if (!data || size < 8) {
         if (err) *err = "empty or truncated .brotable data";
         return nullptr;
     }
 
-    bool isV2 = false;
-    if (std::memcmp(data, kMagicV2, 8) == 0) {
-        isV2 = true;
-    } else if (std::memcmp(data, kMagicV1, 8) != 0) {
+    uint32_t fmtVer = 0;
+    if (std::memcmp(data, kMagicV3, 8) == 0) fmtVer = kFormatVersionV3;
+    else if (std::memcmp(data, kMagicV2, 8) == 0) fmtVer = kFormatVersionV2;
+    else if (std::memcmp(data, kMagicV1, 8) == 0) fmtVer = kFormatVersionV1;
+    else {
         if (err) *err = "invalid .brotable magic";
         return nullptr;
     }
+    if (outFormatVersion) *outFormatVersion = fmtVer;
 
-    ByteCursor cur{data, size, 0};
-    uint32_t colCount = 0;
-    uint32_t chunkCount = 0;
-    uint64_t headerAlive = 0;
-    uint32_t dictCount = 0;
-    uint32_t hashCount = 0;
-    uint32_t rangeCount = 0;
-    uint32_t spatialCount = 0;
+    IncrementalFnv1a64 metaHasher;
+    ByteCursor cur{data, size, 0, (fmtVer == kFormatVersionV3) ? &metaHasher : nullptr};
+    uint32_t colCount = 0, chunkCount = 0, dictCount = 0;
+    uint32_t hashCount = 0, rangeCount = 0, spatialCount = 0;
+    uint64_t headerAlive = 0, expectedIdxOff = 0, expectedMetaCsum = 0;
 
-    if (isV2) {
+    if (fmtVer == kFormatVersionV3) {
+        FileHeaderV3 hdr{};
+        if (!cur.read(hdr) || hdr.version != kFormatVersionV3) {
+            if (err) *err = "invalid .brotable v3 header";
+            return nullptr;
+        }
+        if (hdr.payloadBytes != size || size < sizeof(FileHeaderV3) ||
+            hdr.indexSectionOffset < sizeof(FileHeaderV3) || hdr.indexSectionOffset > size) {
+            if (err) *err = "truncated or corrupted .brotable v3 size";
+            return nullptr;
+        }
+        if (verifyFullPayload) {
+            const uint64_t actual =
+                computeRawFnv1a64(data + sizeof(FileHeaderV3), size - sizeof(FileHeaderV3));
+            if (actual != hdr.payloadChecksum) {
+                if (err) *err = ".brotable v3 payload checksum mismatch";
+                return nullptr;
+            }
+        }
+        colCount = hdr.colCount;
+        chunkCount = hdr.chunkCount;
+        headerAlive = hdr.totalAliveRows;
+        dictCount = hdr.dictCount;
+        hashCount = hdr.hashIndexCount;
+        rangeCount = hdr.rangeIndexCount;
+        spatialCount = hdr.spatialIndexCount;
+        expectedIdxOff = hdr.indexSectionOffset;
+        expectedMetaCsum = hdr.metaChecksum;
+    } else if (fmtVer == kFormatVersionV2) {
         FileHeaderV2 hdr{};
-        if (!cur.read(hdr) || hdr.version != kFormatVersionV2) {
-            if (err) *err = "invalid .brotable v2 header";
+        if (!cur.read(hdr) || hdr.version != kFormatVersionV2 ||
+            hdr.payloadBytes != size || size < sizeof(FileHeaderV2)) {
+            if (err) *err = "invalid or truncated .brotable v2 header";
             return nullptr;
         }
-        if (hdr.payloadBytes != size || size < sizeof(FileHeaderV2)) {
-            if (err) *err = "truncated or corrupted .brotable v2 size";
-            return nullptr;
-        }
-        const uint64_t actualCsum =
-            computeRawFnv1a64(data + sizeof(FileHeaderV2), size - sizeof(FileHeaderV2));
-        if (actualCsum != hdr.checksum) {
-            if (err) *err = ".brotable v2 checksum mismatch";
-            return nullptr;
+        if (verifyFullPayload) {
+            const uint64_t actual =
+                computeRawFnv1a64(data + sizeof(FileHeaderV2), size - sizeof(FileHeaderV2));
+            if (actual != hdr.checksum) {
+                if (err) *err = ".brotable v2 checksum mismatch";
+                return nullptr;
+            }
         }
         colCount = hdr.colCount;
         chunkCount = hdr.chunkCount;
@@ -287,12 +535,8 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
         spatialCount = hdr.spatialIndexCount;
     } else {
         FileHeaderV1 hdr{};
-        if (!cur.read(hdr) || hdr.version != kFormatVersionV1) {
-            if (err) *err = "invalid .brotable v1 header";
-            return nullptr;
-        }
-        if (hdr.payloadBytes != size) {
-            if (err) *err = "truncated or corrupted .brotable v1 size";
+        if (!cur.read(hdr) || hdr.version != kFormatVersionV1 || hdr.payloadBytes != size) {
+            if (err) *err = "invalid or truncated .brotable v1 header";
             return nullptr;
         }
         colCount = hdr.colCount;
@@ -310,56 +554,10 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
     std::shared_ptr<StringDictionary> dict;
     if (!parseSchemaAndDict(cur, colCount, dictCount, cols, dict, err)) return nullptr;
 
-    PersistedIndexSpecs idxSpecs;
-    if (isV2) {
-        for (uint32_t i = 0; i < hashCount; ++i) {
-            uint32_t col = 0;
-            if (!cur.read(col) || col >= colCount) {
-                if (err) *err = "corrupted .brotable hash index spec";
-                return nullptr;
-            }
-            idxSpecs.hashCols.push_back(col);
-        }
-        for (uint32_t i = 0; i < rangeCount; ++i) {
-            uint32_t col = 0;
-            if (!cur.read(col) || col >= colCount) {
-                if (err) *err = "corrupted .brotable range index spec";
-                return nullptr;
-            }
-            idxSpecs.rangeCols.push_back(col);
-        }
-        for (uint32_t i = 0; i < spatialCount; ++i) {
-            uint32_t nameLen = 0;
-            uint8_t dims = 0;
-            double cellSize = 0.0;
-            if (!cur.read(nameLen) || nameLen == 0 || nameLen > 4096 || !cur.has(nameLen)) {
-                if (err) *err = "corrupted .brotable spatial index name";
-                return nullptr;
-            }
-            SpatialMetaSpec sp;
-            sp.name.assign(reinterpret_cast<const char*>(cur.ptr + cur.pos), nameLen);
-            cur.pos += nameLen;
-            if (!cur.read(dims) || !cur.read(cellSize) || (dims != 2 && dims != 3) ||
-                !std::isfinite(cellSize) || cellSize <= 0.0) {
-                if (err) *err = "corrupted .brotable spatial index dimensions";
-                return nullptr;
-            }
-            sp.cellSize = cellSize;
-            sp.cols.resize(dims);
-            for (uint8_t d = 0; d < dims; ++d) {
-                uint32_t col = 0;
-                if (!cur.read(col) || col >= colCount) {
-                    if (err) *err = "corrupted .brotable spatial index column";
-                    return nullptr;
-                }
-                const ColType ct = cols[col].type;
-                if (ct == ColType::String || ct == ColType::Dict || ct == ColType::Bool) {
-                    if (err) *err = "invalid non-numeric spatial index column";
-                    return nullptr;
-                }
-                sp.cols[d] = col;
-            }
-            idxSpecs.spatials.push_back(std::move(sp));
+    PersistedIndexSpecs legacySpecs;
+    if (fmtVer == kFormatVersionV2) {
+        if (!parseLegacyV2Specs(cur, colCount, cols, hashCount, rangeCount, spatialCount, legacySpecs, err)) {
+            return nullptr;
         }
     }
 
@@ -367,16 +565,17 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
     for (auto& cd : cols) snap->schema.addColumn(std::move(cd.name), cd.type);
     snap->schemaHash = snap->schema.computeHash();
     snap->dict = std::move(dict);
-    snap->totalAliveRows = 0;
     snap->version = 1;
     snap->structureVersion = 1;
     snap->chunks.reserve(chunkCount);
 
+    std::shared_ptr<const void> chunkOwner =
+        owner ? owner : std::shared_ptr<const void>(data, [](const void*) {});
+
     for (uint32_t ci = 0; ci < chunkCount; ++ci) {
-        uint32_t rowCount = 0;
-        uint32_t aliveCount = 0;
+        uint32_t rowCount = 0, aliveCount = 0;
         std::array<uint64_t, kChunkAliveWords> aliveWords{};
-        if (!cur.read(rowCount) || !cur.read(aliveCount) || !cur.read(aliveWords) ||
+        if (!cur.readMeta(rowCount) || !cur.readMeta(aliveCount) || !cur.readMeta(aliveWords) ||
             !validateAliveWords(aliveWords, rowCount, aliveCount)) {
             if (err) *err = "corrupted .brotable chunk metadata";
             return nullptr;
@@ -391,14 +590,13 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
         snap->totalAliveRows += aliveCount;
 
         for (size_t c = 0; c < cols.size(); ++c) {
-            uint64_t fixedBytes = 0;
-            uint64_t strBytes = 0;
+            uint64_t fixedBytes = 0, strBytes = 0;
             uint8_t colFlags = 0;
-            if (!cur.read(fixedBytes) || !cur.read(strBytes)) {
+            if (!cur.readMeta(fixedBytes) || !cur.readMeta(strBytes)) {
                 if (err) *err = "corrupted .brotable column header";
                 return nullptr;
             }
-            if (isV2 && !cur.read(colFlags)) {
+            if (fmtVer >= kFormatVersionV2 && !cur.readMeta(colFlags)) {
                 if (err) *err = "corrupted .brotable column flags";
                 return nullptr;
             }
@@ -416,7 +614,7 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
             cur.pos += static_cast<size_t>(strBytes);
 
             const uint64_t* nullPtr = nullptr;
-            if (isV2 && (colFlags & 1u) != 0) {
+            if (fmtVer >= kFormatVersionV2 && (colFlags & 1u) != 0) {
                 if (!cur.skipToAlign64() || !cur.has(kNullBitmapBytes)) {
                     if (err) *err = "corrupted .brotable null bitmap";
                     return nullptr;
@@ -428,7 +626,7 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
             if (!validateColumnPayload(cols[c].type, rowCount, fixedPtr,
                                        static_cast<size_t>(fixedBytes),
                                        static_cast<size_t>(strBytes),
-                                       nullPtr, snap->dict->size(), err)) {
+                                       nullPtr, snap->dict->size(), verifyFullPayload, err)) {
                 return nullptr;
             }
 
@@ -437,11 +635,9 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
                     cols[c].type, fixedPtr, static_cast<size_t>(fixedBytes),
                     strPtr, static_cast<size_t>(strBytes), owner, nullPtr));
             } else {
-                auto nonOwning =
-                    std::shared_ptr<const void>(fixedPtr ? fixedPtr : data, [](const void*) {});
                 auto owned = ColumnChunk::createMapped(
                                  cols[c].type, fixedPtr, static_cast<size_t>(fixedBytes),
-                                 strPtr, static_cast<size_t>(strBytes), std::move(nonOwning), nullPtr)
+                                 strPtr, static_cast<size_t>(strBytes), chunkOwner, nullPtr)
                                  ->clone();
                 fc.columns.push_back(std::move(owned));
             }
@@ -454,83 +650,29 @@ std::shared_ptr<TableSnapshot> parseSnapshotImpl(const uint8_t* data, size_t siz
         return nullptr;
     }
 
-    if (outIdxSpecs) *outIdxSpecs = std::move(idxSpecs);
+    if (fmtVer == kFormatVersionV3) {
+        if (!cur.skipToAlign64() || cur.pos != expectedIdxOff) {
+            if (err) *err = "corrupted .brotable v3 index section offset";
+            return nullptr;
+        }
+        if (!parseIndexSectionV3(cur, hashCount, rangeCount, spatialCount, *snap, chunkOwner, err)) {
+            return nullptr;
+        }
+        if (cur.pos != size || metaHasher.finish() != expectedMetaCsum) {
+            if (err) *err = ".brotable v3 metadata checksum mismatch";
+            return nullptr;
+        }
+    } else if (outIdxSpecs) {
+        *outIdxSpecs = std::move(legacySpecs);
+    }
+
     return snap;
-}
-
-void applyPersistedIndexes(Table& tbl, const PersistedIndexSpecs& specs) {
-    for (size_t c : specs.hashCols) tbl.createIndex(c);
-    for (size_t c : specs.rangeCols) tbl.createRangeIndex(c);
-    for (const auto& sp : specs.spatials) {
-        tbl.createSpatialIndex(sp.name, sp.cols, sp.cellSize);
-    }
-}
-
-void applyPersistedIndexesToSnapshot(TableSnapshot& snap, const PersistedIndexSpecs& specs) {
-    for (size_t c : specs.hashCols) {
-        if (c >= snap.schema.size()) continue;
-        auto idx = std::make_shared<HashIndex>(c, snap.schema.columns[c].type);
-        idx->clear(snap.totalAliveRows);
-        for (uint32_t ci = 0; ci < snap.chunks.size(); ++ci) {
-            const auto& ch = snap.chunks[ci];
-            const ColumnChunk& colChunk = *ch.columns[c];
-            for (uint32_t r = 0; r < ch.rowCount; ++r) {
-                if (ch.isAlive(r) && !colChunk.isNull(r)) {
-                    idx->insert(HashIndex::cellKey(colChunk, r), RowLoc{ci, r});
-                }
-            }
-        }
-        snap.indexes[c] = std::move(idx);
-    }
-    for (size_t c : specs.rangeCols) {
-        if (c >= snap.schema.size()) continue;
-        auto idx = std::make_shared<RangeIndex>(c, snap.schema.columns[c].type);
-        for (uint32_t ci = 0; ci < snap.chunks.size(); ++ci) {
-            const auto& ch = snap.chunks[ci];
-            const ColumnChunk& colChunk = *ch.columns[c];
-            for (uint32_t r = 0; r < ch.rowCount; ++r) {
-                if (ch.isAlive(r) && !colChunk.isNull(r)) {
-                    idx->insert(colChunk, r, RowLoc{ci, r}, snap.dict.get());
-                }
-            }
-        }
-        idx->sortIfNeeded();
-        snap.rangeIndexes[c] = std::move(idx);
-    }
-    for (const auto& sp : specs.spatials) {
-        auto si = std::make_shared<SpatialIndex>(sp.name, sp.cols, sp.cellSize);
-        si->clear(snap.totalAliveRows);
-        for (uint32_t ci = 0; ci < snap.chunks.size(); ++ci) {
-            const auto& ch = snap.chunks[ci];
-            for (uint32_t r = 0; r < ch.rowCount; ++r) {
-                if (!ch.isAlive(r)) continue;
-                double coords[3] = {0.0, 0.0, 0.0};
-                bool ok = true;
-                for (uint8_t d = 0; d < si->dims(); ++d) {
-                    const size_t col = si->cols()[d];
-                    if (col >= ch.columns.size() || ch.columns[col]->isNull(r)) {
-                        ok = false;
-                        break;
-                    }
-                    ScalarValue sv = ch.columns[col]->readCell(r, snap.dict.get());
-                    if (sv.isNull) { ok = false; break; }
-                    if (colTypeIsFloat(sv.type)) coords[d] = sv.f64;
-                    else if (colTypeIsUnsignedInt(sv.type)) coords[d] = static_cast<double>(sv.u64);
-                    else coords[d] = static_cast<double>(sv.i64);
-                }
-                if (ok) si->insert(coords[0], coords[1], coords[2], RowLoc{ci, r});
-            }
-        }
-        snap.spatialIndexes[sp.name] = std::move(si);
-    }
 }
 
 std::shared_ptr<MappedFileOwner> mapReadOnlyFile(const std::string& path, std::string* outError) {
     auto owner = std::make_shared<MappedFileOwner>();
 #ifdef _WIN32
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-    std::wstring wpath(wlen > 0 ? wlen - 1 : 0, L'\0');
-    if (wlen > 1) MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wlen);
+    const std::wstring wpath = utf8ToWide(path);
     owner->fileHandle = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (owner->fileHandle == INVALID_HANDLE_VALUE) {
@@ -582,191 +724,71 @@ std::atomic<uint64_t> g_tmpSeq{0};
 
 std::vector<uint8_t> serializeSnapshotBytes(const TableSnapshot& snap) {
     std::vector<uint8_t> buf;
-    buf.reserve(sizeof(FileHeaderV2) + snap.rowCount() * 16 + 512);
-
-    const std::vector<size_t> hashCols = snap.hashIndexCols();
-    const std::vector<size_t> rangeCols = snap.rangeIndexCols();
-    const std::vector<const SpatialIndex*> spatials = snap.spatialIndexList();
-
-    FileHeaderV2 hdr{};
-    std::memcpy(hdr.magic, kMagicV2, 8);
-    hdr.version = kFormatVersionV2;
-    hdr.colCount = static_cast<uint32_t>(snap.schema.size());
-    hdr.chunkCount = static_cast<uint32_t>(snap.chunks.size());
-    hdr.hashIndexCount = static_cast<uint32_t>(hashCols.size());
-    hdr.totalAliveRows = snap.totalAliveRows;
-    hdr.dictCount = snap.dict ? static_cast<uint32_t>(snap.dict->size()) : 0u;
-    hdr.rangeIndexCount = static_cast<uint32_t>(rangeCols.size());
-    hdr.spatialIndexCount = static_cast<uint32_t>(spatials.size());
-    buf.resize(sizeof(FileHeaderV2));
-
-    for (const ColumnDef& cd : snap.schema.columns) {
-        appendU32(buf, static_cast<uint32_t>(cd.name.size()));
-        appendU8(buf, static_cast<uint8_t>(cd.type));
-        buf.insert(buf.end(), cd.name.begin(), cd.name.end());
+    buf.reserve(sizeof(FileHeaderV3) + snap.rowCount() * 16 + 512);
+    VectorByteSink sink(buf);
+    FileHeaderV3 hdr{};
+    if (writeSnapshotV3ToSink(snap, sink, hdr)) {
+        sink.finalizeHeader(hdr);
+    } else {
+        buf.clear();
     }
-    if (snap.dict) {
-        const uint32_t n = static_cast<uint32_t>(snap.dict->size());
-        for (uint32_t id = 0; id < n; ++id) {
-            std::string s = snap.dict->get(id);
-            appendU32(buf, static_cast<uint32_t>(s.size()));
-            buf.insert(buf.end(), s.begin(), s.end());
-        }
-    }
-    for (size_t c : hashCols) appendU32(buf, static_cast<uint32_t>(c));
-    for (size_t c : rangeCols) appendU32(buf, static_cast<uint32_t>(c));
-    for (const SpatialIndex* si : spatials) {
-        appendU32(buf, static_cast<uint32_t>(si->name().size()));
-        buf.insert(buf.end(), si->name().begin(), si->name().end());
-        appendU8(buf, si->dims());
-        appendF64(buf, si->cellSize());
-        for (uint8_t d = 0; d < si->dims(); ++d) {
-            appendU32(buf, static_cast<uint32_t>(si->cols()[d]));
-        }
-    }
-
-    for (const auto& fc : snap.chunks) {
-        appendU32(buf, fc.rowCount);
-        appendU32(buf, fc.aliveCount);
-        const size_t off = buf.size();
-        buf.resize(off + sizeof(fc.aliveWords));
-        std::memcpy(buf.data() + off, fc.aliveWords.data(), sizeof(fc.aliveWords));
-
-        for (size_t c = 0; c < snap.schema.size(); ++c) {
-            const ColumnChunk& col = *fc.columns[c];
-            const size_t fixedBytes = static_cast<size_t>(fc.rowCount) * colTypeElemSize(col.type());
-            const size_t strBytes = (col.type() == ColType::String) ? col.stringArenaSize() : 0u;
-            const bool hasNulls = col.hasNulls() && col.nullWordsData() != nullptr;
-            appendU64(buf, fixedBytes);
-            appendU64(buf, strBytes);
-            appendU8(buf, hasNulls ? 1u : 0u);
-            padToAlign64(buf);
-            if (fixedBytes > 0) {
-                const uint8_t* raw = col.rawData();
-                buf.insert(buf.end(), raw, raw + fixedBytes);
-            }
-            if (strBytes > 0) {
-                const uint8_t* strRaw = col.stringArenaData();
-                buf.insert(buf.end(), strRaw, strRaw + strBytes);
-            }
-            if (hasNulls) {
-                padToAlign64(buf);
-                const auto* nw = reinterpret_cast<const uint8_t*>(col.nullWordsData());
-                buf.insert(buf.end(), nw, nw + kNullBitmapBytes);
-            }
-        }
-    }
-
-    hdr.payloadBytes = buf.size();
-    hdr.checksum = computeRawFnv1a64(buf.data() + sizeof(FileHeaderV2),
-                                     buf.size() - sizeof(FileHeaderV2));
-    std::memcpy(buf.data(), &hdr, sizeof(FileHeaderV2));
     return buf;
 }
 
 std::shared_ptr<Table> deserializeTableBytes(const uint8_t* data, size_t size,
                                              std::string* outError) {
     PersistedIndexSpecs specs;
-    auto dummyOwner = std::shared_ptr<const void>(data, [](const void*) {});
-    auto snap = parseSnapshotImpl(data, size, std::move(dummyOwner), &specs, outError);
+    uint32_t fmtVer = 0;
+    auto snap = parseSnapshotImpl(data, size, nullptr, &specs, true, &fmtVer, outError);
     if (!snap) return nullptr;
     auto tbl = Table::fromSnapshot(*snap);
-    applyPersistedIndexes(*tbl, specs);
+    if (fmtVer < kFormatVersionV3) applyPersistedIndexes(*tbl, specs);
     return tbl;
 }
 
 bool saveSnapshotToFile(const TableSnapshot& snap, const std::string& path,
                         std::string* outError) {
-    std::vector<uint8_t> bytes = serializeSnapshotBytes(snap);
     const uint64_t seq = g_tmpSeq.fetch_add(1, std::memory_order_relaxed);
 #ifdef _WIN32
-    const std::string tmpPath =
-        path + ".tmp." + std::to_string(GetCurrentProcessId()) + "." + std::to_string(seq);
-    auto toWide = [](const std::string& s) {
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-        std::wstring ws(wlen > 0 ? wlen - 1 : 0, L'\0');
-        if (wlen > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, ws.data(), wlen);
-        return ws;
-    };
-    const std::wstring wtmp = toWide(tmpPath);
-    const std::wstring wpath = toWide(path);
-    HANDLE h = CreateFileW(wtmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        if (outError) *outError = "failed to open temp file for writing: " + tmpPath;
-        return false;
-    }
-    size_t writtenTotal = 0;
-    while (writtenTotal < bytes.size()) {
-        const DWORD chunk = static_cast<DWORD>(
-            std::min<size_t>(bytes.size() - writtenTotal, 64u * 1024u * 1024u));
-        DWORD written = 0;
-        if (!WriteFile(h, bytes.data() + writtenTotal, chunk, &written, nullptr) ||
-            written != chunk) {
-            CloseHandle(h);
-            DeleteFileW(wtmp.c_str());
-            if (outError) *outError = "failed writing .brotable temp file: " + tmpPath;
-            return false;
-        }
-        writtenTotal += written;
-    }
-    FlushFileBuffers(h);
-    CloseHandle(h);
-    if (!MoveFileExW(wtmp.c_str(), wpath.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        DeleteFileW(wtmp.c_str());
-        if (outError) *outError = "failed atomic replace of .brotable file: " + path;
-        return false;
-    }
-    return true;
+    const uint64_t pid = static_cast<uint64_t>(GetCurrentProcessId());
 #else
+    const uint64_t pid = static_cast<uint64_t>(getpid());
+#endif
     const std::string tmpPath =
-        path + ".tmp." + std::to_string(getpid()) + "." + std::to_string(seq);
-    int fd = open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
-        if (outError) *outError = "failed to open temp file for writing: " + tmpPath;
-        return false;
-    }
-    size_t off = 0;
-    while (off < bytes.size()) {
-        ssize_t n = write(fd, bytes.data() + off, bytes.size() - off);
-        if (n <= 0) {
-            close(fd);
-            unlink(tmpPath.c_str());
-            if (outError) *outError = "failed writing .brotable temp file: " + tmpPath;
-            return false;
-        }
-        off += static_cast<size_t>(n);
-    }
-    fsync(fd);
-    close(fd);
-    if (rename(tmpPath.c_str(), path.c_str()) != 0) {
-        unlink(tmpPath.c_str());
-        if (outError) *outError = "failed atomic rename of .brotable file: " + path;
+        path + ".tmp." + std::to_string(pid) + "." + std::to_string(seq);
+    FileByteSink sink(path, tmpPath);
+    FileHeaderV3 hdr{};
+    if (!writeSnapshotV3ToSink(snap, sink, hdr) || !sink.finalize(hdr)) {
+        if (outError) *outError = sink.error();
         return false;
     }
     return true;
-#endif
 }
 
 std::shared_ptr<Table> loadTableFromFile(const std::string& path, std::string* outError) {
     auto owner = mapReadOnlyFile(path, outError);
     if (!owner) return nullptr;
     PersistedIndexSpecs specs;
-    auto snap = parseSnapshotImpl(owner->data, owner->size, owner, &specs, outError);
+    uint32_t fmtVer = 0;
+    auto snap = parseSnapshotImpl(owner->data, owner->size, owner, &specs, true, &fmtVer, outError);
     if (!snap) return nullptr;
     auto tbl = Table::fromSnapshot(*snap);
-    applyPersistedIndexes(*tbl, specs);
+    if (fmtVer < kFormatVersionV3) applyPersistedIndexes(*tbl, specs);
     return tbl;
 }
 
 std::shared_ptr<const TableSnapshot> mmapSnapshotFromFile(const std::string& path,
-                                                          std::string* outError) {
+                                                          std::string* outError,
+                                                          bool verifyChecksum) {
     auto owner = mapReadOnlyFile(path, outError);
     if (!owner) return nullptr;
     PersistedIndexSpecs specs;
-    auto snap = parseSnapshotImpl(owner->data, owner->size, owner, &specs, outError);
-    if (snap) applyPersistedIndexesToSnapshot(*snap, specs);
+    uint32_t fmtVer = 0;
+    auto snap = parseSnapshotImpl(
+        owner->data, owner->size, owner, &specs, verifyChecksum, &fmtVer, outError);
+    if (snap && fmtVer < kFormatVersionV3) {
+        applyPersistedIndexesToSnapshot(*snap, specs);
+    }
     return snap;
 }
 

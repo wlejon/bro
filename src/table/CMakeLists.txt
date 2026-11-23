@@ -6,7 +6,10 @@ add_library(bro_table STATIC
     table_index.cpp
     table_range_index.h
     table_range_index.cpp
+    table_spatial_index.cpp
     table_io.h
+    table_io_internal.h
+    table_io_index.cpp
     table_io.cpp
     table_reactive.h
     table_reactive.cpp

@@ -132,16 +132,17 @@
 //   // `.nearest(...)` also works directly on TableSnapshot.
 //
 // ----------------------------------------------------------------------------
-// Binary Persistence (.brotable v2) & Zero-Copy OS mmap
+// Binary Persistence (.brotable v3) & Zero-Copy OS mmap (including Indexes)
 // ----------------------------------------------------------------------------
-//   tbl.save('world/entities.brotable');     // atomic write (.brotable v2 + FNV-1a checksum + index defs)
-//   const bytes = tbl.toBytes();             // Uint8Array (.brotable v2, 64B aligned columns & null bitmaps)
+//   tbl.save('world/entities.brotable');     // streaming 4 MiB atomic write (.brotable v3 + aligned binary Hash/Range/Spatial indexes + meta/payload FNV-1a checksums)
+//   const bytes = tbl.toBytes();             // Uint8Array (.brotable v3, 64B aligned columns, null bitmaps, & secondary indexes)
 //
-//   const loaded = bro.table.load('world/entities.brotable');
+//   const loaded = bro.table.load('world/entities.brotable'); // loads v1/v2/v3 with full checksum verification
 //   const fromBuf = bro.table.fromBytes(bytes);
 //
-//   const snap = bro.table.mmap('world/entities.brotable'); // snap.isMapped === true
-//   // Query/view directly on mapped OS pages; share `snap` across Workers via postMessage.
+//   const snap = bro.table.mmap('world/entities.brotable'); // snap.isMapped === true, stats().mappedIndexes > 0
+//   // Instantaneous O(1) open (verifies metadata checksum; pass `{ verify: true }` for full payload checksum).
+//   // Columns, null bitmaps, HashIndex, RangeIndex, & SpatialIndex all read directly from OS mapped pages with 0 heap index rebuilds.
 //   const mut = snap.toTable();              // COW materialized mutable copy
 //   snap.close();                            // releases file mapping handle deterministically
 //

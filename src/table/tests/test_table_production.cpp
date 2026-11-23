@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <limits>
@@ -612,7 +613,7 @@ void testParallelFastGroupBy() {
     }
 }
 
-void testBrotableV2AndCorruptionHardening() {
+void testBrotableV3StreamingAndMappedIndexes() {
     Table tbl({
         {"id", ColType::I32},
         {"kind", ColType::Dict},
@@ -631,42 +632,139 @@ void testBrotableV2AndCorruptionHardening() {
     }
     CHECK(tbl.createIndex("id"));
     CHECK(tbl.createRangeIndex("x"));
+    CHECK(tbl.createRangeIndex("kind"));
+    CHECK(tbl.createRangeIndex("note"));
     CHECK(tbl.createSpatialIndex("pos", {2, 3}, 8.0));
 
-    const auto tmp = std::filesystem::temp_directory_path() / "bro_table_prod_v2.brotable";
+    const auto tmp = std::filesystem::temp_directory_path() / "bro_table_prod_v3.brotable";
     std::string err;
     auto snap = tbl.snapshot();
     CHECK(saveSnapshotToFile(*snap, tmp.string(), &err));
 
+    std::vector<uint8_t> validBytes = serializeSnapshotBytes(*snap);
+    CHECK(validBytes.size() > 80);
+    CHECK(std::memcmp(validBytes.data(), "BROTBL03", 8) == 0);
+
+    // Streaming file save must match in-memory serialization byte-for-byte.
+    {
+        std::ifstream ifs(tmp, std::ios::binary | std::ios::ate);
+        CHECK(ifs.is_open());
+        const size_t fsz = static_cast<size_t>(ifs.tellg());
+        CHECK(fsz == validBytes.size());
+        std::vector<uint8_t> diskBytes(fsz);
+        ifs.seekg(0);
+        ifs.read(reinterpret_cast<char*>(diskBytes.data()), static_cast<std::streamsize>(fsz));
+        CHECK(diskBytes == validBytes);
+    }
+
     auto loaded = loadTableFromFile(tmp.string(), &err);
     CHECK(loaded != nullptr);
     CHECK(loaded->hasIndex(0));
+    CHECK(loaded->hasRangeIndex(1));
     CHECK(loaded->hasRangeIndex(2));
+    CHECK(loaded->hasRangeIndex(4));
     CHECK(loaded->hasSpatialIndex("pos"));
+    CHECK(!loaded->snapshot()->findIndex(0)->isMapped());
     expectTablesEqual(*loaded, tbl);
 
-    auto mapped = mmapSnapshotFromFile(tmp.string(), &err);
-    CHECK(mapped != nullptr);
-    CHECK(mapped->findIndex(0) != nullptr);
-    CHECK(mapped->findRangeIndex(2) != nullptr);
-    CHECK(mapped->findSpatialIndex("pos") != nullptr);
-    CHECK(mapped->chunks[0].columns[2]->hasNulls());
-    CHECK(mapped->chunks[0].columns[2]->nullWordsData() != nullptr);
+    // Zero-copy mmap must map columns AND all Hash/Range/Spatial indexes directly off OS pages.
+    {
+        auto mapped = mmapSnapshotFromFile(tmp.string(), &err);
+        CHECK(mapped != nullptr);
+        CHECK(mapped->findIndex(0) != nullptr && mapped->findIndex(0)->isMapped());
+        CHECK(mapped->findRangeIndex(1) != nullptr && mapped->findRangeIndex(1)->isMapped());
+        CHECK(mapped->findRangeIndex(2) != nullptr && mapped->findRangeIndex(2)->isMapped());
+        CHECK(mapped->findRangeIndex(4) != nullptr && mapped->findRangeIndex(4)->isMapped());
+        CHECK(mapped->findSpatialIndex("pos") != nullptr && mapped->findSpatialIndex("pos")->isMapped());
+        CHECK(mapped->stats().mappedIndexes == 5);
+        CHECK(reinterpret_cast<uintptr_t>(mapped->findIndex(0)->bucketData()) % 64 == 0);
+        CHECK(reinterpret_cast<uintptr_t>(mapped->findRangeIndex(2)->numData()) % 64 == 0);
+        CHECK(reinterpret_cast<uintptr_t>(mapped->findSpatialIndex("pos")->bucketData()) % 64 == 0);
+        CHECK(mapped->chunks[0].columns[2]->hasNulls());
+        CHECK(mapped->chunks[0].columns[2]->nullWordsData() != nullptr);
 
-    QueryPlan pq;
-    pq.filters.push_back(pq.exprs.bin(ExprOp::Eq, pq.exprs.col("id"),
-                                      pq.exprs.lit(ScalarValue::makeI32(42))));
-    CHECK(bindQueryPlan(pq, *mapped, err));
-    auto mr = executeQuery(*mapped, pq);
-    CHECK(mr.ok && mr.usedIndex && mr.table->rowCount() == 1);
+        // Hash index equality query on mmapped index
+        {
+            QueryPlan pq;
+            pq.filters.push_back(pq.exprs.bin(ExprOp::Eq, pq.exprs.col("id"),
+                                              pq.exprs.lit(ScalarValue::makeI32(42))));
+            CHECK(bindQueryPlan(pq, *mapped, err));
+            auto mr = executeQuery(*mapped, pq);
+            CHECK(mr.ok && mr.usedIndex && mr.table->rowCount() == 1);
+        }
+        // Numeric range + Top-K orderBy on mmapped RangeIndex
+        {
+            QueryPlan rq;
+            rq.filters.push_back(rq.exprs.bin(ExprOp::Ge, rq.exprs.col("x"),
+                                              rq.exprs.lit(ScalarValue::makeF64(400.0))));
+            rq.orderBy.push_back(OrderByItem{rq.exprs.col("x"), true});
+            rq.limit = 5;
+            CHECK(bindQueryPlan(rq, *mapped, err));
+            auto mr = executeQuery(*mapped, rq);
+            CHECK(mr.ok && mr.usedRangeIndex && mr.table->rowCount() == 5);
+        }
+        // String RangeIndex lookup + Top-K on mmapped string index
+        {
+            QueryPlan sq;
+            sq.filters.push_back(sq.exprs.bin(ExprOp::Ge, sq.exprs.col("note"),
+                                              sq.exprs.lit(ScalarValue::makeString("n9"))));
+            sq.orderBy.push_back(OrderByItem{sq.exprs.col("note"), true});
+            sq.limit = 3;
+            CHECK(bindQueryPlan(sq, *mapped, err));
+            auto mr = executeQuery(*mapped, sq);
+            CHECK(mr.ok && mr.usedRangeIndex && mr.table->rowCount() == 3);
+        }
+        // Spatial AABB + Radius + kNN on mmapped SpatialIndex
+        {
+            QueryPlan spq;
+            spq.spatialFilter.kind = SpatialFilterSpec::Kind::Radius;
+            spq.spatialFilter.indexName = "pos";
+            spq.spatialFilter.a[0] = 25.0;
+            spq.spatialFilter.a[1] = 50.0;
+            spq.spatialFilter.radius = 20.0;
+            CHECK(bindQueryPlan(spq, *mapped, err));
+            auto mr = executeQuery(*mapped, spq);
+            CHECK(mr.ok && mr.usedSpatialIndex && mr.table->rowCount() > 0);
 
-    mapped.reset();
+            std::vector<std::pair<RowLoc, double>> knn;
+            mapped->findSpatialIndex("pos")->queryNearest(25.0, 50.0, 0.0, 3, -1.0, knn);
+            CHECK(knn.size() == 3);
+        }
+        // Materialize mutable copy from mmap + mutate independently
+        {
+            auto cloned = Table::fromSnapshot(*mapped);
+            CHECK(cloned->rowCount() == 500);
+            CHECK(!cloned->snapshot()->findIndex(0)->isMapped());
+            CHECK(cloned->updateCell(RowLoc{0, 42}, 0, ScalarValue::makeI32(9999)));
+            RowLoc outLoc{};
+            CHECK(cloned->resolveAliveRow(42, outLoc));
+            CHECK(cloned->getCell(outLoc, 0).i64 == 9999);
+            CHECK(mapped->getCell(0, 0, 42).i64 == 42);
+        }
+    }
+
+    // Verified mmap check passes on clean file
+    {
+        auto verifiedMap = mmapSnapshotFromFile(tmp.string(), &err, true);
+        CHECK(verifiedMap != nullptr && verifiedMap->stats().mappedIndexes == 5);
+    }
+
+    // Corrupting last payload byte is rejected by deserializeBytes AND mmap(verify=true)
+    {
+        std::ofstream ofs(tmp, std::ios::binary | std::ios::in | std::ios::out);
+        CHECK(ofs.is_open());
+        ofs.seekp(-1, std::ios::end);
+        char b = static_cast<char>(validBytes.back() ^ 0x5Au);
+        ofs.write(&b, 1);
+        ofs.flush();
+    }
+    {
+        std::string verr;
+        CHECK(mmapSnapshotFromFile(tmp.string(), &verr, true) == nullptr);
+        CHECK(!verr.empty());
+    }
     std::error_code ec;
     std::filesystem::remove(tmp, ec);
-
-    std::vector<uint8_t> validBytes = serializeSnapshotBytes(*snap);
-    CHECK(validBytes.size() > 64);
-    CHECK(std::memcmp(validBytes.data(), "BROTBL02", 8) == 0);
 
     {
         auto badCrc = validBytes;
@@ -674,6 +772,12 @@ void testBrotableV2AndCorruptionHardening() {
         std::string cerr;
         CHECK(deserializeTableBytes(badCrc.data(), badCrc.size(), &cerr) == nullptr);
         CHECK(!cerr.empty());
+    }
+    {
+        auto badMeta = validBytes;
+        badMeta[80] ^= 0xFFu;  // corrupt first metadata byte (metaChecksum must catch on fast mmap too)
+        std::string merr;
+        CHECK(deserializeTableBytes(badMeta.data(), badMeta.size(), &merr) == nullptr);
     }
     {
         std::string terr;
@@ -774,7 +878,7 @@ int main() {
     testAvx2SimdAndPrecisionParity();
     testIndexFreelistChurnAndNearestKnn();
     testParallelFastGroupBy();
-    testBrotableV2AndCorruptionHardening();
+    testBrotableV3StreamingAndMappedIndexes();
     testExplainQuery();
     std::cout << "test_table_production OK\n";
     return 0;

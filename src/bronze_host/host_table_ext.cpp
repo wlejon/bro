@@ -115,6 +115,7 @@ Value tableStatsToJsObject(const TableStats& st) {
     obj.set("hashIndexes", ev::fromDouble(static_cast<double>(st.hashIndexes)));
     obj.set("rangeIndexes", ev::fromDouble(static_cast<double>(st.rangeIndexes)));
     obj.set("spatialIndexes", ev::fromDouble(static_cast<double>(st.spatialIndexes)));
+    obj.set("mappedIndexes", ev::fromDouble(static_cast<double>(st.mappedIndexes)));
     obj.set("tombstoneRatio", ev::fromDouble(st.tombstoneRatio));
     return obj.get();
 }
@@ -655,13 +656,18 @@ void populateTableExtNamespace(ev::ObjectBuilder& ns) {
         return wrapHostTable(std::move(tbl));
     });
 
-    ns.def("mmap", 1, [](Value, std::span<const Value> args) -> Value {
+    ns.def("mmap", 2, [](Value, std::span<const Value> args) -> Value {
         if (!hasArg(args, 0) || !ev::isString(args[0])) {
             return ev::throwTypeError("bro.table.mmap: path must be a string");
         }
+        bool verify = false;
+        if (hasArg(args, 1) && ev::isObject(args[1])) {
+            Value v = ev::getProperty(args[1], "verify");
+            if (!v.isUndefined()) verify = ev::toBool(v);
+        }
         std::string resolved = readableAssetPath(ev::toUtf8(args[0]));
         std::string err;
-        auto snap = mmapSnapshotFromFile(resolved, &err);
+        auto snap = mmapSnapshotFromFile(resolved, &err, verify);
         if (!snap) return ev::throwError("bro.table.mmap: " + err);
         return wrapHostTableSnapshot(std::move(snap));
     });

@@ -18,8 +18,30 @@ class HashIndex {
 public:
     static constexpr uint32_t kInvalidNode = 0xFFFFFFFFu;
 
+    struct Bucket {
+        uint64_t key = 0;
+        uint32_t headNode = kInvalidNode;
+        uint32_t occupied = 0;
+    };
+
+    struct Node {
+        RowLoc loc{};
+        uint32_t next = kInvalidNode;
+    };
+
+    static_assert(sizeof(Bucket) == 16, "HashIndex::Bucket must be tightly packed 16 bytes");
+    static_assert(sizeof(Node) == 12, "HashIndex::Node must be tightly packed 12 bytes");
+
     HashIndex() = default;
     explicit HashIndex(size_t colIdx, ColType colType);
+
+    /// Creates a zero-copy HashIndex backed directly by external (e.g. mmap) memory.
+    static std::shared_ptr<HashIndex> createMapped(
+        size_t colIdx, ColType colType,
+        const Bucket* buckets, size_t bucketCount,
+        const Node* nodes, size_t nodeCount,
+        size_t usedBuckets, size_t entryCount,
+        std::shared_ptr<const void> owner);
 
     std::shared_ptr<HashIndex> clone() const;
 
@@ -32,8 +54,23 @@ public:
 
     size_t colIdx() const { return colIdx_; }
     ColType colType() const { return colType_; }
+    bool isMapped() const { return mappedOwner_ != nullptr; }
+    size_t usedBuckets() const { return usedBuckets_; }
     size_t entryCount() const { return entryCount_; }
-    size_t nodeCapacity() const { return nodes_.size(); }
+    size_t nodeCapacity() const { return mappedOwner_ ? mappedNodeCount_ : nodes_.size(); }
+
+    const Bucket* bucketData() const {
+        return mappedOwner_ ? mappedBuckets_ : buckets_.data();
+    }
+    size_t bucketCount() const {
+        return mappedOwner_ ? mappedBucketCount_ : buckets_.size();
+    }
+    const Node* nodeData() const {
+        return mappedOwner_ ? mappedNodes_ : nodes_.data();
+    }
+    size_t nodeCount() const {
+        return mappedOwner_ ? mappedNodeCount_ : nodes_.size();
+    }
 
     /// Extracts canonical uint64 key from a ScalarValue or column chunk cell.
     static bool scalarToKey(ColType colType, const ScalarValue& v,
@@ -41,17 +78,7 @@ public:
     static uint64_t cellKey(const ColumnChunk& chunk, uint32_t row);
 
 private:
-    struct Bucket {
-        uint64_t key = 0;
-        uint32_t headNode = kInvalidNode;
-        bool occupied = false;
-    };
-
-    struct Node {
-        RowLoc loc{};
-        uint32_t next = kInvalidNode;
-    };
-
+    void ensureOwned();
     void rehash(size_t newCap);
     size_t findSlot(uint64_t key) const;
 
@@ -59,6 +86,11 @@ private:
     ColType colType_ = ColType::I32;
     std::vector<Bucket> buckets_;
     std::vector<Node> nodes_;
+    std::shared_ptr<const void> mappedOwner_;
+    const Bucket* mappedBuckets_ = nullptr;
+    size_t mappedBucketCount_ = 0;
+    const Node* mappedNodes_ = nullptr;
+    size_t mappedNodeCount_ = 0;
     uint32_t freeHead_ = kInvalidNode;
     size_t usedBuckets_ = 0;
     size_t entryCount_ = 0;

@@ -154,6 +154,10 @@ void Engine::teardown() {
 
     shutdown();
 
+    // Join dedicated JS Workers before shutting down bro.tensor; workers may
+    // hold or invoke tensor ops (e.g. bro.tensor in runBatch) until terminated.
+    bro::bronze_host::terminateAllWorkers();
+
 #if BRO_WITH_TENSOR
     brotensor::shutdown();
 #endif

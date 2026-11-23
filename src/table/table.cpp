@@ -117,8 +117,18 @@ std::vector<uint32_t> TableSnapshot::dirtyChunksSince(uint64_t sinceVersion) con
 }
 
 TableStats TableSnapshot::stats() const {
-    return computeStatsCommon(schema, dict.get(), chunks, totalAliveRows,
-                              indexes.size(), rangeIndexes.size(), spatialIndexes.size());
+    TableStats st = computeStatsCommon(schema, dict.get(), chunks, totalAliveRows,
+                                       indexes.size(), rangeIndexes.size(), spatialIndexes.size());
+    for (const auto& kv : indexes) {
+        if (kv.second && kv.second->isMapped()) ++st.mappedIndexes;
+    }
+    for (const auto& kv : rangeIndexes) {
+        if (kv.second && kv.second->isMapped()) ++st.mappedIndexes;
+    }
+    for (const auto& kv : spatialIndexes) {
+        if (kv.second && kv.second->isMapped()) ++st.mappedIndexes;
+    }
+    return st;
 }
 
 std::vector<size_t> TableSnapshot::hashIndexCols() const {
