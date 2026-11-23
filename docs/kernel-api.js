@@ -483,11 +483,13 @@ if (bro.kernel.gpu) {
 // 13. Tensor Interop (`bro.tensor` <-> `bro.kernel`)
 // ============================================================================
 //
-//   const buf = bro.kernel.fromTensor(gpuTensor);
+//   const buf = bro.kernel.fromTensor(gpuTensor); // zero-copy Vulkan BDA / CPU host wrap (pass { copy: true } or { residency } to stage)
+//   const ten = bro.kernel.toTensor(buf, [rows, cols], { dtype: 'f32', device: 'vulkan' });
 //   bro.kernel.copyToTensor(buf, gpuTensor);
 //   bro.kernel.copyFromTensor(gpuTensor, buf);
 //
-// Zero-copy dispatch directly over GpuTensor storage (no staging copies):
+// Zero-copy dispatch directly over GpuTensor storage (no staging copies),
+// including automatic parameter spilling past 128B into BDA parameter buffers:
 //   bro.kernel.dispatchTensors(kernel, gridShape, ...args);
 //   // CPU tensors run directly against host pointers; Vulkan tensors pack
 //   // BDA push constants and submit directly onto brotensor's Vulkan stream.

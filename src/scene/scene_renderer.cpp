@@ -105,12 +105,13 @@ std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n, bool 
     case SceneNode::Type::InstancedMesh: {
         auto* m = static_cast<InstancedMeshNode*>(n);
         float lo[3], hi[3];
-        if (!m->computeWorldInstanceBounds(lo, hi)) return std::nullopt;
         if (const std::optional<bromath::AABB3>& cb = m->cullBounds()) {
-            // What a vertex hook places, as the node says (setCullBounds).
+            // What a vertex hook or GPU instance buffer places (setCullBounds).
             const bromath::AABB3 w = bromath::atransform(*cb, m->worldMatrix());
             lo[0] = w.min.x; lo[1] = w.min.y; lo[2] = w.min.z;
             hi[0] = w.max.x; hi[1] = w.max.y; hi[2] = w.max.z;
+        } else if (!m->computeWorldInstanceBounds(lo, hi)) {
+            return std::nullopt;
         }
         const float pad = (margin ? m->cullMargin() : 0.0f) +
                           (m->hasVegetation() ? vegetationReach(m->vegetationHeight(), m->worldMatrix()) : 0.0f);

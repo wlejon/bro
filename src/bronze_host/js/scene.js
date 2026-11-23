@@ -651,6 +651,10 @@
         __bro_native.scene.SceneNode_setShaderBuffer(this, name, buffer === undefined ? null : buffer);
         return this;
     });
+    fn(SceneNode.prototype, "setInstanceBuffer", function setInstanceBuffer(buffer, count) {
+        __bro_native.scene.SceneNode_setInstanceBuffer(this, buffer === undefined ? null : buffer, count | 0);
+        return this;
+    });
     fn(SceneNode.prototype, "setInstanceCountBuffer", function setInstanceCountBuffer(buffer, index) {
         __bro_native.scene.SceneNode_setInstanceCountBuffer(this, buffer === undefined ? null : buffer, index | 0);
         return this;

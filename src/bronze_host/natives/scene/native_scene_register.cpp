@@ -240,6 +240,7 @@ bool registerSceneAttachNatives(std::string* error) {
 
 bool registerSceneShaderNatives(std::string* error) {
     return natives::fn("__bro_native.scene.SceneNode_setShaderBuffer", BRO_NATIVE_FN(bro_scene_SceneNode_setShaderBuffer), "bool", {"__bro_native.scene.SceneNode", "str", "dynamic"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_setInstanceBuffer", BRO_NATIVE_FN(bro_scene_SceneNode_setInstanceBuffer), "bool", {"__bro_native.scene.SceneNode", "dynamic", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setInstanceCountBuffer", BRO_NATIVE_FN(bro_scene_SceneNode_setInstanceCountBuffer), "bool", {"__bro_native.scene.SceneNode", "dynamic", "i32"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setInstanceCullSpheres", BRO_NATIVE_FN(bro_scene_SceneNode_setInstanceCullSpheres), "bool", {"__bro_native.scene.SceneNode", "dynamic", "f64", "f64", "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_setCullBounds", BRO_NATIVE_FN(bro_scene_SceneNode_setCullBounds), "bool", {"__bro_native.scene.SceneNode", "bool", "f64", "f64", "f64", "f64", "f64", "f64"}, error) &&

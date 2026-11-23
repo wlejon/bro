@@ -256,6 +256,8 @@ void VulkanCompute::shutdown() {
     owner_->spanPool = VK_NULL_HANDLE;
     owner_->context = nullptr;
     owner_.reset();
+    graphicsStream_.paramRing.reset();
+    backgroundStream_.paramRing.reset();
     if (readback_ != VK_NULL_HANDLE) context_->destroyBuffer(readback_, readbackAlloc_);
     readback_ = VK_NULL_HANDLE;
     readbackSize_ = 0;
@@ -601,6 +603,26 @@ bool VulkanCompute::write(ComputeBuffer& buffer, VkDeviceSize offset, VkDeviceSi
     return true;
 }
 
+bool VulkanCompute::uploadSpilledParams(std::span<const uint8_t> params, uint64_t& outAddress, ComputeAccess& outRead) {
+    if (!context_ || params.empty()) return false;
+    Stream& s = current();
+    const VkDeviceSize padded = std::max<VkDeviceSize>(16, (params.size() + 15) & ~VkDeviceSize(15));
+    const VkDeviceSize wantCap = std::max<VkDeviceSize>(65536, padded * 2);
+    if (!s.paramRing || s.paramRing->size() < wantCap) {
+        std::string unused;
+        s.paramRing = createBuffer(wantCap, &unused);
+        s.paramOffset = 0;
+        if (!s.paramRing) return false;
+    }
+    VkDeviceSize off = (s.paramOffset + 15) & ~VkDeviceSize(15);
+    if (off + padded > s.paramRing->size()) off = 0;
+    if (!write(*s.paramRing, off, params.data(), params.size())) return false;
+    s.paramOffset = off + padded;
+    outAddress = s.paramRing->address() + off;
+    outRead = ComputeAccess{outAddress, params.size(), false};
+    return true;
+}
+
 bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
                              std::span<const ComputeAccess> access) {
     if (!context_ || pipeline.pipeline_ == VK_NULL_HANDLE || push.size() != pipeline.pushBytes_) return false;
@@ -855,6 +877,7 @@ uint64_t VulkanCompute::flushStream(Stream& s, bool isBackground) {
     s.reads.clear();
     s.writes.clear();
     s.openDispatches = 0;
+    s.paramOffset = 0;
     std::vector<SemaphoreWait> waits;
     uint64_t ticket = 0;
     if (isBackground) {

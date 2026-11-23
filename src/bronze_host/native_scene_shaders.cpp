@@ -417,6 +417,29 @@ bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t 
     return false;
 }
 
+bool bro_scene_SceneNode_setInstanceBuffer(void* self, uint64_t bufferBits, int32_t count) {
+    auto* n = nodeOf(self);
+    if (!n || n->type() != scene::SceneNode::Type::InstancedMesh) return false;
+    const Rooted value(ev::fromBits(bufferBits));
+    std::shared_ptr<bro::render::ComputeBuffer> buffer;
+    if (!ev::isNull(value) && !ev::isUndefined(value)) {
+#if BRO_WITH_KERNEL
+        buffer = computeBufferOf(value);
+#endif
+        if (!buffer) {
+            ev::throwTypeError("setInstanceBuffer: the buffer is not a KernelBuffer (bro.kernel.createBuffer)");
+            return false;
+        }
+        if (count < 0 || static_cast<uint64_t>(count) * 64 > buffer->size()) {
+            ev::throwRangeError("setInstanceBuffer: count exceeds the buffer's 64-byte instance records");
+            return false;
+        }
+    }
+    static_cast<scene::InstancedMeshNode*>(n)->setInstanceBuffer(
+        std::move(buffer), static_cast<size_t>(count < 0 ? 0 : count));
+    return true;
+}
+
 bool bro_scene_SceneNode_setInstanceCountBuffer(void* self, uint64_t bufferBits, int32_t word) {
     auto* n = nodeOf(self);
     if (!n || n->type() != scene::SceneNode::Type::InstancedMesh) return false;

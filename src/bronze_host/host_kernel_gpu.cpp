@@ -11,7 +11,12 @@
 #include <brass/gpu/vulkan_driver.hpp>
 #include <brokernel/api.h>
 #include <brokernel/brokernel.h>
+#if BRO_WITH_TENSOR
+#include "bronze_host/host_kernel_tensor.h"
+#include <brotensor/tensor.h>
+#endif
 
+#include <cstring>
 #include <future>
 #include <memory>
 #include <string>
@@ -297,6 +302,40 @@ public:
 
     bool dispatch(brokernel::api::GpuProgram& program, const brokernel::CompiledKernel& kernel,
                   const brokernel::GpuLaunch& launch, std::string* err) override {
+#if BRO_WITH_TENSOR
+        {
+            bool sawTensorVk = false;
+            bool sawEngineVk = false;
+            brotensor::Device tensorDev = brotensor::Device::CPU;
+            for (const brokernel::KernelParamInfo& p : kernel.params) {
+                if (p.role != brokernel::ParamRole::Store && p.role != brokernel::ParamRole::Stencil) continue;
+                if (p.mir_param_index >= launch.args.size()) continue;
+                const auto& a = launch.args[p.mir_param_index];
+                if (a.kind() != brass::gpu::VulkanArg::Kind::U64 || a.bits() == 0) continue;
+                brotensor::Device d;
+                if (lookupBrotensorVulkanAddress(a.bits(), d)) {
+                    if (sawTensorVk && d.index != tensorDev.index) {
+                        if (err) *err = "cannot dispatch zero-copy bro.tensor buffers from different Vulkan devices";
+                        return false;
+                    }
+                    sawTensorVk = true;
+                    tensorDev = d;
+                } else {
+                    sawEngineVk = true;
+                }
+            }
+            if (sawTensorVk && sawEngineVk) {
+                if (err) {
+                    *err = "cannot mix bro.kernel engine GPU buffers with zero-copy bro.tensor Vulkan buffers in "
+                           "one dispatch; pass { copy: true } to bro.kernel.fromTensor";
+                }
+                return false;
+            }
+            if (sawTensorVk) {
+                return dispatchSpirvOnBrotensor(tensorDev, kernel.spirv, launch, err);
+            }
+        }
+#endif
         if (lost(*device_, err)) return false;
         std::vector<uint8_t> block;
         if (std::string bad = brass::gpu::pack_push_constants(kernel.spirv, launch.args, block); !bad.empty()) {
@@ -310,7 +349,18 @@ public:
             if (err) *err = p.error;
             return false;
         }
-        const bool known = launchAccesses(kernel, launch, access_);
+        bool known = launchAccesses(kernel, launch, access_);
+        if (kernel.spirv.spilled_params) {
+            uint64_t paramAddr = 0;
+            render::ComputeAccess paramRead{};
+            if (!compute.uploadSpilledParams(block, paramAddr, paramRead)) {
+                if (err) *err = "failed to upload spilled kernel parameters";
+                return false;
+            }
+            if (known) access_.push_back(paramRead);
+            block.resize(8);
+            std::memcpy(block.data(), &paramAddr, 8);
+        }
         if (compute.dispatch(*p.pipeline, block, launch.groups,
                              known ? std::span<const render::ComputeAccess>(access_)
                                    : std::span<const render::ComputeAccess>(render::kAnyAccess)))

@@ -154,4 +154,8 @@ void attachTableInteropProto(ev::ObjectBuilder& proto);
 void attachSnapshotInteropProto(ev::ObjectBuilder& proto);
 void populateTableInteropNamespace(ev::ObjectBuilder& ns);
 
+/// Multi-column & 3D instance GPU packing hooks (implemented in host_table_gpu_pack.cpp).
+void attachTableGpuPackProto(ev::ObjectBuilder& proto);
+void attachSnapshotGpuPackProto(ev::ObjectBuilder& proto);
+
 }  // namespace bro::bronze_host

@@ -256,6 +256,9 @@ public:
     /// against everything).
     bool dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
                   std::span<const ComputeAccess> access = kAnyAccess);
+    /// Upload a spilled parameter block into the current stream's BDA ring
+    /// and return its GPU address plus a ComputeAccess read dependency.
+    bool uploadSpilledParams(std::span<const uint8_t> params, uint64_t& outAddress, ComputeAccess& outRead);
     /// Copy `size` bytes of `buffer` at `offset` into `out`, after every
     /// operation recorded so far: submits them and waits for that ticket.
     bool read(const ComputeBuffer& buffer, VkDeviceSize offset, void* out, VkDeviceSize size);
@@ -356,6 +359,8 @@ private:
         uint32_t openDispatches = 0;
         uint64_t lastTicket = 0;
         uint64_t prevBatchTicket = 0;
+        std::shared_ptr<ComputeBuffer> paramRing;
+        VkDeviceSize paramOffset = 0;
     };
     // The stream recording now. The background one is held to the frame's
     // end on a device without an async queue too, and then submitted to the

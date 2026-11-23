@@ -431,6 +431,7 @@ void attachTableInteropProto(ev::ObjectBuilder& proto) {
         if (!tbl) return ev::throwTypeError("Table.readFromKernelBuffer: invalid receiver");
         return readColumnFromKernelBuffer(*tbl, args);
     });
+    attachTableGpuPackProto(proto);
 #else
     (void)proto;
 #endif
@@ -468,6 +469,7 @@ void attachSnapshotInteropProto(ev::ObjectBuilder& proto) {
         if (col < 0) return ev::throwRangeError("TableSnapshot.toKernelBuffer: invalid column");
         return packColumnToKernelBuffer(*snap, static_cast<size_t>(col), interopArgAt(args, 1));
     });
+    attachSnapshotGpuPackProto(proto);
 #else
     (void)proto;
 #endif
