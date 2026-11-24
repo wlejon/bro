@@ -45,6 +45,7 @@ void WebGLClient::detach() {
 }
 
 void WebGLClient::forgetObjects() {
+    unpackPremultiplyAlpha_ = false;
     programs_.clear();
     shaders_.clear();
     queries_.clear();
@@ -122,7 +123,7 @@ WebGLBlob* WebGLClient::copyToBlob(const void* data, uint64_t bytes) {
 
 // --- DOM sources and lists --------------------------------------------------
 
-rec::PixelRef WebGLClient::copiedPixels(const uint8_t* rgba, uint32_t width, uint32_t height) {
+rec::PixelRef WebGLClient::copiedPixels(const uint8_t* rgba, uint32_t width, uint32_t height, bool premultiplied) {
     const size_t bytes = static_cast<size_t>(width) * height * 4;
     reserveBlobBytes(bytes);
     std::shared_ptr<uint8_t> copy(new uint8_t[bytes], std::default_delete<uint8_t[]>());
@@ -132,6 +133,7 @@ rec::PixelRef WebGLClient::copiedPixels(const uint8_t* rgba, uint32_t width, uin
     ref.width = width;
     ref.height = height;
     ref.counted = bytes;
+    ref.premultiplied = premultiplied;
     return ref;
 }
 

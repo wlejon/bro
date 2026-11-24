@@ -126,6 +126,9 @@ void WebGLVkContext::transitionTextureRange(VkCommandBuffer cmd, VkTextureResour
     }
     for (uint32_t l = level; l < level + levelCount; ++l)
         for (uint32_t i = layer; i < layer + layerCount; ++i) at(l, i) = layout;
+    if (cmd != stream_.prePassCmdHandle()) {
+        tex.lastSegmentSerial_ = stream_.segmentSerial();
+    }
     if (!barriers.empty())
         vkCmdPipelineBarrier(cmd, srcStages, dstStages, 0, 0, nullptr, 0, nullptr,
                              static_cast<uint32_t>(barriers.size()), barriers.data());

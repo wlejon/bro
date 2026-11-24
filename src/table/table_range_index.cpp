@@ -402,50 +402,45 @@ void RangeIndex::sortIfNeeded() const {
     sorted_ = true;
 }
 
-void RangeIndex::lookupRange(const ScalarValue* lo, bool incLo,
-                             const ScalarValue* hi, bool incHi,
-                             const StringDictionary* dict,
-                             std::vector<RowLoc>& out) const {
-    sortIfNeeded();
-    if (isStringOrdered()) {
-        const size_t n = strCount();
-        if (n == 0) return;
-        auto getText = [&](const ScalarValue& s) -> std::string {
-            if (s.type == ColType::Dict && s.str.empty() && dict) {
-                return dict->get(static_cast<uint32_t>(s.u64));
-            }
-            return s.str;
-        };
-        auto findLower = [&](size_t l, size_t r, std::string_view key, bool strictLt) {
-            while (l < r) {
-                const size_t mid = l + ((r - l) >> 1);
-                const std::string_view mv = strViewAt(mid);
-                const bool goRight = strictLt ? (mv < key) : (mv <= key);
-                if (goRight) l = mid + 1;
-                else r = mid;
-            }
-            return l;
-        };
-        size_t first = 0;
-        size_t last = n;
-        if (lo) {
-            std::string loStr = getText(*lo);
-            first = findLower(first, last, loStr, incLo);
+std::pair<size_t, size_t> RangeIndex::findStrBounds(const ScalarValue* lo, bool incLo,
+                                                    const ScalarValue* hi, bool incHi,
+                                                    const StringDictionary* dict) const {
+    const size_t n = strCount();
+    if (n == 0) return {0, 0};
+    auto getText = [&](const ScalarValue& s) -> std::string {
+        if (s.type == ColType::Dict && s.str.empty() && dict) {
+            return dict->get(static_cast<uint32_t>(s.u64));
         }
-        if (hi && first < last) {
-            std::string hiStr = getText(*hi);
-            last = findLower(first, last, hiStr, !incHi);
+        return s.str;
+    };
+    auto findLower = [&](size_t l, size_t r, std::string_view key, bool strictLt) {
+        while (l < r) {
+            const size_t mid = l + ((r - l) >> 1);
+            const std::string_view mv = strViewAt(mid);
+            const bool goRight = strictLt ? (mv < key) : (mv <= key);
+            if (goRight) l = mid + 1;
+            else r = mid;
         }
-        out.reserve(out.size() + (last - first));
-        for (size_t i = first; i < last; ++i) {
-            out.push_back(strLocAt(i));
-        }
-        return;
+        return l;
+    };
+    size_t first = 0;
+    size_t last = n;
+    if (lo) {
+        std::string loStr = getText(*lo);
+        first = findLower(first, last, loStr, incLo);
     }
+    if (hi && first < last) {
+        std::string hiStr = getText(*hi);
+        last = findLower(first, last, hiStr, !incHi);
+    }
+    return {first, last};
+}
 
+std::pair<const RangeIndex::NumEntry*, const RangeIndex::NumEntry*> RangeIndex::findNumBounds(
+    const ScalarValue* lo, bool incLo, const ScalarValue* hi, bool incHi) const {
     const NumEntry* begin = numData();
     const size_t count = numCount();
-    if (!begin || count == 0) return;
+    if (!begin || count == 0) return {nullptr, nullptr};
     const NumEntry* first = begin;
     const NumEntry* last = begin + count;
     if (lo) {
@@ -454,7 +449,7 @@ void RangeIndex::lookupRange(const ScalarValue* lo, bool incLo,
         bool unbounded = false;
         bool incLoAdj = incLo;
         convertBound(colType_, *lo, true, incLoAdj, loEntry, alwaysEmpty, unbounded);
-        if (alwaysEmpty) return;
+        if (alwaysEmpty) return {nullptr, nullptr};
         if (!unbounded) {
             first = incLoAdj
                         ? std::lower_bound(first, last, loEntry,
@@ -473,7 +468,7 @@ void RangeIndex::lookupRange(const ScalarValue* lo, bool incLo,
         bool unbounded = false;
         bool incHiAdj = incHi;
         convertBound(colType_, *hi, false, incHiAdj, hiEntry, alwaysEmpty, unbounded);
-        if (alwaysEmpty) return;
+        if (alwaysEmpty) return {nullptr, nullptr};
         if (!unbounded) {
             last = incHiAdj
                        ? std::upper_bound(first, last, hiEntry,
@@ -486,10 +481,42 @@ void RangeIndex::lookupRange(const ScalarValue* lo, bool incLo,
                                           });
         }
     }
+    return {first, last};
+}
+
+void RangeIndex::lookupRange(const ScalarValue* lo, bool incLo,
+                             const ScalarValue* hi, bool incHi,
+                             const StringDictionary* dict,
+                             std::vector<RowLoc>& out) const {
+    sortIfNeeded();
+    if (isStringOrdered()) {
+        const auto [first, last] = findStrBounds(lo, incLo, hi, incHi, dict);
+        if (first >= last) return;
+        out.reserve(out.size() + (last - first));
+        for (size_t i = first; i < last; ++i) {
+            out.push_back(strLocAt(i));
+        }
+        return;
+    }
+
+    const auto [first, last] = findNumBounds(lo, incLo, hi, incHi);
+    if (!first || first >= last) return;
     out.reserve(out.size() + static_cast<size_t>(last - first));
     for (const NumEntry* it = first; it < last; ++it) {
         out.push_back(it->loc);
     }
+}
+
+size_t RangeIndex::countRange(const ScalarValue* lo, bool incLo,
+                              const ScalarValue* hi, bool incHi,
+                              const StringDictionary* dict) const {
+    sortIfNeeded();
+    if (isStringOrdered()) {
+        const auto [first, last] = findStrBounds(lo, incLo, hi, incHi, dict);
+        return (last > first) ? (last - first) : 0;
+    }
+    const auto [first, last] = findNumBounds(lo, incLo, hi, incHi);
+    return (first && last > first) ? static_cast<size_t>(last - first) : 0;
 }
 
 void RangeIndex::forEachOrdered(bool descending,

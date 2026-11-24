@@ -868,6 +868,72 @@ void testExplainQuery() {
     }
 }
 
+void testRangeIndexSelectivityCosting() {
+    Table tbl({{"id", ColType::I32}, {"score", ColType::F64}});
+    constexpr int kRows = 10000;
+    std::vector<int32_t> ids(kRows);
+    std::vector<double> scores(kRows);
+    for (int i = 0; i < kRows; ++i) {
+        ids[i] = i;
+        scores[i] = static_cast<double>(i);
+    }
+    const void* cols[2] = {ids.data(), scores.data()};
+    tbl.appendTypedBatch(kRows, cols);
+    CHECK(tbl.createRangeIndex("score"));
+    auto snap = tbl.snapshot();
+
+    // Broad predicate (~90% of rows): SIMD scan beats RangeIndex gather+dedup.
+    {
+        QueryPlan p;
+        p.filters.push_back(p.exprs.bin(ExprOp::Gt, p.exprs.col("score"),
+                                        p.exprs.lit(ScalarValue::makeF64(1000.0))));
+        p.selectItems.push_back(SelectItem{"id", p.exprs.col("id"), ColType::I32});
+        std::string err;
+        CHECK(bindQueryPlan(p, *snap, err));
+
+        auto ex = explainQuery(*snap, p);
+        CHECK(ex.ok && !ex.willUseRangeIndex && ex.willUseSimd && ex.strategy == "jit_simd");
+
+        auto res = executeQuery(*snap, p);
+        CHECK(res.ok && !res.usedRangeIndex && res.usedSimd && res.table->rowCount() == 8999);
+
+        ExecOptions noIdx;
+        noIdx.useIndexes = false;
+        auto ref = executeQuery(*snap, p, noIdx);
+        CHECK(ref.ok && ref.table->rowCount() == 8999);
+    }
+
+    // Narrow predicate (~1% of rows): RangeIndex wins.
+    {
+        QueryPlan p;
+        p.filters.push_back(p.exprs.bin(ExprOp::Gt, p.exprs.col("score"),
+                                        p.exprs.lit(ScalarValue::makeF64(9900.0))));
+        p.selectItems.push_back(SelectItem{"id", p.exprs.col("id"), ColType::I32});
+        std::string err;
+        CHECK(bindQueryPlan(p, *snap, err));
+
+        auto ex = explainQuery(*snap, p);
+        CHECK(ex.ok && ex.willUseRangeIndex && ex.strategy == "range_index");
+
+        auto res = executeQuery(*snap, p);
+        CHECK(res.ok && res.usedRangeIndex && res.table->rowCount() == 99);
+    }
+
+    // Empty predicate: RangeIndex answers immediately.
+    {
+        QueryPlan p;
+        p.filters.push_back(p.exprs.bin(ExprOp::Gt, p.exprs.col("score"),
+                                        p.exprs.lit(ScalarValue::makeF64(999999.0))));
+        p.selectItems.push_back(SelectItem{"id", p.exprs.col("id"), ColType::I32});
+        std::string err;
+        CHECK(bindQueryPlan(p, *snap, err));
+
+        auto res = executeQuery(*snap, p);
+        CHECK(res.ok && res.usedRangeIndex && res.table->rowCount() == 0);
+    }
+    std::cout << "testRangeIndexSelectivityCosting OK\n";
+}
+
 }  // namespace
 
 int main() {
@@ -880,6 +946,7 @@ int main() {
     testParallelFastGroupBy();
     testBrotableV3StreamingAndMappedIndexes();
     testExplainQuery();
+    testRangeIndexSelectivityCosting();
     std::cout << "test_table_production OK\n";
     return 0;
 }

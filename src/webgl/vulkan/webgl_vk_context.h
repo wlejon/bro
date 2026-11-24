@@ -315,10 +315,11 @@ public:
     /// of RGBA / UNSIGNED_BYTE converted to `format` / `type`. width/height
     /// < 0 take the source's own size.
     void texImage2DSource(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
-                          GLenum format, GLenum type, const uint8_t* rgba, uint32_t srcWidth, uint32_t srcHeight);
+                          GLenum format, GLenum type, const uint8_t* rgba, uint32_t srcWidth, uint32_t srcHeight,
+                          bool premultiplied = false);
     void texSubImage2DSource(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                              GLsizei height, GLenum format, GLenum type, const uint8_t* rgba, uint32_t srcWidth,
-                             uint32_t srcHeight);
+                             uint32_t srcHeight, bool premultiplied = false);
     void texImage2DFromPBO(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                            GLint border, GLenum format, GLenum type, GLintptr offset);
     void texSubImage2DFromPBO(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
@@ -699,6 +700,7 @@ private:
         uint32_t domWidth = 0, domHeight = 0;
         bool pbo = false;  // from PIXEL_UNPACK_BUFFER (no flip / premultiply)
         bool raw = false;  // tightly packed, no unpack state (internal copies)
+        bool premultiplied = false;  // source RGBA is already premultiplied
     };
     UnpackState unpackState(const PixelSource& src) const;
     /// Validation shared by texImage* / texStorage*: the level's size

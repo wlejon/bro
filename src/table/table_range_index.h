@@ -73,6 +73,11 @@ public:
                      const StringDictionary* dict,
                      std::vector<RowLoc>& out) const;
 
+    /// Counts candidate entries in `[lo, hi]` in O(log N) without materializing RowLocs.
+    size_t countRange(const ScalarValue* lo, bool incLo,
+                      const ScalarValue* hi, bool incHi,
+                      const StringDictionary* dict) const;
+
     /// Iterates entries in ascending or descending key order; stops if `visit` returns false.
     void forEachOrdered(bool descending,
                         const std::function<bool(RowLoc)>& visit) const;
@@ -111,6 +116,11 @@ private:
     std::string_view strViewAt(size_t i) const;
     RowLoc strLocAt(size_t i) const;
     size_t strCount() const { return mappedOwner_ ? mappedStrCount_ : strEntries_.size(); }
+    std::pair<size_t, size_t> findStrBounds(const ScalarValue* lo, bool incLo,
+                                            const ScalarValue* hi, bool incHi,
+                                            const StringDictionary* dict) const;
+    std::pair<const NumEntry*, const NumEntry*> findNumBounds(const ScalarValue* lo, bool incLo,
+                                                              const ScalarValue* hi, bool incHi) const;
 
     size_t colIdx_ = 0;
     ColType colType_ = ColType::I32;

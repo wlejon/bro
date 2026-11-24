@@ -177,10 +177,16 @@ public:
         putPayload(Op::BufferSubData, kBufferSubDataArgs, data, static_cast<uint64_t>(size), target, offset);
     }
 
+    void pixelStorei(GLenum pname, GLint param) {
+        if (pname == GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL) unpackPremultiplyAlpha_ = (param != 0);
+        encodeSimple(channel_.ring, Op::PixelStorei, TypeList<GLenum, GLint>{}, pname, param);
+    }
+    bool unpackPremultiplyAlpha() const { return unpackPremultiplyAlpha_; }
+
     // --- DOM-source uploads (webgl_client_textures.cpp) ---
     /// The pixels of a source that may change before the replay (a canvas
     /// snapshot, a video frame, ImageData), copied and counted.
-    rec::PixelRef copiedPixels(const uint8_t* rgba, uint32_t width, uint32_t height);
+    rec::PixelRef copiedPixels(const uint8_t* rgba, uint32_t width, uint32_t height, bool premultiplied = false);
     /// The pixels of a decoded image, held, not copied.
     static rec::PixelRef heldPixels(std::shared_ptr<const uint8_t> rgba, uint32_t width, uint32_t height);
     void texImage2DSource(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
@@ -360,6 +366,7 @@ private:
     uint64_t framesEncoded_ = 0;  // FrameEnd records encoded
     uint64_t rebuiltAt_ = 0;      // framesEncoded_ at the last attach, detach or resize
     bool attached_ = false;
+    bool unpackPremultiplyAlpha_ = false;
     std::shared_ptr<const vk::WebGLCaps> capsRef_;
     const vk::WebGLCaps& caps_;
     render::VulkanQueue& queue_;

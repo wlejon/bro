@@ -310,6 +310,7 @@ bool WebGLVkContext::resolveProgramBindings(VkProgramResource& prog, bool& chang
 
     auto& images = drawImages_;
     images.resize(iface.samplerUnitCount);
+    prog.drawTextureIds.clear();
     for (const VkSamplerBinding& s : iface.samplers) {
         const SamplerKind want = samplerKind(s.type);
         for (uint32_t e = 0; e < s.count; ++e) {
@@ -334,6 +335,7 @@ bool WebGLVkContext::resolveProgramBindings(VkProgramResource& prog, bool& chang
                     view = sampledView(*tex, base, count);
                     sampler = samplerFor(state, tex->tf, state.mipmapped());
                     if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return false;
+                    prog.drawTextureIds.push_back(texId);
                 }
             }
             images[s.firstUnit + e] = {sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -432,6 +434,13 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
         prog.drawSet = set;
     }
     prog.drawSegmentSerial = serial;
+    if (prog.drawMarkedSegmentSerial != serial) {
+        for (GLuint texId : prog.drawTextureIds) {
+            auto tIt = textures_.find(texId);
+            if (tIt != textures_.end()) tIt->second.lastSegmentSerial_ = serial;
+        }
+        prog.drawMarkedSegmentSerial = serial;
+    }
     // One dynamic offset (the default block, the set's only dynamic
     // descriptor) or none.
     const uint32_t dynamicCount = iface.defaultBlockBinding >= 0 ? 1 : 0;

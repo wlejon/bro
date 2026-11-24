@@ -373,9 +373,12 @@ void unpackPixels(const UnpackState& state, const void* srcIn, GLenum format, GL
             if (premultiplyBytes) {
                 for (uint32_t x = 0; x < width; ++x) {
                     const uint32_t a8 = in[x * 4 + 3];
-                    out[x * 4 + 0] = static_cast<uint8_t>((in[x * 4 + 0] * a8 + 127) / 255);
-                    out[x * 4 + 1] = static_cast<uint8_t>((in[x * 4 + 1] * a8 + 127) / 255);
-                    out[x * 4 + 2] = static_cast<uint8_t>((in[x * 4 + 2] * a8 + 127) / 255);
+                    const uint32_t t0 = in[x * 4 + 0] * a8 + 128;
+                    const uint32_t t1 = in[x * 4 + 1] * a8 + 128;
+                    const uint32_t t2 = in[x * 4 + 2] * a8 + 128;
+                    out[x * 4 + 0] = static_cast<uint8_t>((t0 + (t0 >> 8)) >> 8);
+                    out[x * 4 + 1] = static_cast<uint8_t>((t1 + (t1 >> 8)) >> 8);
+                    out[x * 4 + 2] = static_cast<uint8_t>((t2 + (t2 >> 8)) >> 8);
                     out[x * 4 + 3] = static_cast<uint8_t>(a8);
                 }
                 continue;

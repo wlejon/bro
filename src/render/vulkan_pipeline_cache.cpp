@@ -3,6 +3,7 @@
 #include "util/user_dirs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -25,9 +26,10 @@ namespace bro::render {
 
 namespace {
 
-// A cache past this size is not written back: the next launch starts empty
-// and rebuilds only what it uses, which bounds the file without an LRU.
-constexpr size_t kMaxPersistedBytes = 128u << 20;
+// A cache past this size is removed rather than persisted: the next launch
+// starts empty and rebuilds only what it uses, which bounds startup I/O and
+// file growth without an LRU.
+constexpr size_t kMaxPersistedBytes = 32u << 20;
 
 std::mutex s_registryMutex;
 std::vector<std::pair<VkDevice, VkPipelineCache>> s_registry;
@@ -73,15 +75,28 @@ void VulkanPipelineCache::init(VkDevice device, const VkPhysicalDeviceProperties
     const std::string dir = cacheDirectory();
     if (!dir.empty()) path_ = dir + "/" + cacheFileName(props);
 
+    const auto t0 = std::chrono::steady_clock::now();
     std::vector<char> seed;
     if (!path_.empty()) {
-        std::ifstream in(path_, std::ios::binary);
+        std::ifstream in(path_, std::ios::binary | std::ios::ate);
         if (in) {
-            seed.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-            if (!headerMatches(seed, props)) {
-                LOG_WARN("Vulkan: ignoring pipeline cache %s (not this device/driver's)",
-                         path_.c_str());
-                seed.clear();
+            const std::streamoff fileSize = in.tellg();
+            if (fileSize > 0 && static_cast<size_t>(fileSize) > kMaxPersistedBytes) {
+                LOG_INFO("Vulkan: pipeline cache %s exceeded %zu bytes (%zu); resetting",
+                         path_.c_str(), kMaxPersistedBytes, static_cast<size_t>(fileSize));
+                in.close();
+                std::error_code ec;
+                std::filesystem::remove(path_, ec);
+            } else if (fileSize >= 32) {
+                in.seekg(0, std::ios::beg);
+                seed.resize(static_cast<size_t>(fileSize));
+                if (!in.read(seed.data(), fileSize)) {
+                    seed.clear();
+                } else if (!headerMatches(seed, props)) {
+                    LOG_WARN("Vulkan: ignoring pipeline cache %s (not this device/driver's)",
+                             path_.c_str());
+                    seed.clear();
+                }
             }
         }
     }
@@ -105,8 +120,10 @@ void VulkanPipelineCache::init(VkDevice device, const VkPhysicalDeviceProperties
         return;
     }
     loadedSize_ = seed.size();
-    LOG_INFO("Vulkan: pipeline cache %s (%zu bytes loaded)",
-             path_.empty() ? "in memory only" : path_.c_str(), loadedSize_);
+    const double loadMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    LOG_INFO("Vulkan: pipeline cache %s (%zu bytes loaded in %.1f ms)",
+             path_.empty() ? "in memory only" : path_.c_str(), loadedSize_, loadMs);
 
     std::lock_guard<std::mutex> lock(s_registryMutex);
     s_registry.emplace_back(device_, cache_);
@@ -122,18 +139,24 @@ void VulkanPipelineCache::shutdown() {
     }
 
     size_t size = 0;
-    if (!path_.empty() && vkGetPipelineCacheData(device_, cache_, &size, nullptr) == VK_SUCCESS &&
-        size > loadedSize_ && size <= kMaxPersistedBytes) {
-        std::vector<char> data(size);
-        // A blob that fails the header check init applies is not written: the
-        // next launch would only drop it (lavapipe 26.2 hands back 20 bytes of
-        // a 32-byte header).
-        if (vkGetPipelineCacheData(device_, cache_, &size, data.data()) == VK_SUCCESS) {
-            data.resize(size);
-            if (!headerMatches(data, props_))
-                LOG_INFO("Vulkan: the driver's pipeline cache data is malformed; not persisted");
-            else if (!writeCacheFile(path_, data.data(), size))
-                LOG_WARN("Vulkan: could not write the pipeline cache to %s", path_.c_str());
+    if (!path_.empty() && vkGetPipelineCacheData(device_, cache_, &size, nullptr) == VK_SUCCESS) {
+        if (size > kMaxPersistedBytes) {
+            LOG_INFO("Vulkan: pipeline cache %s exceeded %zu bytes (%zu); removing",
+                     path_.c_str(), kMaxPersistedBytes, size);
+            std::error_code ec;
+            std::filesystem::remove(path_, ec);
+        } else if (size > loadedSize_) {
+            std::vector<char> data(size);
+            // A blob that fails the header check init applies is not written: the
+            // next launch would only drop it (lavapipe 26.2 hands back 20 bytes of
+            // a 32-byte header).
+            if (vkGetPipelineCacheData(device_, cache_, &size, data.data()) == VK_SUCCESS) {
+                data.resize(size);
+                if (!headerMatches(data, props_))
+                    LOG_INFO("Vulkan: the driver's pipeline cache data is malformed; not persisted");
+                else if (!writeCacheFile(path_, data.data(), size))
+                    LOG_WARN("Vulkan: could not write the pipeline cache to %s", path_.c_str());
+            }
         }
     }
 

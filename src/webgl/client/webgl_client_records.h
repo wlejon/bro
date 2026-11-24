@@ -21,6 +21,7 @@ struct PixelRef {
     uint32_t width = 0;
     uint32_t height = 0;
     size_t counted = 0;
+    bool premultiplied = false;
 };
 
 // {target, level, internalformat, width, height, format, type, PixelRef*}

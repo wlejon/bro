@@ -336,6 +336,7 @@ void CanvasScene::recordDraw(CanvasCmd&& cmd) {
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
 }
 

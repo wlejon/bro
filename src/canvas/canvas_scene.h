@@ -375,6 +375,9 @@ public:
     /// Re-reads from the surface only when the cache is stale. Lets a scene
     /// be used as a sprite atlas without paying a GPU readback per blit.
     const uint8_t* snapshotPixels(int w, int h);
+    /// Cached premultiplied RGBA8888 pixel snapshot of (0,0,w,h). Zero-copy
+    /// when the backing surface is already raster RGBA8888 Premul.
+    const uint8_t* snapshotPremulPixels(int w, int h);
 
     /// Cached SkImage snapshot of the surface — the canvas-source fast path
     /// for drawImage(<canvas>). Stays alive (and Skia sees a single image
@@ -569,9 +572,12 @@ private:
     // Skia surface (RGBA premul): GPU on the renderer's SkiaGpu, else raster.
     // On the GPU, unfinished_ marks a surface drawn (or read) since the last
     // finish, which rasterize() leaves ready to sample again.
+    bool isOrphaned() const;
+
     render::LayerSurface surface_;
     int surfWidth_ = 0, surfHeight_ = 0;
     bool unfinished_ = false;
+    bool preferRaster_ = false;
     // An ImageBitmap the canvas shows as it is, in place of surface_
     // (putImage, adoptImage): the texture once uploaded, else the raster.
     sk_sp<SkImage> adopted_;
@@ -587,6 +593,9 @@ private:
     std::vector<uint8_t> snapshot_;
     int snapshotW_ = 0, snapshotH_ = 0;
     bool snapshotValid_ = false;
+    std::vector<uint8_t> snapshotPremul_;
+    int snapshotPremulW_ = 0, snapshotPremulH_ = 0;
+    bool snapshotPremulValid_ = false;
     sk_sp<SkImage> snapshotImage_;
     bool snapshotImageValid_ = false;
 

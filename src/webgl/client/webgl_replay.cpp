@@ -66,7 +66,7 @@ void replayCustom(vk::WebGLVkContext* gl, Op op, const uint8_t* rec, WebGLReplay
                          [gl](const rec::PixelRef& px, GLenum target, GLint level, GLint internalformat,
                               GLsizei width, GLsizei height, GLenum format, GLenum type, void*) {
                              gl->texImage2DSource(target, level, internalformat, width, height, format, type,
-                                                  px.rgba.get(), px.width, px.height);
+                                                  px.rgba.get(), px.width, px.height, px.premultiplied);
                          });
             return;
         case Op::TexSubImage2DSource:
@@ -74,7 +74,7 @@ void replayCustom(vk::WebGLVkContext* gl, Op op, const uint8_t* rec, WebGLReplay
                          [gl](const rec::PixelRef& px, GLenum target, GLint level, GLint x, GLint y, GLsizei width,
                               GLsizei height, GLenum format, GLenum type, void*) {
                              gl->texSubImage2DSource(target, level, x, y, width, height, format, type,
-                                                     px.rgba.get(), px.width, px.height);
+                                                     px.rgba.get(), px.width, px.height, px.premultiplied);
                          });
             return;
         case Op::InvalidateFramebuffer:

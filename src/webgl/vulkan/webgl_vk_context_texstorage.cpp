@@ -50,7 +50,7 @@ UnpackState WebGLVkContext::unpackState(const PixelSource& src) const {
     }
     UnpackState state = unpack_;
     state.flipY = unpackFlipY_ && !src.pbo;
-    state.premultiplyAlpha = unpackPremultiplyAlpha_ && !src.pbo;
+    state.premultiplyAlpha = unpackPremultiplyAlpha_ && !src.pbo && !src.premultiplied;
     if (src.dom) {
         // A DOM source is its own image: UNPACK_ALIGNMENT and _ROW_LENGTH do
         // not apply, the skips select a sub-rectangle of it.
@@ -266,7 +266,20 @@ void WebGLVkContext::writeTexels(VkTextureResource& tex, uint32_t level, int32_t
 
     const bool is3D = tex.is3D();
     const uint32_t layer = is3D ? 0 : static_cast<uint32_t>(z), layers = is3D ? 1 : depth;
-    VkCommandBuffer cmd = transferCommands();
+    const uint64_t serial = stream_.segmentSerial();
+    bool canPrePass = inRenderPass_ && !depthStencil && tex.lastSegmentSerial_ != serial &&
+                      !sampledByPass(tex, 0, tex.mipLevels);
+    if (canPrePass) {
+        for (uint32_t i = layer; i < layer + layers; ++i) {
+            const VkImageLayout cur = tex.layout(level, i);
+            if (cur != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && cur != VK_IMAGE_LAYOUT_UNDEFINED) {
+                canPrePass = false;
+                break;
+            }
+        }
+    }
+    VkCommandBuffer cmd = canPrePass ? stream_.prePassCommands() : transferCommands();
+    if (cmd == VK_NULL_HANDLE) return;
     transitionTextureRange(cmd, tex, level, 1, layer, layers, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkBufferImageCopy regions[2]{};
     regions[0].bufferOffset = texels.offset;
@@ -283,6 +296,7 @@ void WebGLVkContext::writeTexels(VkTextureResource& tex, uint32_t level, int32_t
         vkCmdCopyBufferToImage(cmd, stencils.buffer, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                                &regions[1]);
     transitionTextureRange(cmd, tex, level, 1, layer, layers, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex.lastSegmentSerial_ = serial;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,13 +423,13 @@ void WebGLVkContext::texSubImage3D(GLenum target, GLint level, GLint xoffset, GL
 
 void WebGLVkContext::texImage2DSource(GLenum target, GLint level, GLint internalformat, GLsizei width,
                                       GLsizei height, GLenum format, GLenum type, const uint8_t* rgba,
-                                      uint32_t srcWidth, uint32_t srcHeight) {
+                                      uint32_t srcWidth, uint32_t srcHeight, bool premultiplied) {
     if (boundPixelUnpackBuffer_ != 0) {
         setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
     PixelSource src{rgba, static_cast<size_t>(srcWidth) * srcHeight * 4, GL_RGBA, GL_UNSIGNED_BYTE, true,
-                    srcWidth, srcHeight};
+                    srcWidth, srcHeight, false, false, premultiplied};
     // The source's data is RGBA8 whatever format / type say; they choose the
     // internal format and are validated as such.
     TexFormat tf;
@@ -449,7 +463,7 @@ void WebGLVkContext::texImage2DSource(GLenum target, GLint level, GLint internal
 
 void WebGLVkContext::texSubImage2DSource(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                                          GLsizei height, GLenum format, GLenum type, const uint8_t* rgba,
-                                         uint32_t srcWidth, uint32_t srcHeight) {
+                                         uint32_t srcWidth, uint32_t srcHeight, bool premultiplied) {
     if (boundPixelUnpackBuffer_ != 0) {
         setSyntheticError(GL_INVALID_OPERATION);
         return;
@@ -466,7 +480,7 @@ void WebGLVkContext::texSubImage2DSource(GLenum target, GLint level, GLint xoffs
     if (height < 0) height = static_cast<GLsizei>(srcHeight);
     // The format check is done; the data itself is RGBA8.
     PixelSource src{rgba, static_cast<size_t>(srcWidth) * srcHeight * 4, GL_RGBA, GL_UNSIGNED_BYTE, true,
-                    srcWidth, srcHeight};
+                    srcWidth, srcHeight, false, false, premultiplied};
     const TexLevel& lv = tex->levels[l];
     if (!(lv.faces & (1u << faceOf(target))) || lv.format.isDepthOrStencil()) {
         setSyntheticError(GL_INVALID_OPERATION);

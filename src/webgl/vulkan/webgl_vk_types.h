@@ -172,6 +172,7 @@ struct VkTextureResource {
     GLint baseLevel = 0;
     GLint maxLevel = 1000;
     SamplerState sampler;
+    uint64_t lastSegmentSerial_ = 0;
 
     bool isValid() const { return image != VK_NULL_HANDLE; }
     bool is3D() const { return target == GL_TEXTURE_3D; }
@@ -445,6 +446,8 @@ struct VkProgramResource {
     VkDescriptorBufferInfo drawUniforms{};
     uint32_t drawUniformOffset = 0;
     uint64_t drawResolvedSerial = 0;
+    uint64_t drawMarkedSegmentSerial = 0;
+    std::vector<GLuint> drawTextureIds;
     std::vector<VkDescriptorImageInfo> drawImages;
     std::vector<VkDescriptorBufferInfo> drawBlocks;
     std::vector<VkDescriptorBufferInfo> drawCaptures;

@@ -42,7 +42,9 @@ bool readUnpremul(SkSurface* surface, const SkImageInfo& info, void* dst,
         return surface->readPixels(info, dst, rowBytes, x, y);
     SkImageInfo premul = info.makeAlphaType(kPremul_SkAlphaType);
     std::vector<uint8_t> tmp(premul.computeByteSize(rowBytes));
-    SkPixmap(info, dst, rowBytes).readPixels(premul, tmp.data(), rowBytes);
+    if (x != 0 || y != 0 || info.width() != surface->width() || info.height() != surface->height()) {
+        SkPixmap(info, dst, rowBytes).readPixels(premul, tmp.data(), rowBytes);
+    }
     if (!surface->readPixels(premul, tmp.data(), rowBytes, x, y)) return false;
     return SkPixmap(premul, tmp.data(), rowBytes).readPixels(info, dst, rowBytes);
 }
@@ -130,19 +132,26 @@ int CanvasScene::queryLayoutHeight() const {
     return surfHeight_ > 0 ? surfHeight_ : 150;
 }
 
+bool CanvasScene::isOrphaned() const {
+    return detachedCb_ && backingElementAlive() && detachedCb_(detachedUd_);
+}
+
 void CanvasScene::ensureSurface(int w, int h) {
     if (surface_ && surfWidth_ == w && surfHeight_ == h) return;
 
     auto lock = lockGpu();
     bool isResize = (surface_.surface != nullptr);
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
     snapshotImage_.reset();
 
     surfWidth_ = w;
     surfHeight_ = h;
-    if (render::SkiaGpu* g = gpu()) surface_ = g->makeSurface(w, h);
-    else surface_ = render::LayerSurface(SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w, h)), nullptr);
+    const bool useRaster = !gpu() || preferRaster_ || isOrphaned();
+    if (!useRaster) surface_ = gpu()->makeSurface(w, h);
+    else surface_ = render::LayerSurface(
+        SkSurfaces::Raster(SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType)), nullptr);
 
     // Clear to transparent (canvas default)
     if (surface_) {
@@ -154,8 +163,9 @@ void CanvasScene::ensureSurface(int w, int h) {
         surface_.surface->getCanvas()->save();
         surface_.surface->getCanvas()->clear(SK_ColorTRANSPARENT);
         dirty_ = true;
-    snapshotValid_ = false;
-    snapshotImageValid_ = false;
+        snapshotValid_ = false;
+        snapshotPremulValid_ = false;
+        snapshotImageValid_ = false;
     }
 }
 
@@ -193,6 +203,7 @@ void CanvasScene::clearRect(float x, float y, float w, float h) {
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
 }
 
@@ -550,6 +561,7 @@ void CanvasScene::putImage(sk_sp<SkImage> img, std::shared_ptr<render::GpuImageU
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
 }
 
@@ -584,6 +596,7 @@ sk_sp<SkImage> CanvasScene::snapshotImage() {
 }
 
 const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
+    if (isOrphaned()) preferRaster_ = true;
     if (snapshotValid_ && snapshotW_ == w && snapshotH_ == h && !snapshot_.empty()) {
         return snapshot_.data();
     }
@@ -609,6 +622,55 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
     snapshotH_ = h;
     snapshotValid_ = true;
     return snapshot_.data();
+}
+
+const uint8_t* CanvasScene::snapshotPremulPixels(int w, int h) {
+    if (isOrphaned()) preferRaster_ = true;
+    auto lock = lockGpu();
+    flushCommands();
+    if (!surface_ && !adopted_) skCanvas();
+    if ((!surface_ && !adopted_) || w <= 0 || h <= 0) {
+        snapshotPremulValid_ = false;
+        return nullptr;
+    }
+    if (!adopted_ && surface_ && !surface_.isGpu()) {
+        SkPixmap pm;
+        if (surface_.surface->peekPixels(&pm) &&
+            pm.colorType() == kRGBA_8888_SkColorType &&
+            pm.alphaType() == kPremul_SkAlphaType &&
+            pm.width() == w && pm.height() == h &&
+            pm.rowBytes() == static_cast<size_t>(w) * 4) {
+            return static_cast<const uint8_t*>(pm.addr());
+        }
+    }
+    if (snapshotPremulValid_ && snapshotPremulW_ == w && snapshotPremulH_ == h && !snapshotPremul_.empty()) {
+        return snapshotPremul_.data();
+    }
+    auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    const size_t rowBytes = static_cast<size_t>(w) * 4;
+    snapshotPremul_.assign(rowBytes * static_cast<size_t>(h), 0);
+    bool ok = false;
+    if (adopted_) {
+        GrDirectContext* ctx = nullptr;
+        if (adopted_->isTextureBacked()) {
+            render::SkiaGpu* g = gpu();
+            if (!g) return nullptr;
+            ctx = g->context();
+        }
+        ok = adopted_->readPixels(ctx, info, snapshotPremul_.data(), rowBytes, 0, 0);
+    } else if (surface_) {
+        unfinished_ = surface_.isGpu();
+        ok = surface_.surface->readPixels(info, snapshotPremul_.data(), rowBytes, 0, 0);
+    }
+    if (!ok) {
+        snapshotPremul_.clear();
+        snapshotPremulValid_ = false;
+        return nullptr;
+    }
+    snapshotPremulW_ = w;
+    snapshotPremulH_ = h;
+    snapshotPremulValid_ = true;
+    return snapshotPremul_.data();
 }
 
 void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy) {
@@ -653,6 +715,7 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
 }
 
@@ -671,6 +734,7 @@ void CanvasScene::reset() {
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
 
     state_ = defaultState();

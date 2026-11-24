@@ -1,0 +1,16 @@
+{
+  "boot_cold_ms": 461,
+  "boot_warm_ms": 263,
+  "cpu_nbody_ms": 211,
+  "cpu_strings_ms": 33,
+  "cpu_toplevel_ms": 148,
+  "cpu_total_ms": 394,
+  "gc_1500000_avg_ms": 0.29,
+  "gc_1500000_worst_ms": 14,
+  "gc_20000_avg_ms": 0.34,
+  "gc_20000_worst_ms": 12,
+  "gc_500000_avg_ms": 0.29,
+  "gc_500000_worst_ms": 15,
+  "page_compile_cold_ms": 195,
+  "page_compile_warm_ms": 61
+}

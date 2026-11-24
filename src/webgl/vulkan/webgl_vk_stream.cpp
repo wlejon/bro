@@ -82,15 +82,48 @@ VkCommandBuffer WebGLVkStream::commands() {
     return cmd_;
 }
 
+VkCommandBuffer WebGLVkStream::prePassCommands() {
+    if (prePassCmd_ != VK_NULL_HANDLE) return prePassCmd_;
+    assertOwner();
+    Segment& segment = open();
+    if (segment.nextCommandBuffer == segment.commandBuffers.size()) {
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = segment.commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(context_.device(), &allocInfo, &cmd) != VK_SUCCESS) {
+            LOG_ERROR("WebGLVkStream: failed to allocate a pre-pass command buffer");
+            return VK_NULL_HANDLE;
+        }
+        segment.commandBuffers.push_back(cmd);
+    }
+    VkCommandBuffer cmd = segment.commandBuffers[segment.nextCommandBuffer++];
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+    prePassCmd_ = cmd;
+    return prePassCmd_;
+}
+
 bool WebGLVkStream::submit() {
     assertOwner();
     Segment& segment = open();
     bool ok = true;
-    if (cmd_ != VK_NULL_HANDLE) {
-        vkEndCommandBuffer(cmd_);
+    if (prePassCmd_ != VK_NULL_HANDLE || cmd_ != VK_NULL_HANDLE) {
         render::QueueSubmit batch;
-        batch.commandBuffers.push_back(cmd_);
-        cmd_ = VK_NULL_HANDLE;
+        if (prePassCmd_ != VK_NULL_HANDLE) {
+            vkEndCommandBuffer(prePassCmd_);
+            batch.commandBuffers.push_back(prePassCmd_);
+            prePassCmd_ = VK_NULL_HANDLE;
+        }
+        if (cmd_ != VK_NULL_HANDLE) {
+            vkEndCommandBuffer(cmd_);
+            batch.commandBuffers.push_back(cmd_);
+            cmd_ = VK_NULL_HANDLE;
+        }
         const uint64_t ticket = context_.queue().submit(batch);
         if (ticket == 0) {
             LOG_ERROR("WebGLVkStream: submitting recorded commands failed");

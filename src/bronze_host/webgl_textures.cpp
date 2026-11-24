@@ -45,10 +45,11 @@ struct SourcePixels {
     GLsizei height = 0;
     // The decoded image `data` points into, when it is one: held, not copied.
     std::shared_ptr<const render::DecodedImage> decoded;
+    bool premultiplied = false;
     explicit operator bool() const { return data != nullptr; }
 };
 
-SourcePixels resolveSource(Value sourceIn, const char* who) {
+SourcePixels resolveSource(Value sourceIn, const char* who, bool wantPremul) {
     // Rooted: each probe below may allocate (hostImageOf and hostElementOf
     // read a property by name), and the next probe must see the value's
     // current address.
@@ -82,8 +83,10 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
             // size but the surface's.
             const int w = scene->width();
             const int h = scene->height();
-            const uint8_t* px = (w > 0 && h > 0) ? scene->snapshotPixels(w, h) : nullptr;
-            if (px) return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h)};
+            const uint8_t* px = (w > 0 && h > 0)
+                                    ? (wantPremul ? scene->snapshotPremulPixels(w, h) : scene->snapshotPixels(w, h))
+                                    : nullptr;
+            if (px) return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h), {}, wantPremul};
         }
         if (auto* vc = el->videoControl()) {
             int vw = 0, vh = 0;
@@ -134,9 +137,9 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
 // none.
 template <typename Upload>
 void uploadSource(webgl::WebGL2RenderingContext* c, Value source, const char* who, Upload&& upload) {
-    SourcePixels src = resolveSource(source, who);
     auto* cl = client(c);
     if (!cl) return;
+    SourcePixels src = resolveSource(source, who, cl->unpackPremultiplyAlpha());
     if (!src) {
         cl->syntheticError(GL_INVALID_VALUE);
         return;
@@ -146,7 +149,7 @@ void uploadSource(webgl::WebGL2RenderingContext* c, Value source, const char* wh
     // heap, which keeps an ImageData-backed pointer valid.
     upload(*cl, src.decoded ? webgl::WebGLClient::heldPixels(
                                   std::shared_ptr<const uint8_t>(src.decoded, src.data), w, h)
-                            : cl->copiedPixels(src.data, w, h));
+                            : cl->copiedPixels(src.data, w, h, src.premultiplied));
 }
 
 // The bytes of a typed-array (or ArrayBuffer) upload source from element

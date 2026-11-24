@@ -144,19 +144,44 @@ bool detectRangeIndexProbe(const TableSnapshot& snap, const QueryPlan& plan, Ran
     }
 
     if (colBounds.empty()) return false;
-    size_t chosenCol = SIZE_MAX;
-    for (const auto& kv : colBounds) {
-        chosenCol = kv.first;
-        if (kv.second.hasLo && kv.second.hasHi) break;
-    }
-    out = colBounds[chosenCol];
-    if (out.hasLo && out.hasHi) {
-        const int cmp = compareScalar(out.lo, out.hi);
-        if (cmp > 0 || (cmp == 0 && (!out.incLo || !out.incHi))) {
-            out.provablyEmpty = true;
+    size_t bestEst = SIZE_MAX;
+    for (auto& kv : colBounds) {
+        RangeProbePlan& cand = kv.second;
+        if (cand.hasLo && cand.hasHi) {
+            const int cmp = compareScalar(cand.lo, cand.hi);
+            if (cmp > 0 || (cmp == 0 && (!cand.incLo || !cand.incHi))) {
+                cand.provablyEmpty = true;
+                out = cand;
+                return true;
+            }
+        }
+        const RangeIndex* ridx = snap.findRangeIndex(cand.colIdx);
+        const size_t est = ridx ? ridx->countRange(cand.hasLo ? &cand.lo : nullptr, cand.incLo,
+                                                   cand.hasHi ? &cand.hi : nullptr, cand.incHi,
+                                                   snap.dict.get())
+                                : SIZE_MAX;
+        if (est < bestEst) {
+            bestEst = est;
+            out = cand;
         }
     }
-    return true;
+    return bestEst < SIZE_MAX;
+}
+
+bool rangeProbeIsSelective(const TableSnapshot& left, const RangeProbePlan& rp, const ExecOptions& opts) {
+    if (rp.provablyEmpty || !opts.useJit || left.totalAliveRows < 4096) {
+        return true;
+    }
+    const RangeIndex* ridx = left.findRangeIndex(rp.colIdx);
+    if (!ridx) return false;
+    const size_t est = ridx->countRange(rp.hasLo ? &rp.lo : nullptr, rp.incLo,
+                                        rp.hasHi ? &rp.hi : nullptr, rp.incHi,
+                                        left.dict.get());
+    if (est == 0 || est <= 512) return true;
+    if (ridx->isStringOrdered()) {
+        return est * 4 <= left.totalAliveRows;
+    }
+    return est * 20 <= left.totalAliveRows;
 }
 
 bool passesResidualFilters(const QueryPlan& plan, const std::vector<uint32_t>& filterIndices,
@@ -246,7 +271,8 @@ bool tryIndexCandidateLookup(const TableSnapshot& left, const QueryPlan& plan,
     }
 
     RangeProbePlan rangeProbe;
-    if (detectRangeIndexProbe(left, plan, rangeProbe)) {
+    if (detectRangeIndexProbe(left, plan, rangeProbe) &&
+        rangeProbeIsSelective(left, rangeProbe, opts)) {
         out.kind = IndexProbeKind::Range;
         out.indexColName = left.schema.columns[rangeProbe.colIdx].name;
         if (!rangeProbe.provablyEmpty) {
@@ -663,7 +689,8 @@ QueryExplainResult explainQuery(const TableSnapshot& left, QueryPlan plan, ExecO
                 return out;
             }
             RangeProbePlan rp;
-            if (detectRangeIndexProbe(left, plan, rp)) {
+            if (detectRangeIndexProbe(left, plan, rp) &&
+                rangeProbeIsSelective(left, rp, opts)) {
                 out.strategy = "range_index";
                 out.willUseRangeIndex = true;
                 out.indexColumn = left.schema.columns[rp.colIdx].name;

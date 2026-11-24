@@ -40,6 +40,10 @@ public:
     /// The open command buffer, begun on first use.
     VkCommandBuffer commands();
     bool hasCommands() const { return cmd_ != VK_NULL_HANDLE; }
+    /// A pre-pass command buffer submitted right before `commands()` in the same
+    /// batch, for initial uploads of textures not yet touched in this segment.
+    VkCommandBuffer prePassCommands();
+    VkCommandBuffer prePassCmdHandle() const { return prePassCmd_; }
 
     /// Submit the open command buffer (if any) and move on to the next
     /// segment. Returns false if the submission failed.
@@ -111,6 +115,7 @@ private:
     uint32_t index_ = 0;
     uint64_t serial_ = 1;
     VkCommandBuffer cmd_ = VK_NULL_HANDLE;
+    VkCommandBuffer prePassCmd_ = VK_NULL_HANDLE;
     uint64_t lastTicket_ = 0;
     VkDeviceSize minUploadAlignment_ = 16;
     std::thread::id owner_ = std::this_thread::get_id();

@@ -256,6 +256,7 @@ bool CanvasScene::adoptImage(std::vector<CanvasCmd>& cmds) {
     unfinished_ = false;
     dirty_ = true;
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
     return adopted_ != nullptr;
 }
@@ -350,6 +351,7 @@ void CanvasScene::flushCommands() {
     commands_.clear();
     dirty_ = true;
     snapshotValid_ = false;
+    snapshotPremulValid_ = false;
     snapshotImageValid_ = false;
 }
 
@@ -407,6 +409,24 @@ void CanvasScene::rasterize(bool mayDefer) {
         showAdopted(layoutW, layoutH, fresh);
         dirty_ = false;
         return;
+    }
+    // A canvas drawn while detached kept a raster surface; once attached to
+    // the DOM for compositing, upgrade it to a GPU surface in-place.
+    if (!orphaned && surface_ && !surface_.isGpu() && gpu()) {
+        auto lock = lockGpu();
+        sk_sp<SkImage> prev = surface_.surface->makeImageSnapshot();
+        preferRaster_ = false;
+        surface_.reset();
+        surfWidth_ = surfHeight_ = 0;
+        ensureSurface(canvasW, canvasH);
+        if (surface_ && prev) {
+            SkCanvas* c = surface_.surface->getCanvas();
+            SkPaint paint;
+            paint.setBlendMode(SkBlendMode::kSrc);
+            c->drawImage(prev, 0, 0, SkSamplingOptions(), &paint);
+            unfinished_ = true;
+            dirty_ = true;
+        }
     }
     ensureSurface(canvasW, canvasH);
 
