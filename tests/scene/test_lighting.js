@@ -184,6 +184,9 @@ if (!scene) {
     assert(typeof scene.setShadowQuality === 'function', 'setShadowQuality exists');
     scene.setShadowQuality({ pcfTaps: 1 });
     scene.setShadowQuality({ pcfTaps: 3 });
+    let bad = null;
+    try { scene.setShadowQuality({ pcfTaps: 2 }); } catch (e) { bad = e; }
+    assert(bad instanceof RangeError, 'setShadowQuality: a pcfTaps not 1, 3 or 5 is a RangeError');
 
     flush();
     document.body.removeChild(canvas);

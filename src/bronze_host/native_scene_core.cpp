@@ -555,11 +555,17 @@ void bro_scene_SceneGraph_windState(void* self, bronze_native_buffer* out) {
 }
 
 // setShadowQuality({pcfTaps}) — the receivers' PCF grid side (1, 3 or 5).
-// A non-positive value keeps the default.
+// Not given keeps the default (3); any other value is an error, not rounded
+// to one of them (a 2 rounded down to a single tap leaves shadows' edges in
+// texel steps where they are filtered coarse).
 void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_pcfTaps_given, int32_t opts_pcfTaps) {
     auto* g = graphOf(self);
     if (!g) return;
-    g->setShadowQuality((opts_pcfTaps_given && opts_pcfTaps > 0) ? opts_pcfTaps : 3);
+    if (opts_pcfTaps_given && opts_pcfTaps != 1 && opts_pcfTaps != 3 && opts_pcfTaps != 5) {
+        ev::throwRangeError("setShadowQuality: pcfTaps is 1, 3 or 5");
+        return;
+    }
+    g->setShadowQuality(opts_pcfTaps_given ? opts_pcfTaps : 3);
 }
 
 void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* opts_mode,

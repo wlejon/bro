@@ -157,7 +157,7 @@
  * their margins, so a margin of "anywhere" costs no shadow its precision,
  * and geometry a hook carries past the range toward the sun still casts.
  * @typedef {Object} ShadowQualityConfig
- * @property {number} [pcfTaps] -  PCF filter grid side: 1 (single sample), 3 or 5 (default 3).
+ * @property {number} [pcfTaps] -  PCF filter grid side: 1 (single sample), 3 or 5 (default 3); any other value throws a RangeError.
  */
 
 /**
