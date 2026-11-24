@@ -224,6 +224,8 @@ void decorateReactiveProto(ev::ObjectBuilder& proto) {
         ob.set("version", ev::fromDouble(static_cast<double>(rr.version)));
         ob.set("recomputedChunks", ev::fromDouble(static_cast<double>(rr.recomputedChunks)));
         ob.set("reusedChunks", ev::fromDouble(static_cast<double>(rr.reusedChunks)));
+        ob.set("usedIncrementalAgg", ev::fromBool(rr.usedIncrementalAgg));
+        ob.set("usedIncrementalJoin", ev::fromBool(rr.usedIncrementalJoin));
         ev::Persistent resObj(ob.get());
 
         if (rr.changed && !h->listeners.empty()) {
@@ -339,7 +341,7 @@ void attachTableExtProto(ev::ObjectBuilder& proto) {
         return materializeNearestTable(*snap, ev::toUtf8(args[0]), pt, k, maxR);
     });
 
-    proto.def("save", 1, [](Value thisVal, std::span<const Value> args) -> Value {
+    proto.def("save", 2, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.save: invalid receiver");
         if (!hasArg(args, 0) || !ev::isString(args[0])) {
@@ -347,17 +349,37 @@ void attachTableExtProto(ev::ObjectBuilder& proto) {
         }
         std::string resolved = util::resolveAssetWritePath(ev::toUtf8(args[0]));
         requirePathAccess(resolved, true);
+        SaveOptions opts;
+        if (hasArg(args, 1) && ev::isObject(args[1])) {
+            Value cv = ev::getProperty(args[1], "compress");
+            if (ev::isString(cv)) {
+                const std::string s = ev::toUtf8(cv);
+                opts.compress = (s == "lz4" || s == "LZ4" || s == "true");
+            } else if (!cv.isUndefined()) {
+                opts.compress = ev::toBool(cv);
+            }
+        }
         std::string err;
-        if (!saveSnapshotToFile(*tbl->snapshot(), resolved, &err)) {
+        if (!saveSnapshotToFile(*tbl->snapshot(), resolved, opts, &err)) {
             return ev::throwError("Table.save: " + err);
         }
         return ev::fromBool(true);
     });
 
-    proto.def("toBytes", 0, [](Value thisVal, std::span<const Value>) -> Value {
+    proto.def("toBytes", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.toBytes: invalid receiver");
-        return bytesToUint8Array(serializeSnapshotBytes(*tbl->snapshot()));
+        SaveOptions opts;
+        if (hasArg(args, 0) && ev::isObject(args[0])) {
+            Value cv = ev::getProperty(args[0], "compress");
+            if (ev::isString(cv)) {
+                const std::string s = ev::toUtf8(cv);
+                opts.compress = (s == "lz4" || s == "LZ4" || s == "true");
+            } else if (!cv.isUndefined()) {
+                opts.compress = ev::toBool(cv);
+            }
+        }
+        return bytesToUint8Array(serializeSnapshotBytes(*tbl->snapshot(), opts));
     });
 
     proto.accessor("structureVersion", [](Value thisVal, std::span<const Value>) -> Value {
@@ -425,6 +447,7 @@ void attachTableExtProto(ev::ObjectBuilder& proto) {
     });
 
     attachTableInteropProto(proto);
+    attachTableIoExtProto(proto);
 }
 
 void attachSnapshotExtProto(ev::ObjectBuilder& proto) {
@@ -480,7 +503,7 @@ void attachSnapshotExtProto(ev::ObjectBuilder& proto) {
         return ev::fromDouble(static_cast<double>(snap->chunks[ci].dirtyVersion));
     });
 
-    proto.def("save", 1, [](Value thisVal, std::span<const Value> args) -> Value {
+    proto.def("save", 2, [](Value thisVal, std::span<const Value> args) -> Value {
         auto snap = hostTableSnapshotOf(thisVal);
         if (!snap) return ev::throwTypeError("TableSnapshot.save: invalid receiver");
         if (!hasArg(args, 0) || !ev::isString(args[0])) {
@@ -488,17 +511,37 @@ void attachSnapshotExtProto(ev::ObjectBuilder& proto) {
         }
         std::string resolved = util::resolveAssetWritePath(ev::toUtf8(args[0]));
         requirePathAccess(resolved, true);
+        SaveOptions opts;
+        if (hasArg(args, 1) && ev::isObject(args[1])) {
+            Value cv = ev::getProperty(args[1], "compress");
+            if (ev::isString(cv)) {
+                const std::string s = ev::toUtf8(cv);
+                opts.compress = (s == "lz4" || s == "LZ4" || s == "true");
+            } else if (!cv.isUndefined()) {
+                opts.compress = ev::toBool(cv);
+            }
+        }
         std::string err;
-        if (!saveSnapshotToFile(*snap, resolved, &err)) {
+        if (!saveSnapshotToFile(*snap, resolved, opts, &err)) {
             return ev::throwError("TableSnapshot.save: " + err);
         }
         return ev::fromBool(true);
     });
 
-    proto.def("toBytes", 0, [](Value thisVal, std::span<const Value>) -> Value {
+    proto.def("toBytes", 1, [](Value thisVal, std::span<const Value> args) -> Value {
         auto snap = hostTableSnapshotOf(thisVal);
         if (!snap) return ev::throwTypeError("TableSnapshot.toBytes: invalid receiver");
-        return bytesToUint8Array(serializeSnapshotBytes(*snap));
+        SaveOptions opts;
+        if (hasArg(args, 0) && ev::isObject(args[0])) {
+            Value cv = ev::getProperty(args[0], "compress");
+            if (ev::isString(cv)) {
+                const std::string s = ev::toUtf8(cv);
+                opts.compress = (s == "lz4" || s == "LZ4" || s == "true");
+            } else if (!cv.isUndefined()) {
+                opts.compress = ev::toBool(cv);
+            }
+        }
+        return bytesToUint8Array(serializeSnapshotBytes(*snap, opts));
     });
 
     proto.def("toTable", 0, [](Value thisVal, std::span<const Value>) -> Value {
@@ -522,6 +565,7 @@ void attachSnapshotExtProto(ev::ObjectBuilder& proto) {
     });
 
     attachSnapshotInteropProto(proto);
+    attachSnapshotIoExtProto(proto);
 }
 
 void attachQueryExtProto(ev::ObjectBuilder& proto) {
@@ -688,6 +732,7 @@ void populateTableExtNamespace(ev::ObjectBuilder& ns) {
     });
 
     populateTableInteropNamespace(ns);
+    populateTableIoExtNamespace(ns);
 }
 
 }  // namespace bro::bronze_host

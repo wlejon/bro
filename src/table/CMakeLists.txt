@@ -11,6 +11,17 @@ add_library(bro_table STATIC
     table_io_internal.h
     table_io_index.cpp
     table_io.cpp
+    table_io_bundle.h
+    table_io_bundle.cpp
+    table_codec.h
+    table_codec.cpp
+    table_ingest_csv.h
+    table_ingest_csv.cpp
+    table_ingest_parquet.h
+    table_parquet_internal.h
+    table_parquet_common.cpp
+    table_ingest_parquet.cpp
+    table_export_parquet.cpp
     table_reactive.h
     table_reactive.cpp
     table.h
@@ -67,6 +78,14 @@ if(BRO_BUILD_TESTS)
         bro_table
     )
     set_target_properties(bro_table_production_test PROPERTIES FOLDER "tests")
+
+    add_executable(bro_table_m2_test
+        tests/test_table_m2.cpp
+    )
+    target_link_libraries(bro_table_m2_test PRIVATE
+        bro_table
+    )
+    set_target_properties(bro_table_m2_test PROPERTIES FOLDER "tests")
 
     add_executable(bro_table_bench
         tests/bench_table.cpp

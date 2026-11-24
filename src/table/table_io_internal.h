@@ -1,6 +1,7 @@
 #pragma once
 
 #include "table/table.h"
+#include "table/table_io.h"
 
 #include <array>
 #include <cstdint>
@@ -14,9 +15,15 @@ namespace bro::table::io_internal {
 inline constexpr char kMagicV1[8] = {'B', 'R', 'O', 'T', 'B', 'L', '0', '1'};
 inline constexpr char kMagicV2[8] = {'B', 'R', 'O', 'T', 'B', 'L', '0', '2'};
 inline constexpr char kMagicV3[8] = {'B', 'R', 'O', 'T', 'B', 'L', '0', '3'};
+inline constexpr char kMagicV4[8] = {'B', 'R', 'O', 'T', 'B', 'L', '0', '4'};
 inline constexpr uint32_t kFormatVersionV1 = 1;
 inline constexpr uint32_t kFormatVersionV2 = 2;
 inline constexpr uint32_t kFormatVersionV3 = 3;
+inline constexpr uint32_t kFormatVersionV4 = 4;
+inline constexpr uint32_t kFlagLz4Compressed = 1u;
+inline constexpr uint8_t kColFlagHasNulls = 1u;
+inline constexpr uint8_t kColFlagFixedLz4 = 2u;
+inline constexpr uint8_t kColFlagStrLz4 = 4u;
 inline constexpr uint32_t kMaxCols = 4096;
 inline constexpr uint32_t kMaxChunks = 1048576;
 inline constexpr uint32_t kMaxDictEntries = 16777216;
@@ -210,5 +217,21 @@ bool parseIndexSectionV3(ByteCursor& cur,
 
 void applyPersistedIndexes(Table& tbl, const PersistedIndexSpecs& specs);
 void applyPersistedIndexesToSnapshot(TableSnapshot& snap, const PersistedIndexSpecs& specs);
+
+std::shared_ptr<const void> mapReadOnlyFileShared(const std::string& path,
+                                                  const uint8_t*& outData,
+                                                  size_t& outSize,
+                                                  std::string* outError);
+
+bool writeSnapshotStream(const TableSnapshot& snap, ByteSink& sink,
+                         const SaveOptions& opts, FileHeaderV3& outHdr);
+
+std::shared_ptr<TableSnapshot> parseSnapshotRange(const uint8_t* data, size_t size,
+                                                  std::shared_ptr<const void> owner,
+                                                  PersistedIndexSpecs* outIdxSpecs,
+                                                  bool verifyFullPayload,
+                                                  bool allowCompressed,
+                                                  uint32_t* outFormatVersion,
+                                                  std::string* err);
 
 }  // namespace bro::table::io_internal

@@ -154,8 +154,13 @@
 //   tbl.dirtyChunksSince(prevVersion);
 //   tbl.markChunkDirty(chunkIdx);
 //
-//   const rq = tbl.query().where(q.gt('hp', 50)).reactive();
-//   rq.onChange((ev) => { /* ev: { table, changed, version, recomputedChunks, reusedChunks } */ });
+//   const rq = tbl.query().where(q.gt('hp', 50)).reactive(); // supports filters, groupBy/agg, and inner/left join
+//   rq.onChange((ev) => { /* ev: { table, changed, version, recomputedChunks, reusedChunks, usedIncrementalAgg, usedIncrementalJoin } */ });
+//   // CSV / Parquet / Compressed v4 & Bundles:
+//   //   bro.table.fromCSV / fromCSVFile / fromParquet / fromParquetFile
+//   //   tbl.save(path, { compress: true }) / tbl.toBytes({ compress: true })
+//   //   tbl.saveParquet(path, { compress: 'lz4' }) / tbl.toParquetBytes({ compress: true })
+//   //   bro.table.saveBundle / loadBundle / mmapBundle
 //   tbl.updateRow(5000, { hp: 200 });
 //   if (rq.dirty()) {
 //       const res = rq.refresh(); // only recomputes dirty chunks!

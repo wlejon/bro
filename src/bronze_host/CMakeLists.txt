@@ -189,6 +189,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_table_ext.cpp
     host_table_interop.cpp
     host_table_gpu_pack.cpp
+    host_table_io_ext.cpp
 )
 
 # The physics and scene natives are bodies over src/physics and src/scene,

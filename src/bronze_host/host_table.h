@@ -149,6 +149,11 @@ void attachSnapshotExtProto(ev::ObjectBuilder& proto);
 void attachQueryExtProto(ev::ObjectBuilder& proto);
 void populateTableExtNamespace(ev::ObjectBuilder& ns);
 
+/// CSV / Parquet / Bundle IO hooks (implemented in host_table_io_ext.cpp).
+void attachTableIoExtProto(ev::ObjectBuilder& proto);
+void attachSnapshotIoExtProto(ev::ObjectBuilder& proto);
+void populateTableIoExtNamespace(ev::ObjectBuilder& ns);
+
 /// Kernel / Tensor zero-copy & bulk interop hooks (implemented in host_table_interop.cpp).
 void attachTableInteropProto(ev::ObjectBuilder& proto);
 void attachSnapshotInteropProto(ev::ObjectBuilder& proto);

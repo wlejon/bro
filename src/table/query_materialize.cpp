@@ -10,11 +10,6 @@ namespace bro::table {
 
 namespace {
 
-struct MatchPair {
-    RowLoc left{};
-    RowLoc right{UINT32_MAX, UINT32_MAX};
-};
-
 bool passesAll(const QueryPlan& plan, const std::vector<uint32_t>& flt,
                const TableSnapshot& left, uint32_t lc, uint32_t lr,
                const TableSnapshot* right, uint32_t rc, uint32_t rr) {
@@ -294,6 +289,60 @@ std::shared_ptr<Table> buildGroupedTable(const QueryPlan& plan, const TableSnaps
 }
 
 }  // namespace
+
+void buildRightJoinHashMap(const TableSnapshot& right, const JoinSpec& join,
+                           std::unordered_map<uint64_t, std::vector<RowLoc>>& out) {
+    buildRightHashMap(right, join, out);
+}
+
+std::shared_ptr<Table> buildTableFromMatchPairsImpl(
+    const QueryPlan& plan, const TableSnapshot& left, std::vector<MatchPair>& pairs) {
+    return buildTableFromMatchPairs(plan, left, pairs);
+}
+
+std::shared_ptr<Table> finalizeGroupedRowsImpl(
+    const QueryPlan& plan, const TableSnapshot& left,
+    std::vector<ColumnDef> outSchema, std::vector<std::vector<ScalarValue>> outRows) {
+    const TableSnapshot* right = (plan.join.kind != JoinSpec::Kind::None)
+                                     ? plan.join.rightTable.get()
+                                     : nullptr;
+    if (!plan.orderBy.empty()) {
+        auto findOutCol = [&](uint32_t exprId) -> int {
+            const ExprNode& en = plan.exprs.nodes[exprId];
+            if (en.op != ExprOp::ColRef) return -1;
+            for (size_t c = 0; c < outSchema.size(); ++c) {
+                if (outSchema[c].name == en.colName) return static_cast<int>(c);
+            }
+            return -1;
+        };
+        std::vector<size_t> perm(outRows.size());
+        for (size_t i = 0; i < perm.size(); ++i) perm[i] = i;
+        std::stable_sort(perm.begin(), perm.end(), [&](size_t a, size_t b) {
+            for (const OrderByItem& ob : plan.orderBy) {
+                int oc = findOutCol(ob.expr);
+                if (oc < 0) continue;
+                const int cmp = compareScalar(outRows[a][oc], outRows[b][oc]);
+                if (cmp != 0) return ob.descending ? (cmp > 0) : (cmp < 0);
+            }
+            return a < b;
+        });
+        std::vector<std::vector<ScalarValue>> sorted;
+        sorted.reserve(outRows.size());
+        for (size_t idx : perm) sorted.push_back(std::move(outRows[idx]));
+        outRows = std::move(sorted);
+    }
+
+    auto outTable = std::make_shared<Table>(std::move(outSchema));
+    if (!right) outTable->setSharedDict(left.dict);
+    const size_t start = static_cast<size_t>(std::max<int64_t>(0, plan.offset));
+    const size_t end = (plan.limit >= 0)
+                           ? std::min(outRows.size(), start + static_cast<size_t>(plan.limit))
+                           : outRows.size();
+    for (size_t i = start; i < end; ++i) {
+        outTable->appendRow(outRows[i]);
+    }
+    return outTable;
+}
 
 std::shared_ptr<Table> finishPlanFromLeftMatchesImpl(
     const QueryPlan& plan, const TableSnapshot& left,
