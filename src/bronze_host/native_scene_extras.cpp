@@ -205,6 +205,20 @@ double bro_scene_SceneNode_blendDistance_get(void* self) {
 void bro_scene_SceneNode_blendDistance_set(void* self, double v) {
     if (auto* iv = interiorVolumeOf(self)) iv->setBlendDistance(static_cast<float>(v));
 }
+double bro_scene_SceneNode_windowDepth_get(void* self) {
+    auto* iv = interiorVolumeOf(self);
+    return iv ? iv->windowDepth() : 0.0;
+}
+void bro_scene_SceneNode_windowDepth_set(void* self, double v) {
+    if (auto* iv = interiorVolumeOf(self)) iv->setWindowDepth(static_cast<float>(v));
+}
+double bro_scene_SceneNode_windowShare_get(void* self) {
+    auto* iv = interiorVolumeOf(self);
+    return iv ? iv->windowShare() : 0.0;
+}
+void bro_scene_SceneNode_windowShare_set(void* self, double v) {
+    if (auto* iv = interiorVolumeOf(self)) iv->setWindowShare(static_cast<float>(v));
+}
 bool bro_scene_SceneNode_affectExposure_get(void* self) {
     auto* iv = interiorVolumeOf(self);
     return iv ? iv->affectExposure() : true;

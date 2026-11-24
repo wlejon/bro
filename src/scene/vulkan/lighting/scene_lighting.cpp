@@ -236,8 +236,8 @@ void uploadLocalLightingData(const SceneRenderer& renderer, SceneGpu& gpu, const
             dst.boxBlend[3] = v.blendDistance();
             dst.vis[0] = v.skyVisibility();
             dst.vis[1] = v.sunVisibility();
-            dst.vis[2] = 0.0f;
-            dst.vis[3] = 0.0f;
+            dst.vis[2] = v.windowDepth();
+            dst.vis[3] = v.windowShare();
             const auto& ac = v.ambientColor();
             const float ai = v.ambientIntensity();
             dst.ambient[0] = ac.x * ai;

@@ -737,7 +737,14 @@ fn eval_enclosure(pos: vec3<f32>) -> local_lighting::Enclosure {
         let k = remain * w;
         sky_vis += vis.x * k;
         sun_vis += vis.y * k;
-        amb += col.xyz * k;
+        // Daylight through the sides' windows: (1 + share) of the fill at a
+        // side, falling to (1 - share) deep inside (vis.z m e-folding).
+        var through: f32 = 1.0;
+        if vis.z > 0.0 {
+            let e = (vec3<f32>(0.5, 0.5, 0.5) - abs(lp)) * box_blend.xyz;
+            through = 1.0 + vis.w * (2.0 * exp(-max(min(e.x, e.z), 0.0) / vis.z) - 1.0);
+        }
+        amb += col.xyz * (k * through);
         remain -= k;
         if (remain <= 0.001) { break; }
     }
@@ -1002,7 +1009,14 @@ pub fn ambient(s: Surface) -> vec3<f32> {
         }
     }
     let enc = eval_enclosure(s.position);
-    let env_fill = enc.ambient * diffuse_occ * s.base_color * (1.0 - s.metallic);
+    // A room's fill comes more from above (the lamps and the windows' light
+    // land on the floor; a ceiling sees only what the floor and walls send
+    // back): floors 1.35, walls 1, ceilings 0.65 of it.
+    var env_fill: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    if enc.ambient.x + enc.ambient.y + enc.ambient.z > 0.0 {
+        let up = select(atmosphere_on(), normalize(atmosphere::origin(lighting.atm, s.position)), vec3<f32>(0.0, 1.0, 0.0));
+        env_fill = enc.ambient * (1.0 + 0.35 * dot(ni, up)) * diffuse_occ * s.base_color * (1.0 - s.metallic);
+    }
     if atmosphere_on() {
         let sh = atmosphere::sky_light_sh(lighting.atm, atm_sky_light, linear, s.position);
         let irradiance = atmosphere::sh_irradiance(sh, ni) * enc.sky_vis + glow * enc.sun_vis;

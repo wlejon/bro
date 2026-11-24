@@ -97,6 +97,12 @@
     typed('blendDistance', isInteriorVolume,
         (n) => __bro_native.scene.SceneNode_blendDistance_get(n),
         (n, v) => __bro_native.scene.SceneNode_blendDistance_set(n, +v));
+    typed('windowDepth', isInteriorVolume,
+        (n) => __bro_native.scene.SceneNode_windowDepth_get(n),
+        (n, v) => __bro_native.scene.SceneNode_windowDepth_set(n, +v));
+    typed('windowShare', isInteriorVolume,
+        (n) => __bro_native.scene.SceneNode_windowShare_get(n),
+        (n, v) => __bro_native.scene.SceneNode_windowShare_set(n, +v));
     typed('affectExposure', isInteriorVolume,
         (n) => __bro_native.scene.SceneNode_affectExposure_get(n),
         (n, v) => __bro_native.scene.SceneNode_affectExposure_set(n, !!v));

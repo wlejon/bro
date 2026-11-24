@@ -299,6 +299,10 @@ bool registerSceneExtraNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_ambientIntensity_set", BRO_NATIVE_FN(bro_scene_SceneNode_ambientIntensity_set), "void", {N, "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_blendDistance_get", BRO_NATIVE_FN(bro_scene_SceneNode_blendDistance_get), "f64", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_blendDistance_set", BRO_NATIVE_FN(bro_scene_SceneNode_blendDistance_set), "void", {N, "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_windowDepth_get", BRO_NATIVE_FN(bro_scene_SceneNode_windowDepth_get), "f64", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_windowDepth_set", BRO_NATIVE_FN(bro_scene_SceneNode_windowDepth_set), "void", {N, "f64"}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_windowShare_get", BRO_NATIVE_FN(bro_scene_SceneNode_windowShare_get), "f64", {N}, error) &&
+           natives::fn("__bro_native.scene.SceneNode_windowShare_set", BRO_NATIVE_FN(bro_scene_SceneNode_windowShare_set), "void", {N, "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_affectExposure_get", BRO_NATIVE_FN(bro_scene_SceneNode_affectExposure_get), "bool", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_affectExposure_set", BRO_NATIVE_FN(bro_scene_SceneNode_affectExposure_set), "void", {N, "bool"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_emissiveColor_get", BRO_NATIVE_FN(bro_scene_SceneNode_emissiveColor_get), "f64[]", {N}, error) &&

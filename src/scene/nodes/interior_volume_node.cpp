@@ -70,7 +70,11 @@ InteriorEnclosureSample evaluateInteriorEnclosures(const std::vector<const Inter
         accSky += v->skyVisibility() * contrib;
         accSun += v->sunVisibility() * contrib;
         const bromath::Vec3 ac = v->ambientColor();
-        const float ai = v->ambientIntensity();
+        // (Daylight through the sides' windows, as lighting.bk's eval_enclosure takes it.)
+        float through = 1.0f;
+        if (v->windowDepth() > 0.0f)
+            through = 1.0f + v->windowShare() * (2.0f * std::exp(-std::max(std::min(ex, ez), 0.0f) / v->windowDepth()) - 1.0f);
+        const float ai = v->ambientIntensity() * through;
         accAmb = accAmb + bromath::Vec3{ac.x * ai * contrib, ac.y * ai * contrib, ac.z * ai * contrib};
         accW += contrib;
         if (accW >= 0.9999f) {

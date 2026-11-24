@@ -648,6 +648,10 @@ double bro_scene_SceneNode_ambientIntensity_get(void* self);
 void bro_scene_SceneNode_ambientIntensity_set(void* self, double v);
 double bro_scene_SceneNode_blendDistance_get(void* self);
 void bro_scene_SceneNode_blendDistance_set(void* self, double v);
+double bro_scene_SceneNode_windowDepth_get(void* self);
+void bro_scene_SceneNode_windowDepth_set(void* self, double v);
+double bro_scene_SceneNode_windowShare_get(void* self);
+void bro_scene_SceneNode_windowShare_set(void* self, double v);
 bool bro_scene_SceneNode_affectExposure_get(void* self);
 void bro_scene_SceneNode_affectExposure_set(void* self, bool v);
 

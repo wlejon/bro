@@ -321,7 +321,9 @@
  * Interior enclosure volume (box centered on its node, `size` / `scale` gives
  * world dimensions before rotation). Attenuates outdoor sky SH irradiance and
  * optionally outdoor sun, adds warm interior bounce fill, and couples to
- * `meter: 'incident'` exposure.
+ * `meter: 'incident'` exposure. The fill comes more from above, as a room's
+ * does (its lamps and windows light the floor, the ceiling sees the bounce):
+ * a floor gets 1.35 of it, a wall 1, a ceiling 0.65.
  * @typedef {Object} InteriorVolumeNodeOptions
  * @property {Array<number>|number} [size]
  * @property {Array<number>} [position]
@@ -330,6 +332,12 @@
  * @property {Array<number>|string} [ambientColor] - linear RGB or CSS string
  * @property {number} [ambientIntensity] - interior ambient fill luminance
  * @property {number} [blendDistance] - inward edge fade in world units (default 1.0)
+ * @property {number} [windowDepth] - daylight through windows in the box's
+ *   sides: the share `windowShare` of the fill enters at the sides and falls
+ *   off inward, e-folding over this many metres, so the fill is
+ *   (1 + windowShare) at a side and (1 - windowShare) deep inside (default 0:
+ *   uniform). Also properties of the node, as are the others.
+ * @property {number} [windowShare] - 0..1 (default 0)
  * @property {number} [priority] - higher overrides lower (default 0)
  * @property {boolean} [affectExposure] - couple to incident exposure meter (default true)
  */

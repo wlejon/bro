@@ -165,6 +165,8 @@
             if (d_opts.ambientColor !== undefined) node.ambientColor = d_opts.ambientColor;
             if (d_opts.ambientIntensity !== undefined) node.ambientIntensity = d_opts.ambientIntensity;
             if (d_opts.blendDistance !== undefined) node.blendDistance = d_opts.blendDistance;
+            if (d_opts.windowDepth !== undefined) node.windowDepth = d_opts.windowDepth;
+            if (d_opts.windowShare !== undefined) node.windowShare = d_opts.windowShare;
             if (d_opts.priority !== undefined) node.priority = d_opts.priority;
             if (d_opts.affectExposure !== undefined) node.affectExposure = d_opts.affectExposure;
         }

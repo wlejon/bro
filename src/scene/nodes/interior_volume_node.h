@@ -38,6 +38,15 @@ public:
     float blendDistance() const { return blendDistance_; }
     void setBlendDistance(float d) { blendDistance_ = d < 0.0f ? 0.0f : d; }
 
+    /// Daylight through windows in the sides: `windowShare` (0..1) of the
+    /// fill comes in at the box's sides and falls off inward, e-folding over
+    /// `windowDepth` metres: the fill is (1 + share) at a side, (1 - share)
+    /// deep inside. 0 depth: uniform.
+    float windowDepth() const { return windowDepth_; }
+    void setWindowDepth(float d) { windowDepth_ = d < 0.0f ? 0.0f : d; }
+    float windowShare() const { return windowShare_; }
+    void setWindowShare(float s) { windowShare_ = s < 0.0f ? 0.0f : (s > 1.0f ? 1.0f : s); }
+
     int priority() const { return priority_; }
     void setPriority(int p) { priority_ = p; }
 
@@ -50,6 +59,8 @@ private:
     bromath::Vec3 ambientColor_{1.0f, 0.90f, 0.76f};
     float ambientIntensity_ = 0.0f;
     float blendDistance_ = 1.0f;
+    float windowDepth_ = 0.0f;
+    float windowShare_ = 0.0f;
     int priority_ = 0;
     bool affectExposure_ = true;
 };

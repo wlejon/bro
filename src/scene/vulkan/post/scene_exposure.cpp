@@ -11,6 +11,8 @@
 #include "scene/vulkan/frame/scene_vk_pipeline.h"
 #include "scene/vulkan/lighting/scene_atmosphere.h"
 #include "scene/nodes/interior_volume_node.h"
+#include "scene/nodes/light_node.h"
+#include <algorithm>
 #include "exposure.bk.src.h"
 #include "util/log.h"
 
@@ -209,7 +211,42 @@ void SceneExposure::record(SceneFrame& frame, const SceneVkImage& hdr) {
             frame.renderer.frameInteriorVolumes(), frame.view.eye, true);
         ap.enclosureSunVis = enc.sunVisibility;
         ap.enclosureSkyVis = enc.skyVisibility;
-        ap.enclosureAmbientLux = 0.2126f * enc.ambient.x + 0.7152f * enc.ambient.y + 0.0722f * enc.ambient.z;
+        // A level meter faces up: the fill as a floor takes it (lighting.bk's
+        // env_fill, 1.35 of it from above), and inside, the room's own lamps
+        // on that level surface as they light it (a lamp's luminous
+        // intensity over the square of its distance, cosine and window as
+        // the lit shaders take them), weighted by how far in the eye is.
+        float lux = 1.35f * (0.2126f * enc.ambient.x + 0.7152f * enc.ambient.y + 0.0722f * enc.ambient.z);
+        if (enc.weight > 0.0f) {
+            float lamps = 0.0f;
+            const bromath::Vec3& eye = frame.view.eye;
+            for (const LightNode* l : frame.renderer.frameLights()) {
+                if (!l || l->kind() == LightNode::Kind::Directional) continue;
+                const bromath::Mat4& m = l->worldMatrix();
+                const bromath::Vec3 to{m.at(0, 3) - eye.x, m.at(1, 3) - eye.y, m.at(2, 3) - eye.z};
+                const float d = std::sqrt(bromath::vdot(to, to));
+                const float range = l->range();
+                if (d < 1e-4f || (range > 0.0f && d > range) || to.y <= 0.0f) continue;
+                float att = 1.0f / (d * d + 1.0f);
+                if (range > 0.0f) {
+                    const float t = d / range, win = std::clamp(1.0f - t * t * t * t, 0.0f, 1.0f);
+                    att *= win * win;
+                }
+                if (l->kind() == LightNode::Kind::Spot) {
+                    bromath::Vec3 dir = l->direction();
+                    const float len = std::sqrt(bromath::vdot(dir, dir));
+                    if (len > 1e-6f) dir = dir * (1.0f / len);
+                    const float c = -bromath::vdot(to, dir) / d, ci = std::cos(l->innerAngle()), co = std::cos(l->outerAngle());
+                    const float s = std::clamp((c - co) / std::max(ci - co, 1e-4f), 0.0f, 1.0f);
+                    att *= s * s * (3.0f - 2.0f * s);
+                }
+                const bromath::Vec3& c = l->color();
+                lamps += (0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z) * l->intensity() * att * (to.y / d);
+            }
+            // (π: env_fill is a luminance a unit albedo; lux / π is the same scale.)
+            lux += enc.weight * lamps / 3.14159265f;
+        }
+        ap.enclosureAmbientLux = lux;
     } else {
         ap.enclosureSunVis = 1.0f;
         ap.enclosureSkyVis = 1.0f;

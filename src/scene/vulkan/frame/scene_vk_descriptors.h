@@ -53,7 +53,7 @@ struct alignas(16) SceneInteriorVolumeGpu {
     alignas(16) float worldToLocalRow1[4];
     alignas(16) float worldToLocalRow2[4];
     alignas(16) float boxBlend[4];   // xyz = world axis sizes, w = blendDistance
-    alignas(16) float vis[4];        // x = skyVisibility, y = sunVisibility, zw = 0
+    alignas(16) float vis[4];        // x = skyVisibility, y = sunVisibility, z = windowDepth, w = windowShare
     alignas(16) float ambient[4];    // rgb = linear ambientColor * ambientIntensity, a = 0
 };
 static_assert(sizeof(SceneInteriorVolumeGpu) == 96);
