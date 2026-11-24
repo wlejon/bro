@@ -73,6 +73,7 @@ constexpr uint32_t kReceivesShadow = 256;
 constexpr uint32_t kTwoSided = 512;
 constexpr uint32_t kHasTangents = 4096;
 constexpr uint32_t kCoverage = 8192;    // alpha is coverage (alpha to coverage), not cut
+constexpr uint32_t kTranslucent = 16384; // blended: colour premultiplied, the reflection whole
 /// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
 constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }

@@ -170,8 +170,8 @@ void PassOverlay::record(SceneFrame& frame) {
     for (uint32_t i : frame.lists.overlay) {
         MeshDraw draw = frame.lists.meshes[i];
         draw.translucent = true;   // blended, depth tested, no depth write
-        draw.push.pbrParams[3] =
-            static_cast<float>(static_cast<uint32_t>(draw.push.pbrParams[3]) & ~mesh_flags::kReflectance);
+        draw.push.pbrParams[3] = static_cast<float>(
+            (static_cast<uint32_t>(draw.push.pbrParams[3]) & ~mesh_flags::kReflectance) | mesh_flags::kTranslucent);
         gpu.meshes.record(cmd, target, cameraSet, frame.lightingSet, draw);
     }
 
@@ -193,7 +193,7 @@ void PassOverlay::record(SceneFrame& frame) {
         draw.push.emissive[3] = gizmo->emissive();
         draw.push.pbrParams[0] = 0.0f;   // metallic
         draw.push.pbrParams[1] = 1.0f;   // roughness
-        draw.push.pbrParams[3] = static_cast<float>(mesh_flags::kUnlit);
+        draw.push.pbrParams[3] = static_cast<float>(mesh_flags::kUnlit | mesh_flags::kTranslucent);
         gpu.meshes.record(cmd, target, cameraSet, frame.lightingSet, draw);
         frame.drewContent = true;
     }

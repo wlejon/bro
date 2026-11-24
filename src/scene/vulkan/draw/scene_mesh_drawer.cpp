@@ -673,6 +673,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     uint32_t flags = mesh_flags::vertexColor(node.vertexColorMode());
     // Only opaque draws write the SSR mask: translucents blend over it after SSR.
     if (frame.ssr && !out.translucent) flags |= mesh_flags::kReflectance;
+    if (out.translucent) flags |= mesh_flags::kTranslucent;
     flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
@@ -765,6 +766,7 @@ bool SceneMeshDrawer::prepareProcedural(SceneFrame& frame, InstancedMeshNode& no
     uint32_t flags = mesh_flags::vertexColor(out.kind == MeshKind::Scatter && node.vertexColorTintEnabled() ? 1 : 0);
     // Only opaque draws write the SSR mask: translucents blend over it after SSR.
     if (frame.ssr && !out.translucent) flags |= mesh_flags::kReflectance;
+    if (out.translucent) flags |= mesh_flags::kTranslucent;
     flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;
@@ -864,6 +866,7 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     uint32_t flags = mesh_flags::vertexColor(node.useVertexColorForDraw() ? 1 : 0);
     // Only opaque draws write the SSR mask: translucents blend over it after SSR.
     if (frame.ssr && !out.translucent) flags |= mesh_flags::kReflectance;
+    if (out.translucent) flags |= mesh_flags::kTranslucent;
     flags |= resolveShade(node, out);
     if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
     if (out.twoSided) flags |= mesh_flags::kTwoSided;

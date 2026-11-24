@@ -43,6 +43,9 @@ pub const HAS_TANGENTS: u32       = 4096u;
 // Alpha to coverage: the alpha written is the share of the samples covered,
 // so nothing is cut at the alpha cutoff (and alpha is not the SSR mask).
 pub const COVERAGE: u32           = 8192u;
+// Drawn blended: the colour written is premultiplied, the body (what alpha
+// covers) times alpha and the reflection over it whole, as glass is.
+pub const TRANSLUCENT: u32        = 16384u;
 pub const VERTEX_COLOR_SHIFT: u32 = 10u;
 
 @binding(2, 0) pub var albedo_map: sampler2d<vec4<f32>>;
@@ -449,6 +452,9 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
         } else if ((fl & REFLECTANCE) != 0u) {
             out_a = 0.0;
         }
+        if ((fl & TRANSLUCENT) != 0u) {
+            color *= out_a;
+        }
         return FragOut {
             color: vec4<f32>(min(color, vec3<f32>(scene::HDR_MAX)), out_a),
             indirect: vec4<f32>(0.0),
@@ -486,6 +492,16 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     }
     indirect *= veg_ao;
     var color: vec3<f32> = lighting::direct_light(ls) + indirect + s_in.emissive;
+    // A blended surface's reflection: its light with no body (black, a
+    // dielectric's 4 % at normal incidence and more at grazing), written
+    // whole over what shows through rather than thinned by alpha.
+    var reflection: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    if ((fl & TRANSLUCENT) != 0u) {
+        var bare = ls;
+        bare.base_color = vec3<f32>(0.0, 0.0, 0.0);
+        bare.metallic = 0.0;
+        reflection = lighting::direct_light(bare) + lighting::ambient(bare);
+    }
 
     var alpha: f32 = s_in.alpha;
     if ((fl & REFLECTANCE) != 0u && (fl & COVERAGE) == 0u) {
@@ -505,6 +521,10 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
         color *= shade;
         indirect *= shade;
     }
+    if ((fl & TRANSLUCENT) != 0u) {
+        let r = min(reflection * air.transmittance, color);
+        color = (color - r) * alpha + r;
+    }
 
     if (scene::debug_view() != 0) {
         color = debug_pixel(s_in.debug, ls.normal, ls.view, ls.base_color, ls.roughness, ls.metallic, push.emissive.xyz);
@@ -519,6 +539,9 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
             }
         } else if ((fl & REFLECTANCE) != 0u && (fl & COVERAGE) == 0u) {
             alpha = 0.0;
+        }
+        if ((fl & TRANSLUCENT) != 0u) {
+            color *= alpha;
         }
     }
 
