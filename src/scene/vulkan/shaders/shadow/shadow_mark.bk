@@ -3,8 +3,10 @@
 // back to a camera-relative position, and for each shadowed light sets the
 // request bit of every page the lit shaders' lookup of that point wants
 // (common/lighting.bk's light_shadow): the sun's clipmap level its footprint
-// picks (or the first coarser one whose window holds it) and the guard
-// SP_GUARD_LEVELS coarser, and the search level and the two finer (a wide
+// picks (or the first coarser one whose window holds it), the next coarser
+// at the top of its band (where the lookup fades into it) and the next finer
+// at the bottom (an approach's next), the guard SP_GUARD_LEVELS coarser, and
+// the search level and the two finer (a wide
 // penumbra's); a local light's mip and its one-page top. A point near its
 // page's edge marks the neighbour the filter and the normal offset may reach.
 
@@ -121,11 +123,22 @@ fn shadow_mark() {
         if (!(l.w > 0.0 && dist > l.w)) {
             if (kind == 0) {
                 let lf = log2(max(footprint / u.view.z, 1.0e-9));
-                var level: i32 = clamp(floor(lf) as i32, 0, count - 1);
+                let want = clamp(floor(lf) as i32, 0, count - 1);
+                var level: i32 = want;
                 while (level < count && !mark_clipmap(first + level, pos)) {
                     level += 1;
                 }
                 if (level < count) {
+                    // The next level, which the top of the band fades into,
+                    // and near its bottom the finer one an approach is about
+                    // to want (drawn before it is shown, not after).
+                    let fr = lf - (level as f32);
+                    if (fr > 0.7 && level + 1 < count) {
+                        mark_clipmap(first + level + 1, pos);
+                    }
+                    if (level == want && level > 0 && fr < 0.3) {
+                        mark_clipmap(first + level - 1, pos);
+                    }
                     mark_clipmap(first + min(level + SP_GUARD_LEVELS, count - 1), pos);
                     let search = u.soft.x as i32;
                     if (search >= 0 && level < search) {

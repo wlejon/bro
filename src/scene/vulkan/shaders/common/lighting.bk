@@ -476,27 +476,92 @@ fn shadow_overlay_at(hit: ShadowHit, ref_z: f32, spread: f32) -> f32 {
     return shadow_filter_overlay(first, first + hit.in_page, 1.0 / (shadow_overlay.size(0).x as f32), ref_z, -abs(spread));
 }
 
+// The point a sun lookup is for, in light space (level 0's window), and its
+// receiver plane: `g` the depth (m) the surface gains a metre across the
+// light (-(n.a, n.b) / n.c, at most 3: a grazing surface's), so each tap of
+// the filter compares against the plane's depth where it falls, not the
+// centre's. A planar receiver needs no more bias than its quantisation, so a
+// coarse level's shadow keeps every caster taller than a texel or so (a lift
+// of a texel or two would lose a house whole at the levels a city is seen
+// from), and the levels agree.
 struct SunProbe {
     p: vec3<f32>,
     n: vec3<f32>,
     sin_t: f32,
+    g: vec2<f32>,
 }
 
 fn sun_probe(first: i32, pos: vec3<f32>, n: vec3<f32>, n_dot_l: f32) -> SunProbe {
     let m = lighting.shadow_maps[first].matrix;
+    let ln = scene::mul4(m, vec4<f32>(n, 0.0)).xyz;
+    let sxy = length(vec3<f32>(m[0].x, m[1].x, m[2].x));
+    let sz = length(vec3<f32>(m[0].z, m[1].z, m[2].z));
+    var g = vec2<f32>(0.0, 0.0);
+    if ln.z < -1e-6 * sz {
+        g = -(ln.xy / sxy) / (ln.z / sz);
+        let gl = length(g);
+        if gl > 3.0 { g *= 3.0 / gl; }
+    }
     return SunProbe {
         p: scene::mul4(m, vec4<f32>(pos, 1.0)).xyz,
-        n: scene::mul4(m, vec4<f32>(n, 0.0)).xyz,
+        n: ln,
         sin_t: sqrt(max(1.0 - n_dot_l * n_dot_l, 0.0)),
+        g: g,
     };
+}
+
+// One tap of a sun page: the 2x2 texels about texel position `t` (the
+// pool's texels), each compared against the receiver plane at the quad's
+// centre less half the quad's depth across it (`slack`), weighted bilinearly.
+fn sun_tap(lo: vec2<f32>, hi: vec2<f32>, t: vec2<f32>, t0: vec2<f32>, ref_z: f32, grad: vec2<f32>, slack: f32) -> f32 {
+    let tc = clamp(t, lo, hi);
+    let g0 = floor(tc - 0.5);
+    let f = tc - 0.5 - g0;
+    let c = g0 + 1.0;
+    let r = ref_z + dot(grad, c - t0) - slack;
+    let v = shadow_pool.gather(shadow_compare, c * lighting.params.z, r);
+    return mix(mix(v.w, v.z, f.x), mix(v.x, v.y, f.x), f.y);
+}
+
+// A sun page filtered on the receiver plane (shadow_filter_page's taps).
+fn sun_page_at(first: i32, level: i32, hit: ShadowHit, sp: SunProbe, spread: f32) -> f32 {
+    let map0 = lighting.shadow_maps[first];
+    let texel_w = map0.bias.z * exp2(level as f32);
+    let grad = sp.g * (texel_w / max(map0.depth.y - map0.depth.x, 0.000001));
+    let slack = 0.5 * (abs(grad.x) + abs(grad.y));
+    let pf = shadow_page_first(hit);
+    let t0 = pf + hit.in_page;
+    let lo = pf - (SP_BORDER as f32) + 1.0;
+    let hi = pf + ((SP_PAGE + SP_BORDER) as f32) - 1.0;
+    let hk = ((lighting.params.y as i32) - 1) / 2;
+    if hk <= 0 || spread == 0.0 {
+        return sun_tap(lo, hi, t0, t0, hit.ref_z, grad, slack);
+    }
+    if spread < 0.0 {
+        let o = -spread * 0.5 * (hk as f32);
+        return 0.25 * (sun_tap(lo, hi, t0 + vec2<f32>(-o, -o), t0, hit.ref_z, grad, slack) +
+                       sun_tap(lo, hi, t0 + vec2<f32>( o, -o), t0, hit.ref_z, grad, slack) +
+                       sun_tap(lo, hi, t0 + vec2<f32>(-o,  o), t0, hit.ref_z, grad, slack) +
+                       sun_tap(lo, hi, t0 + vec2<f32>( o,  o), t0, hit.ref_z, grad, slack));
+    }
+    var s: f32 = 0.0;
+    for (var y: i32 = -hk; y <= hk; y += 1) {
+        for (var x: i32 = -hk; x <= hk; x += 1) {
+            s += sun_tap(lo, hi, t0 + vec2<f32>(x as f32, y as f32) * spread, t0, hit.ref_z, grad, slack);
+        }
+    }
+    let side = (2 * hk + 1) as f32;
+    return s / (side * side);
 }
 
 fn sun_locate(first: i32, level: i32, sp: SunProbe) -> ShadowHit {
     let map0 = lighting.shadow_maps[first];
     let scale = exp2(-(level as f32));
     let texel_w = map0.bias.z / scale;
-    let n_off = map0.bias.y + texel_w * (0.5 + sp.sin_t);
-    let b_world = texel_w * (0.3 + 0.5 * sp.sin_t);
+    // A quarter texel off the surface and a fifth of one in depth: what the
+    // depth's rasterisation and precision take; the plane does the rest.
+    let n_off = map0.bias.y + texel_w * 0.25 * sp.sin_t;
+    let b_world = texel_w * 0.2;
     let q = sp.p + sp.n * n_off;
     let map = lighting.shadow_maps[first + level];
     let pc = (q.xy * scale + (map.matrix[3].xy - scale * map0.matrix[3].xy)) * (SP_WINDOW as f32);
@@ -570,7 +635,17 @@ pub fn light_shadow(i: i32, pos: vec3<f32>, cam_dist: f32, light_dist: f32, n: v
             }
             if level < 0 { return 1.0; }
         }
-        var s: f32 = shadow_page_at(hit, hit.ref_z, spread * exp2(clamp(lf - (level as f32), 0.0, 1.0)));
+        var s: f32 = sun_page_at(first, level, hit, sp, spread * exp2(clamp(lf - (level as f32), 0.0, 1.0)));
+        // The top of a level's band fades into the next level (its filter
+        // there is the same width in metres), so no ring shows where one
+        // gives way to the next.
+        let up = smoothstep(0.7, 1.0, lf - (level as f32));
+        if level == want && up > 0.0 && level + 1 < count {
+            let nh = sun_locate(first, level + 1, sp);
+            if nh.valid && (nh.page & SP_RESIDENT) != 0u {
+                s = mix(s, sun_page_at(first, level + 1, nh, sp, spread), up);
+            }
+        }
         let sway = min(lighting.shadow_view.w as i32, count - 1);
         if s > 0.0 && sway >= 0 {
             if level < sway {
