@@ -327,7 +327,10 @@
  * optionally outdoor sun, adds warm interior bounce fill, and couples to
  * `meter: 'incident'` exposure. The fill comes more from above, as a room's
  * does (its lamps and windows light the floor, the ceiling sees the bounce):
- * a floor gets 1.35 of it, a wall 1, a ceiling 0.65.
+ * a floor gets 1.35 of it, a wall 1, a ceiling 0.65. A surface is taken
+ * 5 cm along its normal, so it belongs to the side it faces: a roof facing up
+ * out of a volume whose top it lies just under is outdoors, the ceiling under
+ * it, facing down, in.
  * @typedef {Object} InteriorVolumeNodeOptions
  * @property {Array<number>|number} [size]
  * @property {Array<number>} [position]
