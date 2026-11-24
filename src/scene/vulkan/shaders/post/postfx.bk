@@ -385,8 +385,10 @@ fn ssao_view_pos(inv_proj: mat4f, uv: vec2<f32>, d: f32) -> vec3<f32> {
     let p = ssao_view_pos(ubo.inv_proj, in_uv, d0);
     let dp_dx = dpdx(p);
     let dp_dy = dpdy(p);
+    // Facing the eye (at the view origin): not n.z > 0, which turns the
+    // ground's normal into the ground when the view looks up.
     var n: vec3<f32> = normalize(cross(dp_dx, dp_dy));
-    if (n.z < 0.0) {
+    if (dot(n, p) > 0.0) {
         n = -n;
     }
 
