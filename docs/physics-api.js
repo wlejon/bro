@@ -209,7 +209,9 @@
 
 /**
  * maxBodies (default 10240) sizes the world's body tables up front and is
- * clamped to [1, 2^20]. contactBufferSize (default 4096) is the per-step
+ * clamped to [1, 2^20]; the body pairs (4 a body) and contact constraints
+ * (2 a body) Jolt keeps per step scale with it, up to 65536 and 32768.
+ * contactBufferSize (default 4096) is the per-step
  * contact-event buffer, clamped to [16, 65536]; events past it are dropped.
  * @typedef {Object} PhysicsWorldOptions
  * @property {PhysicsVec3} [gravity]

@@ -88,7 +88,9 @@ bool PhysicsWorld::init(int maxBodies, int contactCapacity) {
 
     ensureJoltInit();
 
-    tempAllocator_ = std::make_unique<TempAllocatorImpl>(10 * 1024 * 1024);
+    // (Each step's contacts and islands come from here: a big world's too.)
+    tempAllocator_ = std::make_unique<TempAllocatorImpl>(
+        10 * 1024 * 1024 + static_cast<size_t>(std::min(maxBodies, 65536)) * 1024);
     jobSystem_ = std::make_unique<JobSystemThreadPool>(
         cMaxPhysicsJobs, cMaxPhysicsBarriers,
         std::max(1u, std::thread::hardware_concurrency() - 2));
@@ -108,10 +110,13 @@ bool PhysicsWorld::init(int maxBodies, int contactCapacity) {
     // BEFORE handing pointers to PhysicsSystem (which caches them).
     rebuildLayerFilters();
 
+    // Pairs and contact constraints scale with the bodies: a pile of rubble
+    // keeps every piece touching several others, and past these Jolt drops
+    // contacts (pieces sink through one another).
     physicsSystem_.Init(
         (uint)maxBodies, 0,
-        (uint)std::min(maxBodies, 4096),       // max body pairs
-        (uint)std::min(maxBodies * 2, 4096),   // max contact constraints
+        (uint)std::clamp(maxBodies * 4, 1024, 65536),   // max body pairs
+        (uint)std::clamp(maxBodies * 2, 1024, 32768),   // max contact constraints
         *layers_->bpLayerInterface,
         *layers_->objectVsBpFilter,
         *layers_->objectFilter);
