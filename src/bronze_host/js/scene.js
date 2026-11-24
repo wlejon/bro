@@ -689,6 +689,14 @@
         if (format < 0) throw new RangeError("setShaderTexture: format is 'float32', 'unorm8', 'unorm16' or 'float16'");
         const isSub = opts.x !== undefined || opts.y !== undefined;
         const x = opts.x || 0, y = opts.y || 0, w = opts.width || 0, h = opts.height || 0;
+        // Bytes (a decoded image's): 0-255 read as 0 to 1, kept as 'unorm8'.
+        if (opts.data instanceof Uint8Array || opts.data instanceof Uint8ClampedArray) {
+            if (isSub) throw new TypeError("setShaderTexture: bytes write a whole slot, not a sub-rect");
+            if (opts.format !== undefined && opts.format !== 'unorm8') throw new RangeError("setShaderTexture: bytes are kept as 'unorm8'");
+            __bro_native.scene.SceneNode_setShaderTextureBytes(this, name, w, h, opts.data, !!opts.mipmap, !!opts.repeat,
+                                                               layers, volume, opts.channels || 1);
+            return this;
+        }
         const data = opts.data ? (opts.data instanceof Float32Array ? opts.data : Float32Array.from(opts.data)) : EMPTY_F32;
         __bro_native.scene.SceneNode_setShaderTexture(this, name, x, y, w, h, data, !!opts.mipmap, isSub,
                                                       !!opts.repeat, layers, volume, opts.channels || 1, format);

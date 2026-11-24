@@ -782,7 +782,9 @@ class SceneNode {
    * (the unorm ones clamped to 0 to 1): an RGBA atlas at 'unorm8' is a
    * quarter of the bytes each fetch reads, which shows where many layers of
    * a node sample it (a forest of impostors). Sub-rectangle and slice writes
-   * keep the slot's format.
+   * keep the slot's format. `data` as a Uint8Array (a decoded image's
+   * bytes, 0-255 read as 0 to 1) writes a whole slot kept as 'unorm8',
+   * with no float array made for it.
    *
    * With `buffer` (a KernelBuffer) in place of `data`, the slot's texels are
    * the buffer's: width * height (* layers or depth) texels of `channels` floats (1,
@@ -806,7 +808,7 @@ class SceneNode {
    * above 1 without `layers`. Returns the node.
    *
    * @param {string} name
-   * @param {{data?: Float32Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, depth?: number, channels?: number, format?: 'float32'|'unorm8'|'unorm16'|'float16', atlas?: number}} opts
+   * @param {{data?: Float32Array|Uint8Array|number[], buffer?: KernelBuffer, width: number, height: number, x?: number, y?: number, mipmap?: boolean, repeat?: boolean, layers?: number, depth?: number, channels?: number, format?: 'float32'|'unorm8'|'unorm16'|'float16', atlas?: number}} opts
    * @returns {SceneNode}
    * @example
    * // A kernel's 256 x 256 x 4 field of (amount, variance), read as .xy:

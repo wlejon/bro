@@ -600,6 +600,19 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
     return false;
 }
 
+// A whole slot from bytes (0-255 read as 0 to 1), kept as 'unorm8': what a
+// decoded image holds, with no float array made for it in script.
+bool bro_scene_SceneNode_setShaderTextureBytes(void* self, const char* name, int32_t width, int32_t height,
+                                               const uint8_t* data, uint32_t dataCount,
+                                               bool mipmap, bool repeat, int32_t layers, bool volume,
+                                               int32_t channels) {
+    std::vector<float> f(data ? dataCount : 0);
+    for (size_t i = 0; i < f.size(); ++i) f[i] = static_cast<float>(data[i]) * (1.0f / 255.0f);
+    return bro_scene_SceneNode_setShaderTexture(self, name, 0, 0, width, height, f.data(),
+                                                static_cast<uint32_t>(f.size()), mipmap, false, repeat,
+                                                layers, volume, channels, 1);
+}
+
 }  // extern "C"
 
 namespace {
