@@ -398,7 +398,9 @@ fn ssao_view_pos(inv_proj: mat4f, uv: vec2<f32>, d: f32) -> vec3<f32> {
     let b = cross(n, t);
 
     let radius = ubo.params.x;
-    let bias = ubo.params.y;
+    // The bias grows with the distance, as the reconstructed depth's error
+    // does, so a far plane, a few pixels per radius, does not occlude itself.
+    let bias = ubo.params.y + abs(p.z) * 0.004;
 
     var occlusion: f32 = 0.0;
     for (var i: i32 = 0; i < 16; i += 1) {
