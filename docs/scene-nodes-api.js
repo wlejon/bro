@@ -44,7 +44,11 @@
  * @property {Mesh} [data] - Alias of `mesh` for a Mesh object.
  * @property {SceneGeometry} [geometry] - Shared geometry (`scene.createGeometry`): drawn with no copy of
  *   its own and uploaded once for every node drawing it; wins over `mesh` / `data`.
- * @property {string|Array<number>} [color] - CSS colour or [r, g, b(, a)] in 0..1.
+ * @property {string|Array<number>} [color] - CSS colour or [r, g, b(, a)] in 0..1. An alpha
+ *   below 1 draws the mesh blended after the opaque pass (sorted far to near, depth
+ *   tested, no depth write): its lit body covers `a` of what is behind, and its specular
+ *   reflection (a dielectric's Fresnel of the sky, probes and lights) is added whole, as a
+ *   glass pane's is. Screen-space reflections are not traced for it.
  * @property {{metallic?: number, roughness?: number}} [material] - PBR params; the flat keys below win.
  * @property {number} [metallic]
  * @property {number} [roughness]
