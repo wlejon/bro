@@ -99,6 +99,9 @@ pub struct Surface {
     // Lit as foliage (> 0.5): the leaf terms a vegetation leaf gets
     // (translucency, wrapped diffuse, its shadow floor and view floor).
     leaf: f32,
+    // How much light the surface passes through itself (the node's
+    // `subsurface` until a hook sets it: one draw of leaves and bark).
+    subsurface: f32,
 }
 
 pub struct FragOut {
@@ -122,6 +125,7 @@ pub fn debug(s: Surface, rgb: vec3<f32>) -> Surface {
         to_sun: s.to_sun,
         debug: vec4<f32>(rgb, 1.0),
         leaf: s.leaf,
+        subsurface: s.subsurface,
     };
 }
 
@@ -354,8 +358,21 @@ pub fn cost_heatmap(t_in: f32) -> vec3<f32> {
 
 pub fn debug_pixel(debug_col: vec4<f32>, n: vec3<f32>, view: vec3<f32>,
                      base_color: vec3<f32>, roughness: f32, metallic: f32,
-                     id_rgb: vec3<f32>) -> vec3<f32> {
+                     id_rgb: vec3<f32>, s: Surface, world_pos: vec3<f32>) -> vec3<f32> {
     let dv = scene::debug_view();
+    // The surface's other fields as its hook left them (what an impostor's
+    // bake captures, impostor.js): 8 sky_visibility, 9 leaf, 10 view_depth
+    // (along the camera's forward, 0 at its near plane to 1 at its far).
+    if (dv == 8) {
+        return vec3<f32>(clamp(s.sky_visibility, 0.0, 1.0));
+    }
+    if (dv == 9) {
+        return vec3<f32>(clamp(s.leaf, 0.0, 1.0));
+    }
+    if (dv == 10) {
+        let z = -scene::view_pos(world_pos).z;
+        return vec3<f32>(clamp((z - scene::camera.viewport.z) / max(scene::camera.viewport.w - scene::camera.viewport.z, 1e-6), 0.0, 1.0));
+    }
     if (dv == 6 || dv == 7) {
         return id_rgb;
     }
@@ -425,6 +442,7 @@ pub fn prepare_surface(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, i
         to_sun: lighting::to_sun(),
         debug: vec4<f32>(0.0, 0.0, 0.0, -1.0),
         leaf: 0.0,
+        subsurface: push.extra.y,
     };
 }
 
@@ -436,7 +454,7 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     if ((fl & UNLIT) != 0u) {
         var color: vec3<f32> = s_in.base_color * air.transmittance + air.inscatter;
         if (scene::debug_view() != 0) {
-            color = debug_pixel(s_in.debug, geom_n, normalize(-world_pos), s_in.base_color, s_in.roughness, s_in.metallic, push.emissive.xyz);
+            color = debug_pixel(s_in.debug, geom_n, normalize(-world_pos), s_in.base_color, s_in.roughness, s_in.metallic, push.emissive.xyz, s_in, world_pos);
         } else if ((fl & SHADE_MAP) != 0u && lighting::lighting.shade_origin.w > 0.5) {
             color *= lighting::cell_shade(world_pos, geom_n);
         }
@@ -465,7 +483,7 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     let sky_n = dot(s_in.sky_normal, s_in.sky_normal) > 0.0001 ? normalize(s_in.sky_normal) : n;
     var translucency: f32 = 0.0;
     if (veg_leaf || s_in.leaf > 0.5) {
-        translucency = push.extra.y > 0.0 ? min(1.4 * push.extra.y, 1.0) : 0.6;
+        translucency = s_in.subsurface > 0.0 ? min(1.4 * s_in.subsurface, 1.0) : 0.6;
     }
     let ls = lighting::Surface {
         position: world_pos,
@@ -477,7 +495,7 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
         roughness: clamp(s_in.roughness, 0.04, 1.0),
         receives_shadow: (fl & RECEIVES_SHADOW) != 0u,
         two_sided: (fl & TWO_SIDED) != 0u,
-        subsurface: push.extra.y,
+        subsurface: clamp(s_in.subsurface, 0.0, 1.0),
         translucency: translucency,
         sun_visibility: clamp(s_in.sun_visibility, 0.0, 1.0),
         sky_visibility: clamp(s_in.sky_visibility, 0.0, 1.0),
@@ -527,7 +545,7 @@ pub fn finish_surface(push: Push, world_pos: vec3<f32>, geom_n: vec3<f32>, in_uv
     }
 
     if (scene::debug_view() != 0) {
-        color = debug_pixel(s_in.debug, ls.normal, ls.view, ls.base_color, ls.roughness, ls.metallic, push.emissive.xyz);
+        color = debug_pixel(s_in.debug, ls.normal, ls.view, ls.base_color, ls.roughness, ls.metallic, push.emissive.xyz, s_in, world_pos);
         indirect = vec3<f32>(0.0);
         if (scene::debug_view() == 6) {
             alpha = 1.0;
@@ -601,6 +619,7 @@ pub fn shade_veg_surface(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>,
         to_sun: s0.to_sun,
         debug: s0.debug,
         leaf: s0.leaf,
+        subsurface: s0.subsurface,
     };
 }
 
@@ -641,6 +660,7 @@ pub fn shade_bark(push: Push, world_pos: vec3<f32>, in_normal: vec3<f32>, in_uv:
         to_sun: s0.to_sun,
         debug: s0.debug,
         leaf: s0.leaf,
+        subsurface: s0.subsurface,
     };
     return finish_surface(push, world_pos, normalize(in_normal), in_uv, s, in_veg_shade.w < 0.0, veg_ao);
 }

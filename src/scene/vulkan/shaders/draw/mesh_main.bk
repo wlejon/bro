@@ -749,6 +749,7 @@ fn prep_light_surface(s: mesh::Surface) -> mesh::Surface {
         to_sun: s.to_sun,
         debug: s.debug,
         leaf: s.leaf,
+        subsurface: s.subsurface,
     };
 }
 

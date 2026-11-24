@@ -599,8 +599,9 @@ class SceneNode {
    * to import; `uniforms` gives initial uniform values by field name). Registered
    * as `hook` beside the engine's modules (`src/scene/vulkan/shaders/common/*.bk`,
    * `draw/mesh.bk`) and compiled in process by brass (`scene`, `atmosphere`,
-   * `lighting`, `custom`, `vegetation`, `procedural`, `bark`, `mesh` and `hook`
-   * are the engine's module names and refused in `modules`).
+   * `lighting`, `custom`, `vegetation`, `procedural`, `bark`, `impostor`, `mesh`
+   * and `hook` are the engine's module names and refused in `modules`;
+   * `impostor` draws what `SceneGraph.bakeImpostor` bakes, scene-api.js).
    *
    * A mesh hook (`createMesh`, `createSkinnedMesh`, `createInstancedMesh`) may
    * export any combination of:
@@ -623,7 +624,9 @@ class SceneNode {
    * the surface is lit as a vegetation leaf is (light through it from
    * behind, diffuse wrapped past the terminator, its shadow never darker
    * than 0.1, its ambient taken at no less than a 0.6 view angle): foliage a
-   * hook draws itself, such as a tree impostor.
+   * hook draws itself, such as a tree impostor. `s.subsurface` starts as the
+   * node's `subsurface` and may be set a pixel at a time, for one draw of
+   * leaves and bark.
    *
    * `light` runs after `fragment` with `l.to_sun` (unit direction to the sun:
    * the atmosphere's, else the first directional light) and initial values

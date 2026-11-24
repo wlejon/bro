@@ -897,6 +897,11 @@ class SceneGraph {
    * all grey. The views are the debugging lens on a world's own data (the
    * share of a cell under water, a tile's level, a march's step count),
    * shown without editing its shaders. null (or '') shows none.
+   *
+   * The engine's own views show a mesh surface's fields as its hook left
+   * them: `albedo`, `normals` (world space, 0.5 + 0.5 n), `roughness`,
+   * `metallic`, `sky_visibility`, `leaf`, and `view_depth` (along the
+   * camera's forward, 0 at its near plane to 1 at its far).
    * @param {string|null} name
    * @example
    *   scene.setDebugView('water');  // a module: if (SCENE_DEBUG(water)) { out.debug = vec4<f32>(vec3<f32>(share), 1.0); }
@@ -1152,6 +1157,58 @@ class SceneGraph {
    * @returns {ImageData}
    */
   captureFrame(width, height) {}
+
+  /**
+   * Bake what the scene draws into an impostor: the subject seen from a
+   * `grid` x `grid` set of directions over the upper hemisphere, each view an
+   * orthographic capture of the surfaces as their hooks leave them (the debug
+   * views `albedo`, `normals`, `view_depth`, `aux` and `masks`), so the
+   * impostor is the subject's own material rather than a second description
+   * of it. Make a scene that holds only the subject (a canvas of its own),
+   * attached; the bake leaves its camera on the last view and its debug view
+   * off.
+   *
+   * A hook draws the result with the engine's `impostor` module
+   * (`import impostor;`, shaders/common/impostor.bk): `impostor::views` gives
+   * the three views about the direction the subject is seen from and their
+   * weights, `impostor::start` (or `start_axis`, for a tree: from where the
+   * ray passes its trunk's line) the pixel's ray on the subject,
+   * `impostor::refine` steps it to the depth a view records there, so the
+   * three are sampled at one surface point and blend without doubling,
+   * `impostor::uv` is that point in the view, `impostor::normal` its baked
+   * normal in the subject's frame and `impostor::lod` the mip a pixel spans.
+   *
+   * The textures (each `layers` = grid * grid views of size x size, view v
+   * at layer v; Float32Array 0-1, as setShaderTexture takes them):
+   *  - `albedo`: rgb the albedo's square root, a the coverage (the share of
+   *    the texel's samples the subject covers);
+   *  - `surface`: x, y the normal in the view's image (0.5 + 0.5 n; it faces
+   *    the view's camera), z the depth (0 at `radius` toward the view's
+   *    camera, 1 at `radius` behind the centre), w the `aux` view;
+   *  - `masks`: the `masks` views, one a channel (null with none).
+   * A texel the subject does not reach holds what the covered texel nearest
+   * it does, so filtering across an outline brings in nothing foreign.
+   *
+   * @example
+   *   const imp = bake.bakeImpostor({ center: [0, 4, 0], radius: 6, aux: 'leaf' });
+   *   node.setShaderTexture('albedo', imp.textures.albedo);
+   *   node.setShaderTexture('surface', imp.textures.surface);
+   * @param {{center?: number[], radius: number, grid?: number, size?: number, supersample?: number, aux?: string|null, masks?: string[]}} opts
+   *   `center` and `radius`: the sphere the views frame (the subject's
+   *   bounds). `grid` (8) views a side; `size` (256) texels a view;
+   *   `supersample` (2) captures each texel as that many samples a side.
+   *   `aux` ('sky_visibility'): the debug view kept in surface.w. `masks`: up
+   *   to four more debug views.
+   * @returns {{grid: number, size: number, layers: number, center: number[], radius: number,
+   *   extent: number[], meanAlbedo: number[], coverage: number,
+   *   albedo: Float32Array, surface: Float32Array, masks: ?Float32Array,
+   *   textures: {albedo: Object, surface: Object, masks: ?Object}}}
+   *   `extent`: how far the subject reaches in any view, in radii: across
+   *   (either side of the centre), down and up (the quad that holds it from
+   *   every direction). `textures`: each array as a setShaderTexture
+   *   description (mipmapped, 'unorm8').
+   */
+  bakeImpostor(opts) {}
 
   /**
    * Inspection: from the next render on, each render's depth and result are

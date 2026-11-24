@@ -1,0 +1,104 @@
+// Impostors: a subject baked from a grid of directions (SceneGraph
+// bakeImpostor, js/scene_impostor.js) and drawn as one quad facing the eye.
+// What a hook needs to draw one: the three baked views about the direction
+// it is seen from, where a point of the subject falls in each, and the step
+// that moves a ray's point onto the surface a view's depth records, so the
+// three views are sampled at the same surface point and blend without
+// doubling.
+//
+// The subject's frame is the bake's: metres about its centre, y up. The views
+// are a g x g grid over the upper hemisphere (a hemi-octahedron: the grid's
+// rim is the horizon, its middle the zenith), view `layer` the texture array's
+// layer: column layer % g, row layer / g. A view's image has its right across
+// and its up upward (row 0 the top), spanning 2 `radius`; its depth is 0 at
+// `radius` toward its camera and 1 at `radius` behind the centre.
+//
+//   let vs = impostor::views(eye_dir_local, g);
+//   var p0 = impostor::start(ro, rd);                    // the ray on the plane facing the eye (start_axis: nearest a tree's trunk)
+//   for k in 0..3:
+//       let d = impostor::view_dir(vs.layer[k], g);
+//       var p = impostor::refine(p0, rd, d, surface.sample_lod(s, vec3(impostor::uv(p0, d, R), layer), lod).z, R);
+//       let uv = impostor::uv(p, d, R);   // albedo, normal and coverage here, weighted vs.weight[k]
+module impostor;
+
+import scene;
+
+pub struct Views { layer: vec3<i32>, weight: vec3<f32> }
+
+// View `layer`'s direction: from the subject's centre toward its camera.
+pub fn view_dir(layer: i32, g: i32) -> vec3<f32> {
+    let e = vec2<f32>((layer % g) as f32, (layer / g) as f32) / ((g - 1) as f32) * 2.0 - vec2<f32>(1.0);
+    let t = vec2<f32>(e.x + e.y, e.x - e.y) * 0.5;
+    return normalize(vec3<f32>(t.x, 1.0 - abs(t.x) - abs(t.y), t.y));
+}
+
+// A view's right (its image's x) and, with cross(d, right), its up.
+pub fn view_right(d: vec3<f32>) -> vec3<f32> {
+    if (abs(d.y) > 0.999) { return vec3<f32>(1.0, 0.0, 0.0); }
+    return normalize(vec3<f32>(d.z, 0.0, -d.x));
+}
+
+// The three views about `dir` (toward the eye, the subject's frame; below
+// the horizon it is seen as from the horizon) and each one's share.
+pub fn views(dir: vec3<f32>, g: i32) -> Views {
+    let d = vec3<f32>(dir.x, max(dir.y, 0.0), dir.z);
+    let s = max(abs(d.x) + abs(d.y) + abs(d.z), 1.0e-6);
+    let t = vec2<f32>(d.x, d.z) / s;
+    let gc = (vec2<f32>(t.x + t.y, t.x - t.y) * 0.5 + vec2<f32>(0.5)) * ((g - 1) as f32);
+    let c = clamp(floor(gc), vec2<f32>(0.0), vec2<f32>((g - 2) as f32));
+    let f = clamp(gc - c, vec2<f32>(0.0), vec2<f32>(1.0));
+    let l0 = (c.y as i32) * g + (c.x as i32);
+    let l2 = l0 + g + 1;
+    if (f.x > f.y) {
+        return Views { layer: vec3<i32>(l0, l0 + 1, l2), weight: vec3<f32>(1.0 - f.x, f.x - f.y, f.y) };
+    }
+    return Views { layer: vec3<i32>(l0, l0 + g, l2), weight: vec3<f32>(1.0 - f.y, f.y - f.x, f.x) };
+}
+
+// Where the ray from `ro` along `rd` (the subject's frame, ro the eye) meets
+// the plane through the centre that faces the eye.
+pub fn start(ro: vec3<f32>, rd: vec3<f32>) -> vec3<f32> {
+    let n = normalize(ro);
+    return ro + rd * (-dot(ro, n) / min(dot(rd, n), -1.0e-5));
+}
+
+// For an upright subject (a tree), the start instead: where the ray passes
+// nearest the vertical through `axis` (the subject's frame). What stands on
+// that line (a trunk) is then found in every view, whatever their depths
+// say beside so thin a part.
+pub fn start_axis(ro: vec3<f32>, rd: vec3<f32>, axis: vec3<f32>) -> vec3<f32> {
+    let dd = dot(rd.xz, rd.xz);
+    if (dd < 1.0e-6 * dot(rd, rd)) { return start(ro, rd); }
+    return ro + rd * max(-dot(ro.xz - axis.xz, rd.xz) / dd, 0.0);
+}
+
+// Point `p` of the subject in the image of the view along `d`.
+pub fn uv(p: vec3<f32>, d: vec3<f32>, radius: f32) -> vec2<f32> {
+    let r = view_right(d);
+    let u = cross(d, r);
+    return vec2<f32>(0.5 + 0.5 * dot(p, r) / radius, 0.5 - 0.5 * dot(p, u) / radius);
+}
+
+// `p` moved along the ray `rd` to the height view `d`'s `depth` (sampled at
+// uv(p, d)) records there.
+pub fn refine(p: vec3<f32>, rd: vec3<f32>, d: vec3<f32>, depth: f32, radius: f32) -> vec3<f32> {
+    let h = radius * (1.0 - 2.0 * depth);
+    let k = min(dot(rd, d), -0.3 * length(rd));
+    return p + rd * ((h - dot(p, d)) / k);
+}
+
+// A baked normal (its x and y in the view's image, 0-1; it faces the view's
+// camera) in the subject's frame.
+pub fn normal(nxy: vec2<f32>, d: vec3<f32>) -> vec3<f32> {
+    let n = nxy * 2.0 - vec2<f32>(1.0);
+    let r = view_right(d);
+    let u = cross(d, r);
+    return normalize(r * n.x + u * n.y + d * sqrt(max(1.0 - dot(n, n), 0.0)));
+}
+
+// The mip whose texel is a pixel's footprint: the views span `span` metres
+// (2 radius, as drawn) over `size` texels, `cam_dist` metres from the eye.
+pub fn lod(cam_dist: f32, span: f32, size: f32) -> f32 {
+    let px = 2.0 / (abs(scene::camera.proj[1].y) * max(scene::camera.viewport.y, 1.0));
+    return max(0.0, log2(max(cam_dist * px * size / max(span, 1.0e-6), 1.0e-6)));
+}
