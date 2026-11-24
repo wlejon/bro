@@ -56,6 +56,7 @@ is [app-api.js](app-api.js) (`bro.app`).
 | `fileTypes` | What the app opens: the desktop entry's `MimeType=`, and `%F` in its `Exec=` so the opened files arrive as arguments. |
 | `actions` | Launcher actions: `[Desktop Action <id>]` entries that run the app with `args`. `id` is `[A-Za-z0-9-]`. |
 | `permissions` | The capabilities the app may ask for (below). Declaring one grants nothing. |
+| `mounts` | More virtual path prefixes, like `/lib`: `{"tats": "../../../tats"}` mounts that folder (relative to the app's, or absolute) at `/tats`, so `import('/tats/js/x.js')`, `fetch` and `fs` reach it. A name is `[A-Za-z0-9_-]` and not `lib`, `system`, `std` or `app`; a folder that is not there is skipped with a warning (an import from it then fails, which the app can catch). `--install` does not copy a mounted folder. |
 
 The engine reads bro.json with a real JSON parser for these keys. A key of the
 wrong type is skipped with a warning, with two exceptions that fail the launch

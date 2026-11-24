@@ -52,6 +52,10 @@ struct AppDescriptor {
     /// The capabilities the app may ask for (`permissions`, capabilities.h).
     /// Declaring grants nothing: app_permissions.h decides what is granted.
     std::vector<std::string> permissions;
+    /// More virtual path prefixes (`mounts`: {"tats": "../../../tats"}): each
+    /// name mounted at `/<name>` over its directory, relative to the app's
+    /// own (or absolute), like `/lib`. Name -> path as declared.
+    std::vector<std::pair<std::string, std::string>> mounts;
 };
 
 /// Read the app keys of a bro.json. Returns false (with *error) when the file

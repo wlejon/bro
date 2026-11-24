@@ -164,6 +164,23 @@ bool parseAppManifest(const std::string& path, AppDescriptor& out, std::string* 
         }
     }
 
+    if (const JsonValue* mt = root.find("mounts")) {
+        if (!mt->isObject()) f.warn("mounts", "an object of {name: directory}");
+        else for (const auto& [name, dir] : mt->object) {
+            // A name is one path segment, and not one of the engine's own prefixes.
+            bool okName = !name.empty() && name != "lib" && name != "system" && name != "std" && name != "app";
+            for (char c : name)
+                if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+                    okName = false;
+            if (!okName || !dir.isString() || dir.string.empty()) {
+                LOG_WARN("%s: mount \"%s\" needs a name of [A-Za-z0-9_-] (not lib, system, std or app) and a "
+                         "directory; skipped", path.c_str(), name.c_str());
+                continue;
+            }
+            out.mounts.emplace_back(name, dir.string);
+        }
+    }
+
     if (const JsonValue* ft = root.find("fileTypes")) {
         if (!ft->isArray()) f.warn("fileTypes", "a list of {name, mimeTypes, extensions}");
         else for (const JsonValue& item : ft->array) {

@@ -17,5 +17,6 @@
         { "id": "new-window", "name": "New Window", "args": ["--new-window"] },
         { "id": "bad id", "name": "Skipped" }
     ],
-    "permissions": ["remote", "compositor"]
+    "permissions": ["remote", "compositor"],
+    "mounts": { "shared": "../plain_app", "lib": "../plain_app", "gone": "../no_such_folder" }
 }

@@ -74,6 +74,16 @@ const norm = (p) => real(p).replace(/\\/g, '/').toLowerCase();
     assert(a.permissions.granted.length === 0, 'nothing granted by declaring: ' + JSON.stringify(a.permissions));
 }
 
+// ---- mounts: a folder beside the app at /shared (lib reserved, a missing one skipped)
+{
+    const home = path.join(scratch, 'home_mounts');
+    const r = probe(fixture, '({ p: bro.resolvePath("/shared/index.html"), e: require("fs").existsSync("/shared/index.html"), ' +
+        'g: require("fs").existsSync("/gone/x") })', { BRO_APP_HOME: home });
+    assert(norm(r.p) === norm(path.join(plain, 'index.html')), '/shared resolves into the mounted folder: ' + r.p);
+    assert(r.e === true, 'fs reads through the mount');
+    assert(r.g === false, 'a missing folder is not mounted');
+}
+
 // ---- per-app directories ------------------------------------------------------
 {
     const home = path.join(scratch, 'home2');

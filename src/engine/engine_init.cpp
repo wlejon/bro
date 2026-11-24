@@ -254,6 +254,13 @@ void Engine::construct(const EngineConfig& config) {
         if (!config.appDir.empty()) {
             std::error_code ec;
             assetMounts_.addMount("/app", fs::absolute(config.appDir, ec).string());
+            // The app's own mounts (bro.json `mounts`), relative to its folder.
+            for (const auto& [name, dir] : config.manifest.mounts) {
+                fs::path p = fs::path(dir).is_absolute() ? fs::path(dir) : fs::path(config.appDir) / dir;
+                p = fs::weakly_canonical(fs::absolute(p, ec), ec);
+                if (!ec && fs::is_directory(p, ec)) assetMounts_.addMount("/" + name, p.string());
+                else LOG_WARN("bro.json: mount \"%s\": %s is not a directory", name.c_str(), p.string().c_str());
+            }
         }
     }
 
