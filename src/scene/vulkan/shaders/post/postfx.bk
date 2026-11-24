@@ -416,6 +416,39 @@ fn ssao_view_pos(inv_proj: mat4f, uv: vec2<f32>, d: f32) -> vec3<f32> {
     set_frag_output(0, ao);
 }
 
+// The AO's blur, along `step_vec.xy`: the 9-tap Gaussian, each tap weighted
+// down by how far its depth is from the centre's (reversed depth: the view
+// distance goes as 1/d, so the relative difference is d0/d - 1; a few per
+// cent is another surface), so the occlusion of one surface does not bleed
+// into another across an edge as a halo.
+@fragment fn ao_blur_frag(
+    @location(0) in_uv: vec2<f32>,
+    @binding(0, 0) u_tex: sampler2d<vec4<f32>>,
+    @binding(0, 1) u_depth: sampler2d<vec4<f32>>,
+    step_vec: vec4<f32>
+) {
+    let dir = step_vec.xy;
+    let d0 = u_depth.sample(in_uv).x;
+    var sum: f32 = u_tex.sample(in_uv).x * 0.2270270270;
+    var wsum: f32 = 0.2270270270;
+    if (d0 <= 0.0) {
+        set_frag_output(0, vec4<f32>(1.0, 0.0, 0.0, 0.0));
+        return;
+    }
+    for (var k: i32 = 1; k <= 4; k += 1) {
+        let g = k == 1 ? 0.1945945946 : (k == 2 ? 0.1216216216 : (k == 3 ? 0.0540540541 : 0.0162162162));
+        for (var s: i32 = -1; s <= 1; s += 2) {
+            let uv = in_uv + dir * ((k * s) as f32);
+            let d = u_depth.sample(uv).x;
+            let rel = d > 0.0 ? abs(d0 / d - 1.0) : 1.0;
+            let w = g * max(0.0, 1.0 - rel * 25.0);
+            sum += u_tex.sample(uv).x * w;
+            wsum += w;
+        }
+    }
+    set_frag_output(0, vec4<f32>(sum / wsum, 0.0, 0.0, 0.0));
+}
+
 @fragment fn apply_ao_frag(
     @location(0) in_uv: vec2<f32>,
     @binding(0, 0) u_ao_tex: sampler2d<vec4<f32>>,

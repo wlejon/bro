@@ -98,6 +98,7 @@ bool PassSSAO::setup(SceneGpu& gpu) {
     ssaoSetLayout_ = ssaoSet.build(dev);
     SceneVkDescriptorLayoutBuilder blurSet;
     blurSet.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    blurSet.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     blurSetLayout_ = blurSet.build(dev);
     if (!ssaoSetLayout_ || !blurSetLayout_) return false;
     ssaoLayout_ = fullscreen::layout(dev, ssaoSetLayout_, 0);
@@ -106,10 +107,10 @@ bool PassSSAO::setup(SceneGpu& gpu) {
 
     VkShaderModule vs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "postfx_vert");
     VkShaderModule ssaoFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "ssao_frag");
-    VkShaderModule blurFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "blur_frag");
+    VkShaderModule blurFs = createKernelStageModule(dev, "post/postfx.bk", kBkPostFxSrc, "ao_blur_frag");
     ssaoPipeline_ = fullscreen::pipeline(dev, ssaoLayout_, vs, ssaoFs, kAoFormat, "ssao", "postfx_vert", "ssao_frag");
     blurPipeline_ = fullscreen::pipeline(dev, blurLayout_, vs, blurFs, kAoFormat, "ssao blur", "postfx_vert",
-                                         "blur_frag");
+                                         "ao_blur_frag");
     for (VkShaderModule m : {vs, ssaoFs, blurFs}) SceneVkShaderModule::destroy(dev, m);
     return ssaoPipeline_ && blurPipeline_;
 }
@@ -174,7 +175,8 @@ void PassSSAO::record(SceneFrame& frame) {
     u.params[3] = static_cast<float>(ao_[0].height) / 4.0f;
     const VkDescriptorBufferInfo ubo = device_->frameUniform(&u, sizeof(u));
 
-    // Estimate into ao_[0], blur across into ao_[1] and down back into ao_[0].
+    // Estimate into ao_[0], blur across into ao_[1] and down back into ao_[0]
+    // (each tap weighed by its depth against the centre's: no halo across an edge).
     VkDescriptorSet ssaoSet = device_->frameSet(ssaoSetLayout_);
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, frame.gpu.targets.depthSnapshot.view, frame.gpu.targets.depthSnapshot.sampler);
@@ -191,6 +193,7 @@ void PassSSAO::record(SceneFrame& frame) {
         VkDescriptorSet set = device_->frameSet(blurSetLayout_);
         SceneVkDescriptorWriter blurWriter;
         blurWriter.writeImage(0, src.view, clampSampler_);
+        blurWriter.writeImage(1, frame.gpu.targets.depthSnapshot.view, frame.gpu.targets.depthSnapshot.sampler);
         blurWriter.updateSet(device_->device(), set);
         draw(frame, dst, blurPipeline_, blurLayout_, set, pass == 0 ? across : down);
     }
