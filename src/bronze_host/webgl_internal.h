@@ -149,11 +149,11 @@ inline webgl::WebGL2RenderingContext* contextOf(Value v) {
 // the context `this` is, and a call on anything else is the TypeError a
 // browser throws for one ("Illegal invocation").
 //
-// Every method is installed on the fast host-call path (ObjectBuilder::
-// defFast): three.js makes ~15k of these calls a frame. Its contract holds for
+// Every method is installed on the unified fast host-call path (ObjectBuilder::
+// def): three.js makes ~15k of these calls a frame. Its contract holds for
 // every family, the allocating ones included (create*, get*, getParameter,
-// the uploads): the arguments in `a` stay current across allocations as they
-// do under def(), and nothing here roots through bronze's runtime::Rooted<>.
+// the uploads): the arguments in `a` stay current across allocations, and
+// nothing here roots through bronze's runtime::Rooted<>.
 template <typename F>
 Value callWebGLMethod(F& fn, Value self, std::span<const Value> a) {
     webgl::WebGL2RenderingContext* c = contextOf(self);
@@ -166,12 +166,12 @@ void defMethod(ObjectBuilder& b, const char* name, uint32_t arity, F fn) {
     if constexpr (std::is_empty_v<F> && std::is_default_constructible_v<F>) {
         // A captureless body (nearly all of them): the installed callable is
         // captureless too, so the function carries no boxed state to load.
-        b.defFast(name, arity, [](Value self, std::span<const Value> a) -> Value {
+        b.def(name, arity, [](Value self, std::span<const Value> a) -> Value {
             F body{};
             return callWebGLMethod(body, self, a);
         });
     } else {
-        b.defFast(name, arity, [fn](Value self, std::span<const Value> a) mutable -> Value {
+        b.def(name, arity, [fn](Value self, std::span<const Value> a) mutable -> Value {
             return callWebGLMethod(fn, self, a);
         });
     }

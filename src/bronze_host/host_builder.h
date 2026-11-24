@@ -18,7 +18,6 @@
 #include "bronze_host/host_rooted.h"
 
 #include "embed/embed.h"
-#include "embed/embed_fast_function.h"
 #include "runtime/array.h"
 #include "runtime/typed_array.h"  // ElementKind
 
@@ -28,6 +27,8 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -301,63 +302,53 @@ struct ObjectBuilder {
         obj.set(ev::defineProperty(obj.get(), name, v, ev::kConstantAttributes));
     }
 
-    void def(const char* name, uint32_t arity, ev::NativeFn fn) {
-        // hostProfileWrap is the identity unless BRO_HOST_PROFILE=1 (host_profile.h).
-        //
-        // The name is passed on, and it is a fact rather than a courtesy: a
-        // host method standing in for a web-platform one answers for that
-        // method's `.name` too (`gl.drawElements.name === "drawElements"` in
-        // every browser), and a profile of the runtime cannot otherwise tell
-        // 166 WebGL entry points apart — every host function shares ONE
-        // trampoline code pointer, so the name slot is the only thing that
-        // distinguishes them. One line here names every method reached through
-        // this builder, DOM included, for the same reason hostProfileWrap's
-        // comment gives: they all funnel through one place.
-        ev::Persistent f(ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity, name));
-        obj.set(ev::setProperty(obj.get(), name, f.get()));
-    }
-
-    // def() through bronze's fast host-call path (embed_fast_function.h):
-    // `fn` has NativeFn's signature but is called through a function pointer,
-    // with no std::function and no rooted argument block — the arguments are
-    // a stack copy the collector's conservative scan keeps current, so the
-    // callback may still allocate and read its arguments afterwards. What it
-    // gives up is the shadow-stack frame NativeFn opens: a callback that uses
-    // bronze runtime::Rooted<> directly (rather than embed API or Rooted
-    // from host_rooted.h, a Persistent) must open its own. For the entry
-    // points a program calls per draw (WebGL).
-    //
-    // Under BRO_HOST_PROFILE the method is installed through def() instead,
-    // so the profiler still times it (host_profile.h).
+    // All def() and accessor() registrations route through bronze's unified
+    // fast host-call path (makeFunction / fastHostTrampoline), except when
+    // BRO_HOST_PROFILE=1 wraps callables with hostProfileWrap for per-method timing.
     template <typename F>
-    void defFast(const char* name, uint32_t arity, F&& fn) {
-        if (hostProfileEnabled()) {
-            def(name, arity, ev::NativeFn(std::forward<F>(fn)));
-            return;
-        }
-        ev::Persistent f(ev::makeFastFunction(std::forward<F>(fn), arity, name));
+    void def(const char* name, uint32_t arity, F&& fn) {
+        ev::Persistent f(
+            hostProfileEnabled()
+                ? ev::makeFunction(hostProfileWrap(name, ev::NativeFn(std::forward<F>(fn))), arity, name)
+                : ev::makeFunction(std::forward<F>(fn), arity, name));
         obj.set(ev::setProperty(obj.get(), name, f.get()));
     }
 
-    void accessor(const char* name, ev::NativeFn getter, ev::NativeFn setter) {
-        // The getter must survive the setter's allocation, hence the
-        // Persistent bridge between the two makeFunction calls.
-        //
-        // "get x" / "set x", which is 10.2.9's own spelling for an accessor
-        // function's name (SetFunctionName with a prefix), and not the bare
-        // property name the two would otherwise share.
+    template <typename G>
+    void accessor(const char* name, G&& getter) {
+        const std::string getName = "get " + std::string(name);
+        ev::Persistent g(
+            hostProfileEnabled()
+                ? ev::makeFunction(hostProfileWrap(name, ev::NativeFn(std::forward<G>(getter))), 0, getName)
+                : ev::makeFunction(std::forward<G>(getter), 0, getName));
+        obj.set(ev::defineAccessor(obj.get(), name, g.get(), ev::undefined(), /*enumerable=*/true));
+    }
+
+    template <typename G, typename S>
+    void accessor(const char* name, G&& getter, S&& setter) {
         const std::string getName = "get " + std::string(name);
         const std::string setName = "set " + std::string(name);
-        // The setter is rooted too: nothing between its makeFunction and
-        // defineAccessor may be assumed allocation-free.
-        //
-        // The names are the functions' own (FunctionHeader::name), which is
-        // also what a bronze profile report names a host callee by.
+        const bool profiling = hostProfileEnabled();
         ev::Persistent g(
-            ev::makeFunction(hostProfileWrap(name, std::move(getter)), 0, getName));
-        ev::Persistent s(setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1,
-                                                   setName)
-                                : ev::undefined());
+            profiling
+                ? ev::makeFunction(hostProfileWrap(name, ev::NativeFn(std::forward<G>(getter))), 0, getName)
+                : ev::makeFunction(std::forward<G>(getter), 0, getName));
+        Value sVal = ev::undefined();
+        if constexpr (std::is_same_v<std::decay_t<S>, std::nullptr_t>) {
+            (void)setter;
+        } else if constexpr (std::is_same_v<std::decay_t<S>, ev::NativeFn> ||
+                             std::is_pointer_v<std::decay_t<S>>) {
+            if (setter) {
+                sVal = profiling
+                           ? ev::makeFunction(hostProfileWrap(name, ev::NativeFn(std::forward<S>(setter))), 1, setName)
+                           : ev::makeFunction(std::forward<S>(setter), 1, setName);
+            }
+        } else {
+            sVal = profiling
+                       ? ev::makeFunction(hostProfileWrap(name, ev::NativeFn(std::forward<S>(setter))), 1, setName)
+                       : ev::makeFunction(std::forward<S>(setter), 1, setName);
+        }
+        ev::Persistent s(sVal);
         obj.set(ev::defineAccessor(obj.get(), name, g.get(), s.get(), /*enumerable=*/true));
     }
 
