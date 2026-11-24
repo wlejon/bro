@@ -134,6 +134,20 @@ int main() {
                 "fn helper(v: mesh::Vertex) -> mesh::Vertex { return v; }\n"
                 "pub fn vertex(v: mesh::Vertex) -> mesh::Vertex { return helper(v); }\n"));
 
+            // Which uniforms fn vertex reads, through the module's own helpers.
+            {
+                const char* src =
+                    "module hook; import mesh;\n"
+                    "fn lift(y: f32) -> f32 { return y + params.height; }\n"
+                    "pub fn vertex(v: mesh::Vertex) -> mesh::Vertex { var o = v; o.pos.y = lift(o.pos.y); return o; }\n"
+                    "pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {\n"
+                    "  var t = s; t.alpha = params.fade; return t; }\n";
+                assert(scene::kernelFnReadsField(src, "vertex", "height"));
+                assert(!scene::kernelFnReadsField(src, "vertex", "fade"));
+                assert(scene::kernelFnReadsField(src, "fragment", "fade"));
+                assert(!scene::kernelFnReadsField(src, "missing", "height"));
+            }
+
             KernelMeshHook bad;
             std::string badErr;
             assert(!compileKernelMeshHook(scene::SceneRenderer::CustomShaderTarget::Static,

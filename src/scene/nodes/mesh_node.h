@@ -332,9 +332,12 @@ public:
     /// Alpha cutoff threshold. 0 (default) disables. When >0, fragments with
     /// baseAlpha (texture.a * uColor.a, or vColor.a) below this threshold
     /// are discarded — for cut-out leaves/petals using straight-alpha textures.
-    /// A textured caster casts its cut, so a change redraws its shadow pages.
+    /// A caster casts its cut (its texture's alpha times its vertex alpha,
+    /// not a fragment hook's), so a change redraws its shadow pages when
+    /// that alpha can fall below 1; an opaque one casts the same either way.
     void setAlphaCutoff(float c) {
-        if (c != alphaCutoff_) bumpChangeGeneration();
+        if (c != alphaCutoff_ && (hasBaseColorTexture() || hasVertexColors() || color_[3] < 1.0f))
+            bumpChangeGeneration();
         alphaCutoff_ = c;
     }
     float alphaCutoff() const { return alphaCutoff_; }
@@ -407,11 +410,13 @@ public:
     }
 
     /// Set (or update) a numeric user-uniform value on this node. No-op
-    /// without a custom shader installed.
+    /// without a custom shader installed. Its shadow pages are redrawn only
+    /// when the value changed and fn vertex, which places the shadow, reads
+    /// it: a fragment-only uniform changes no silhouette.
     void setCustomShaderUniform(const std::string& name, int comps,
                                 const float* vals) {
-        if (customShader_) {
-            customShader_->setUniform(name, comps, vals);
+        if (customShader_ && customShader_->setUniform(name, comps, vals) && customShader_->hasVertexPos &&
+            customShader_->vertexReads(name)) {
             bumpChangeGeneration();
         }
     }

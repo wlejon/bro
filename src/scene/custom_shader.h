@@ -63,6 +63,7 @@ struct CustomShaderState {
     bool isModule() const { return !module.empty(); }
 
     void rebuildKey() {
+        vertexReads_.clear();
         hasVertex = kernelSourceDefinesFn(module, "vertex");
         hasVertexPos = hasVertex && kernelSourceModifiesVertexPos(module);
         size_t h = std::hash<std::string>{}(module);
@@ -120,20 +121,46 @@ struct CustomShaderState {
         return make(std::move(mod), std::move(file), std::move(extra), std::move(knobOverrides));
     }
 
-    void setUniform(const std::string& name, int comps, const float* vals) {
+    /// Set a uniform's value; whether it changed.
+    bool setUniform(const std::string& name, int comps, const float* vals) {
+        float v[4];
+        for (int i = 0; i < 4; ++i) v[i] = i < comps ? vals[i] : 0.0f;
         for (auto& u : uniforms) {
             if (u.name == name) {
+                bool same = u.comps == comps;
+                for (int i = 0; i < 4; ++i) same = same && u.v[i] == v[i];
                 u.comps = comps;
-                for (int i = 0; i < 4; ++i) u.v[i] = i < comps ? vals[i] : 0.0f;
-                return;
+                for (int i = 0; i < 4; ++i) u.v[i] = v[i];
+                return !same;
             }
         }
         CustomShaderUniform u;
         u.name = name;
         u.comps = comps;
-        for (int i = 0; i < 4; ++i) u.v[i] = i < comps ? vals[i] : 0.0f;
+        for (int i = 0; i < 4; ++i) u.v[i] = v[i];
         uniforms.push_back(std::move(u));
+        return true;
     }
+
+    /// Whether fn vertex (what the shadow pass runs of the hook) reads the
+    /// uniform `name`: one it does not read changes no shadow silhouette.
+    bool vertexReads(const std::string& name) {
+        if (!hasVertex) return false;
+        for (const auto& [n, reads] : vertexReads_) {
+            if (n == name) return reads;
+        }
+        // The hook's own modules may be handed the uniforms: any of their
+        // reads of the name counts.
+        bool reads = kernelFnReadsField(module, "vertex", name);
+        for (const auto& m : modules) {
+            reads = reads || m.second.find("." + name) != std::string::npos;
+        }
+        vertexReads_.emplace_back(name, reads);
+        return reads;
+    }
+
+private:
+    std::vector<std::pair<std::string, bool>> vertexReads_;   // vertexReads(), by uniform
 };
 
 struct ShaderStageExecStat {

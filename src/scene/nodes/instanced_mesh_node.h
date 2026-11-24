@@ -139,13 +139,24 @@ public:
 
     /// Alpha-test cutoff. > 0 enables `discard` for fragments whose final
     /// alpha is below the threshold (used for leaf cards and similar
-    /// cutout textures). 0 disables the test. A textured caster casts its
-    /// cut, so a change redraws its shadow pages.
+    /// cutout textures). 0 disables the test. A caster casts its cut (its
+    /// texture's alpha times its vertex and instance alphas, not a fragment
+    /// hook's), so a change redraws its shadow pages when that alpha can
+    /// fall below 1; an opaque one casts the same either way.
     void  setAlphaCutoff(float c) {
-        if (c != alphaCutoff_) bumpChangeGeneration();
+        if (c != alphaCutoff_ && cutCanDrop()) bumpChangeGeneration();
         alphaCutoff_ = c;
     }
     float alphaCutoff() const { return alphaCutoff_; }
+    /// Whether the shadow's cutout alpha can be below 1 anywhere.
+    bool cutCanDrop() const {
+        if (hasBaseColorTexture() || hasVertexColors() || color_[3] < 1.0f) return true;
+        if (instanceData_.size() < size_t(instanceCount_) * 16) return true;
+        for (size_t i = 0; i < instanceCount_; ++i) {
+            if (instanceData_[i * 16 + 15] < 1.0f) return true;
+        }
+        return false;
+    }
 
     /// Alpha to coverage (MeshNode::setAlphaToCoverage).
     void setAlphaToCoverage(bool on) { alphaToCoverage_ = on; }
@@ -373,10 +384,12 @@ public:
             bumpChangeGeneration();
         }
     }
+    /// Its shadow pages are redrawn only when the value changed and fn
+    /// vertex, which places the shadow, reads it.
     void setCustomShaderUniform(const std::string& name, int comps,
                                 const float* vals) {
-        if (customShader_) {
-            customShader_->setUniform(name, comps, vals);
+        if (customShader_ && customShader_->setUniform(name, comps, vals) && customShader_->hasVertexPos &&
+            customShader_->vertexReads(name)) {
             bumpChangeGeneration();
         }
     }

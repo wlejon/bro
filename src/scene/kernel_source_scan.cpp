@@ -314,4 +314,55 @@ bool kernelSourceModifiesVertexPos(std::string_view source) {
     return false;
 }
 
+bool kernelFnReadsField(std::string_view source, std::string_view fn, std::string_view field) {
+    const std::vector<Token> t = tokens(source);
+    // Every function's body: [first token, closing brace).
+    struct Body {
+        std::string_view name;
+        size_t begin, end;
+    };
+    std::vector<Body> bodies;
+    for (size_t i = 0; i + 2 < t.size(); ++i) {
+        if (!isWord(t, i, "fn") || t[i + 1].kind != Tok::Ident || !isPunct(t, i + 2, '(')) continue;
+        size_t q = i + 3;
+        while (q < t.size() && !isPunct(t, q, '{') && !isPunct(t, q, ';')) ++q;
+        if (q >= t.size() || !isPunct(t, q, '{')) continue;
+        int d = 1;
+        size_t e = q + 1;
+        for (; e < t.size() && d > 0; ++e) {
+            if (isPunct(t, e, '{')) ++d;
+            else if (isPunct(t, e, '}')) --d;
+        }
+        bodies.push_back({t[i + 1].text, q + 1, e});
+        i = e - 1;
+    }
+    auto find = [&](std::string_view name) -> const Body* {
+        for (const Body& b : bodies) {
+            if (b.name == name) return &b;
+        }
+        return nullptr;
+    };
+    std::vector<std::string_view> todo{fn}, seen;
+    while (!todo.empty()) {
+        const std::string_view name = todo.back();
+        todo.pop_back();
+        bool visited = false;
+        for (const auto& s : seen) visited = visited || s == name;
+        if (visited) continue;
+        seen.push_back(name);
+        const Body* b = find(name);
+        if (!b) continue;
+        for (size_t k = b->begin; k < b->end; ++k) {
+            if (isPunct(t, k, '.') && isWord(t, k + 1, field)) return true;
+            // A call of one of the source's own functions (not a path's
+            // segment, as `mesh::f(`, which is another module's).
+            if (t[k].kind == Tok::Ident && isPunct(t, k + 1, '(') && (k == 0 || t[k - 1].kind != Tok::ColonColon) &&
+                find(t[k].text)) {
+                todo.push_back(t[k].text);
+            }
+        }
+    }
+    return false;
+}
+
 }  // namespace bro::scene

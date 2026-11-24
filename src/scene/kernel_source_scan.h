@@ -28,4 +28,10 @@ bool kernelSourceDefinesFn(std::string_view source, std::string_view name);
 /// varying-only / passthrough hooks; returns `false` when no `fn vertex` exists.
 bool kernelSourceModifiesVertexPos(std::string_view source);
 
+/// Whether `fn <fn>(` in `source`, or a function of `source` it calls (at any
+/// depth), reads a field named `field` (`x.field`): which uniforms a hook's
+/// vertex stage reads. Conservative: any `.field` counts, whatever its
+/// receiver. False when `source` defines no `fn <fn>`.
+bool kernelFnReadsField(std::string_view source, std::string_view fn, std::string_view field);
+
 }  // namespace bro::scene
