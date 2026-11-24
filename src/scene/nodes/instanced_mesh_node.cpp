@@ -69,14 +69,12 @@ void InstancedMeshNode::instancesChanged() {
 }
 
 void InstancedMeshNode::setInstances(const float* data, size_t count) {
-    instanceBuffer_.reset();
     instanceData_.assign(data, data + count * 16);
     instanceCount_ = count;
     instancesChanged();
 }
 
 void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t count) {
-    instanceBuffer_.reset();
     instanceData_.resize(count * 16);
     instanceCount_ = count;
     for (size_t i = 0; i < count; ++i) {
@@ -335,7 +333,7 @@ bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax
         outMax[0] = wb.max.x; outMax[1] = wb.max.y; outMax[2] = wb.max.z;
         return true;
     }
-    if (mesh_.empty() || instanceCount_ == 0 || instanceBuffer_) return false;
+    if (mesh_.empty() || instanceCount_ == 0) return false;
 
     // Node-space union of all instance-transformed mesh bounds. O(instances),
     // so it's cached and only rebuilt when the mesh or instance buffer

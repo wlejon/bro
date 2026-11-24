@@ -796,15 +796,10 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     // upload memory.
     static constexpr float kIdentityRow[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1};
     const size_t rowCount = batched ? 1 : count;
-    const bool directGpuInstances =
-        !batched && node.instanceBuffer() && node.instanceBuffer()->buffer() != VK_NULL_HANDLE;
-    const GpuInstances* held = (batched || directGpuInstances) ? nullptr
+    const GpuInstances* held = batched ? nullptr
         : frame.gpu.resources.instances(node.id(), node.instanceGeneration(), node.instanceData().data(), rowCount);
     render::UploadSlice rows{};
-    if (directGpuInstances) {
-        rows.buffer = node.instanceBuffer()->buffer();
-        rows.offset = 0;
-    } else if (held) {
+    if (held) {
         rows.buffer = held->rows.buffer;
         rows.offset = 0;
     } else {

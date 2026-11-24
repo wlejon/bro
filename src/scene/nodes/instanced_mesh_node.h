@@ -187,7 +187,7 @@ public:
     /// there is geometry to merge, and no custom shader overrides it. The
     /// renderer keys the atlas + vertex-colour-tint uniforms off this.
     bool renderingBatched() const {
-        return staticBatch_ && !customShader_ && !instanceBuffer_ && instanceCount_ > 0 && !mesh_.empty();
+        return staticBatch_ && !customShader_ && instanceCount_ > 0 && !mesh_.empty();
     }
     /// Atlas grid the current draw samples: 1x1 when batched (the cell is baked
     /// into the merged UVs so the shader must NOT remap), else the authored grid.
@@ -395,17 +395,6 @@ public:
     }
     const std::vector<CustomShaderBuffer>& customShaderBuffers() const { return userBuffers_; }
 
-    /// Each instance's 16-float record (4x3 affine + RGBA tint), read directly
-    /// from a GPU ComputeBuffer (bro.kernel.createBuffer) with zero CPU copy or
-    /// per-frame upload. Null returns to the empty CPU instance set.
-    void setInstanceBuffer(std::shared_ptr<render::ComputeBuffer> buffer, size_t count) {
-        instanceBuffer_ = std::move(buffer);
-        instanceCount_ = instanceBuffer_ ? count : 0;
-        instanceData_.clear();
-        instancesChanged();
-    }
-    const std::shared_ptr<render::ComputeBuffer>& instanceBuffer() const { return instanceBuffer_; }
-
     /// The instance count, read on the GPU each frame: u32 `word` of `buffer`
     /// (what a kernel wrote before the frame), clamped to instanceCount();
     /// instances 0..n-1 of the rows draw, in every pass. Null: instanceCount().
@@ -561,7 +550,6 @@ private:
     mutable bool bvhDirty_ = true;
 
     std::vector<float> instanceData_;
-    std::shared_ptr<render::ComputeBuffer> instanceBuffer_; // setInstanceBuffer
     uint64_t instanceGeneration_ = 1;
     size_t instanceCount_ = 0;
     std::shared_ptr<render::ComputeBuffer> countBuffer_;   // setInstanceCountBuffer

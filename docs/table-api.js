@@ -173,8 +173,8 @@
 //   // bro.kernel (`BRO_WITH_KERNEL`):
 //   const kb = tbl.chunkKernelBuffer(0, 'hp');   // zero-copy Host KernelBuffer (COW-detached)
 //   const packed = tbl.toKernelBuffer('hp', { residency: 'host' }); // or 'shared'/'gpu'
-//   const aos = tbl.packToKernelBuffer(['x', 'y', 'z', 'w'], { layout: 'aos', dtype: 'f32', strideFloats: 4, residency: 'gpu' });
-//   const inst = tbl.packInstancesToKernelBuffer({ x: 'x', y: 'y', z: 'z', scale: 's', r: 'cr', g: 'cg', b: 'cb', a: 1 }, { residency: 'gpu' });
+//   const aos = tbl.packToKernelBuffer(['x', 'y', 'z', 's'], { layout: 'aos', dtype: 'f32', strideFloats: 4, residency: 'gpu' });
+//   // Pair `aos` with InstancedMeshNode setShader + setShaderBuffer + setInstanceCullSpheres + setCullBounds.
 //   tbl.unpackFromKernelBuffer(['x', 'y'], aos, { layout: 'aos', strideFloats: 4 });
 //   tbl.readFromKernelBuffer(0, 'hp', kb);       // or tbl.readFromKernelBuffer('hp', packed)
 //   tbl.notifyColumnUpdated('hp');               // rebuilds indexes after direct chunkKernelBuffer writes

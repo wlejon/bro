@@ -1144,20 +1144,6 @@ class SceneNode {
   setInstanceCount(count) {}
 
   /**
-   * InstancedMesh: bind a 16-float-per-instance KernelBuffer (bro.kernel.createBuffer
-   * or Table.packInstancesToKernelBuffer) directly as GPU instance storage with zero
-   * CPU copy or per-frame upload. Each instance record is 64 bytes: 3 affine rows
-   * [m00, m01, m02, tx, m10, m11, m12, ty, m20, m21, m22, tz] followed by RGBA tint.
-   * Pair with setCullBounds(min, max) if frustum culling bounds are known; without it
-   * the node stays always-visible. Pass `null` to clear.
-   *
-   * @param {KernelBuffer|null} buffer
-   * @param {number} count - instance count stored in the buffer
-   * @returns {SceneNode}
-   */
-  setInstanceBuffer(buffer, count) {}
-
-  /**
    * InstancedMesh: draw as many instances as a kernel says, read on the GPU
    * each frame, with nothing read back. Word `index` of `buffer` (a u32 or
    * non-negative i32 the kernel wrote before the frame) is the count,

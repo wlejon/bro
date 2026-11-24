@@ -722,7 +722,6 @@ bool bro_scene_SceneGraph_attached_get(void* self);
 bool bro_scene_SceneGraph_keepAlive_get(void* self);
 void bro_scene_SceneGraph_keepAlive_set(void* self, bool v);
 bool bro_scene_SceneNode_setShaderBuffer(void* self, const char* name, uint64_t bufferBits);
-bool bro_scene_SceneNode_setInstanceBuffer(void* self, uint64_t bufferBits, int32_t count);
 bool bro_scene_SceneNode_setInstanceCountBuffer(void* self, uint64_t bufferBits, int32_t word);
 bool bro_scene_SceneNode_setInstanceCullSpheres(void* self, uint64_t bufferBits, double maxDistance, double fade, double minDistance);
 bool bro_scene_SceneNode_setCullBounds(void* self, bool set, double x0, double y0, double z0, double x1, double y1, double z1);

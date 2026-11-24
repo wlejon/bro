@@ -2,7 +2,7 @@
 //   1. Automatic SPIR-V push-constant parameter spilling (>128B / >256B BDA struct)
 //   2. Table.packToKernelBuffer (AoS + SoA, target reuse) & unpackFromKernelBuffer + ReactiveQuery chunk reuse
 //   3. Zero-copy bro.kernel.fromTensor / toTensor + mixed-device guard
-//   4. Table.packInstancesToKernelBuffer -> InstancedMeshNode.setInstanceBuffer direct PBR rendering
+//   4. Table.packToKernelBuffer -> single canonical InstancedMeshNode GPU shader + cull spheres path
 
 const q = bro.table;
 assert(typeof q === 'object', 'bro.table exists');
@@ -213,7 +213,7 @@ function thrownGuardNeeded(t) {
 }
 
 // ----------------------------------------------------------------------------
-// 4. Table.packInstancesToKernelBuffer -> InstancedMeshNode.setInstanceBuffer
+// 4. Table.packToKernelBuffer -> InstancedMeshNode vertex hook + GPU cull spheres
 // ----------------------------------------------------------------------------
 {
     const canvas = document.createElement('canvas');
@@ -225,19 +225,45 @@ function thrownGuardNeeded(t) {
     const scene = canvas.getContext('scene');
     if (scene && bro.kernel && bro.kernel.gpu) {
         scene.setToneMap({ mode: 'linear', gamma: 1.0 });
+        scene.setAmbient({ color: [0, 0, 0] });
+        scene.createLight({ type: 'directional', intensity: 0 });
         scene.setCamera({ fov: 60, near: 0.1, far: 100, position: [0, 0, 5], target: [0, 0, 0], up: [0, 1, 0] });
 
-        const itbl = q.create({ px: 'f32', py: 'f32', pz: 'f32', s: 'f32', cr: 'f32', cg: 'f32', cb: 'f32' });
-        itbl.insertMany([{ px: 0.0, py: 0.0, pz: 0.0, s: 2.0, cr: 0.0, cg: 1.0, cb: 0.0 }]);
+        const itbl = q.create({ px: 'f32', py: 'f32', pz: 'f32', s: 'f32', cr: 'f32', cg: 'f32', cb: 'f32', ca: 'f32' });
+        itbl.insertMany([{ px: 0.0, py: 0.0, pz: 0.0, s: 2.0, cr: 0.0, cg: 1.0, cb: 0.0, ca: 1.0 }]);
 
-        const instKb = itbl.packInstancesToKernelBuffer(
-            { x: 'px', y: 'py', z: 'pz', scale: 's', r: 'cr', g: 'cg', b: 'cb', a: 1.0 },
-            { residency: 'gpu' }
-        );
-        assert(instKb.byteLength === 64, 'packInstancesToKernelBuffer produced 1 * 64B');
+        // Pack transform spheres [x, y, z, radius] and colors [r, g, b, a] via the single packToKernelBuffer API.
+        const poseKb = itbl.packToKernelBuffer(['px', 'py', 'pz', 's'], { layout: 'aos', dtype: 'f32', residency: 'gpu' });
+        const colorKb = itbl.packToKernelBuffer(['cr', 'cg', 'cb', 'ca'], { layout: 'aos', dtype: 'f32', residency: 'gpu' });
+        assert(poseKb.byteLength === 16 && colorKb.byteLength === 16, 'packToKernelBuffer AoS vec4 buffers ready');
 
-        const node = scene.createInstancedMesh({ mesh: Mesh.box(), color: [1, 1, 1, 1] });
-        node.setInstanceBuffer(instKb, itbl.rowCount);
+        const hook = `
+            module inst_hook;
+            import mesh;
+            @binding(4, 14) var poses: read_buffer<vec4<f32>>;
+            @binding(4, 15) var tints: read_buffer<vec4<f32>>;
+            pub fn vertex(v: mesh::Vertex) -> mesh::Vertex {
+                var out = v;
+                let p = poses[v.instance_index];
+                out.pos = out.pos * p.w + p.xyz;
+                out.v0 = tints[v.instance_index];
+                return out;
+            }
+            pub fn fragment(v: mesh::Vertex, s: mesh::Surface) -> mesh::Surface {
+                var out = s;
+                out.base_color = vec3<f32>(0.0);
+                out.emissive = v.v0.rgb;
+                return out;
+            }
+        `;
+
+        const idRow = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1]);
+        const node = scene.createInstancedMesh({ mesh: Mesh.box(), color: [1, 1, 1, 1], instances: idRow });
+        assert(typeof node.setInstanceBuffer === 'undefined', 'setInstanceBuffer removed under single-path rule');
+        node.setShader({ module: hook });
+        node.setShaderBuffer('poses', poseKb);
+        node.setShaderBuffer('tints', colorKb);
+        node.setInstanceCullSpheres(poseKb);
         node.setCullBounds([-2, -2, -2], [2, 2, 2]);
 
         const centerPx = () => {
@@ -248,20 +274,21 @@ function thrownGuardNeeded(t) {
 
         const pGreen = centerPx();
         assert(pGreen.a > 0 && pGreen.g > 40 && pGreen.g > 3 * pGreen.r && pGreen.g > 3 * pGreen.b,
-               `GPU instance buffer rendered green: rgba(${pGreen.r},${pGreen.g},${pGreen.b},${pGreen.a})`);
+               `canonical GPU hook path rendered green: rgba(${pGreen.r},${pGreen.g},${pGreen.b},${pGreen.a})`);
 
-        // Mutate the bound GPU instance buffer color in-place via a compute kernel -> turns red!
+        // Mutate the bound GPU color buffer in-place via a compute kernel -> turns red!
         const colorMod = bro.kernel.compile(`
             @kernel @grid(1)
-            fn k_recolor_inst(g: grid<1>, inst: rw_store<f32, 1>) {
+            fn k_recolor_inst(g: grid<1>, tints: rw_store<f32, 1>) {
                 let i = g.x();
-                let base = i * 16;
-                inst[base + 12] = 1.0;
-                inst[base + 13] = 0.0;
-                inst[base + 14] = 0.0;
+                let base = i * 4;
+                tints[base + 0] = 1.0;
+                tints[base + 1] = 0.0;
+                tints[base + 2] = 0.0;
+                tints[base + 3] = 1.0;
             }
         `, { file: 'recolor_inst.bk' });
-        colorMod.kernel('k_recolor_inst').dispatch(1, instKb);
+        colorMod.kernel('k_recolor_inst').dispatch(1, colorKb);
 
         const pRed = centerPx();
         assert(pRed.a > 0 && pRed.r > 40 && pRed.r > 3 * pRed.g && pRed.r > 3 * pRed.b,

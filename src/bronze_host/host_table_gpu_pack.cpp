@@ -338,163 +338,6 @@ Value packTableColumnsToKernelBuffer(const TableSnapshot& snap, Value colsArg, V
     return allocateOrWriteTarget(target, targetHold.get(), residency, packed, "packToKernelBuffer");
 }
 
-struct InstanceFieldSpec {
-    int col = -1;
-    float constant = 0.0f;
-};
-
-bool parseInstanceField(const Schema& schema, Value obj, const char* key, float defaultConst,
-                        InstanceFieldSpec& out) {
-    out.col = -1;
-    out.constant = defaultConst;
-    if (!ev::isObject(obj)) return true;
-    Value v = ev::getProperty(obj, key);
-    if (v.isUndefined() || v.isNull()) return true;
-    if (ev::isString(v)) {
-        const std::string name = ev::toUtf8(v);
-        const int idx = schema.findColumn(name);
-        if (idx < 0) {
-            ev::throwRangeError("packInstancesToKernelBuffer: unknown column '" + name + "' for '" + key + "'");
-            return false;
-        }
-        if (schema.columns[static_cast<size_t>(idx)].type == ColType::String) {
-            ev::throwTypeError("packInstancesToKernelBuffer: string column '" + name + "' unsupported");
-            return false;
-        }
-        out.col = idx;
-        return true;
-    }
-    if (v.isNumber()) {
-        out.constant = static_cast<float>(v.asNumber());
-        return true;
-    }
-    ev::throwTypeError(std::string("packInstancesToKernelBuffer: field '") + key + "' must be column name or number");
-    return false;
-}
-
-float readFloatAt(const ColumnChunk& col, ColType ct, uint32_t row) {
-    const uint8_t* raw = col.rawData();
-    switch (ct) {
-        case ColType::F32: return reinterpret_cast<const float*>(raw)[row];
-        case ColType::F64: return static_cast<float>(reinterpret_cast<const double*>(raw)[row]);
-        case ColType::I32:
-        case ColType::Dict: return static_cast<float>(reinterpret_cast<const int32_t*>(raw)[row]);
-        case ColType::U32: return static_cast<float>(reinterpret_cast<const uint32_t*>(raw)[row]);
-        case ColType::I64: return static_cast<float>(reinterpret_cast<const int64_t*>(raw)[row]);
-        case ColType::Bool: return raw[row] != 0 ? 1.0f : 0.0f;
-        case ColType::String: return 0.0f;
-    }
-    return 0.0f;
-}
-
-Value packTableInstancesToKernelBuffer(const TableSnapshot& snap, Value specVal, Value optsVal) {
-    ev::Persistent spec(ev::isObject(specVal) ? specVal : ev::undefined());
-    InstanceFieldSpec px, py, pz, uScale, sx, sy, sz, cr, cg, cb, ca;
-    if (!parseInstanceField(snap.schema, spec.get(), "x", 0.0f, px) ||
-        !parseInstanceField(snap.schema, spec.get(), "y", 0.0f, py) ||
-        !parseInstanceField(snap.schema, spec.get(), "z", 0.0f, pz) ||
-        !parseInstanceField(snap.schema, spec.get(), "scale", 1.0f, uScale) ||
-        !parseInstanceField(snap.schema, spec.get(), "sx", 1.0f, sx) ||
-        !parseInstanceField(snap.schema, spec.get(), "sy", 1.0f, sy) ||
-        !parseInstanceField(snap.schema, spec.get(), "sz", 1.0f, sz) ||
-        !parseInstanceField(snap.schema, spec.get(), "r", 1.0f, cr) ||
-        !parseInstanceField(snap.schema, spec.get(), "g", 1.0f, cg) ||
-        !parseInstanceField(snap.schema, spec.get(), "b", 1.0f, cb) ||
-        !parseInstanceField(snap.schema, spec.get(), "a", 1.0f, ca)) {
-        return ev::undefined();
-    }
-
-    const bool hasSx = ev::isObject(spec.get()) && !ev::getProperty(spec.get(), "sx").isUndefined();
-    const bool hasSy = ev::isObject(spec.get()) && !ev::getProperty(spec.get(), "sy").isUndefined();
-    const bool hasSz = ev::isObject(spec.get()) && !ev::getProperty(spec.get(), "sz").isUndefined();
-    if (!hasSx) sx = uScale;
-    if (!hasSy) sy = uScale;
-    if (!hasSz) sz = uScale;
-
-    if (ev::isObject(spec.get())) {
-        Value colorArr = ev::getProperty(spec.get(), "color");
-        if (isJsArray(colorArr)) {
-            ev::Persistent arr(colorArr);
-            const uint32_t len = static_cast<uint32_t>(std::max(0.0, ev::toDouble(ev::getProperty(arr.get(), "length"))));
-            auto bindColorElem = [&](uint32_t idx, InstanceFieldSpec& dst) {
-                if (idx >= len) return true;
-                Value cv = ev::getElement(arr.get(), idx);
-                if (ev::isString(cv)) {
-                    const std::string nm = ev::toUtf8(cv);
-                    const int colIdx = snap.schema.findColumn(nm);
-                    if (colIdx < 0) {
-                        ev::throwRangeError("packInstancesToKernelBuffer: unknown color column '" + nm + "'");
-                        return false;
-                    }
-                    dst.col = colIdx;
-                    return true;
-                }
-                if (cv.isNumber()) {
-                    dst.col = -1;
-                    dst.constant = static_cast<float>(cv.asNumber());
-                }
-                return true;
-            };
-            if (!bindColorElem(0, cr) || !bindColorElem(1, cg) || !bindColorElem(2, cb) || !bindColorElem(3, ca)) {
-                return ev::undefined();
-            }
-        }
-    }
-
-    std::string residency = defaultGpuResidency();
-    std::shared_ptr<brokernel::api::GpuBuffer> target;
-    ev::Persistent targetHold(ev::undefined());
-    auto checkOpts = [&](Value v) -> bool {
-        if (!ev::isObject(v)) return true;
-        ev::Persistent o(v);
-        Value rVal = ev::getProperty(o.get(), "residency");
-        if (ev::isString(rVal)) residency = ev::toUtf8(rVal);
-        Value tVal = ev::getProperty(o.get(), "target");
-        if (!tVal.isUndefined() && !tVal.isNull()) {
-            target = brokernel::api::bufferOf(tVal);
-            if (!target) {
-                ev::throwTypeError("packInstancesToKernelBuffer: target is not a KernelBuffer");
-                return false;
-            }
-            targetHold.set(tVal);
-        }
-        return true;
-    };
-    if (!checkOpts(spec.get()) || !checkOpts(optsVal)) return ev::undefined();
-
-    const size_t rowCount = snap.rowCount();
-    const size_t totalBytes = rowCount * 16 * sizeof(float);
-    std::vector<uint8_t> packed(totalBytes, 0);
-    float* outFloats = reinterpret_cast<float*>(packed.data());
-
-    size_t outRow = 0;
-    for (const auto& fc : snap.chunks) {
-        if (fc.aliveCount == 0) continue;
-        auto evalField = [&](const InstanceFieldSpec& f, uint32_t r) -> float {
-            if (f.col < 0) return f.constant;
-            const size_t ci = static_cast<size_t>(f.col);
-            return readFloatAt(*fc.columns[ci], snap.schema.columns[ci].type, r);
-        };
-        for (uint32_t r = 0; r < fc.rowCount; ++r) {
-            if (!fc.isAlive(r)) continue;
-            float* dst = outFloats + outRow * 16;
-            dst[0] = evalField(sx, r);
-            dst[3] = evalField(px, r);
-            dst[5] = evalField(sy, r);
-            dst[7] = evalField(py, r);
-            dst[10] = evalField(sz, r);
-            dst[11] = evalField(pz, r);
-            dst[12] = evalField(cr, r);
-            dst[13] = evalField(cg, r);
-            dst[14] = evalField(cb, r);
-            dst[15] = evalField(ca, r);
-            ++outRow;
-        }
-    }
-
-    return allocateOrWriteTarget(target, targetHold.get(), residency, packed, "packInstancesToKernelBuffer");
-}
-
 Value unpackTableFromKernelBuffer(Table& tbl, Value colsArg, Value kbVal, Value optsVal) {
     auto kb = brokernel::api::bufferOf(kbVal);
     if (!kb) return ev::throwTypeError("Table.unpackFromKernelBuffer: expects (columns, kernelBuffer, opts?)");
@@ -627,12 +470,6 @@ void attachTableGpuPackProto(ev::ObjectBuilder& proto) {
         return packTableColumnsToKernelBuffer(*tbl->snapshot(), argAt(args, 0), argAt(args, 1));
     });
 
-    proto.def("packInstancesToKernelBuffer", 2, [](Value thisVal, std::span<const Value> args) -> Value {
-        auto tbl = hostMutableTableOf(thisVal);
-        if (!tbl) return ev::throwTypeError("Table.packInstancesToKernelBuffer: invalid receiver");
-        return packTableInstancesToKernelBuffer(*tbl->snapshot(), argAt(args, 0), argAt(args, 1));
-    });
-
     proto.def("unpackFromKernelBuffer", 3, [](Value thisVal, std::span<const Value> args) -> Value {
         auto tbl = hostMutableTableOf(thisVal);
         if (!tbl) return ev::throwTypeError("Table.unpackFromKernelBuffer: invalid receiver");
@@ -649,12 +486,6 @@ void attachSnapshotGpuPackProto(ev::ObjectBuilder& proto) {
         auto snap = hostTableSnapshotOf(thisVal);
         if (!snap) return ev::throwTypeError("TableSnapshot.packToKernelBuffer: invalid receiver");
         return packTableColumnsToKernelBuffer(*snap, argAt(args, 0), argAt(args, 1));
-    });
-
-    proto.def("packInstancesToKernelBuffer", 2, [](Value thisVal, std::span<const Value> args) -> Value {
-        auto snap = hostTableSnapshotOf(thisVal);
-        if (!snap) return ev::throwTypeError("TableSnapshot.packInstancesToKernelBuffer: invalid receiver");
-        return packTableInstancesToKernelBuffer(*snap, argAt(args, 0), argAt(args, 1));
     });
 #else
     (void)proto;
