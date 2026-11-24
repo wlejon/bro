@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -484,6 +485,12 @@ Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
     bool sawVulkan = false;
     bool sawCpu = false;
     brotensor::Device vkDev = brotensor::Device::CPU;
+    struct StagedTensor {
+        brotensor::Tensor* tensor = nullptr;
+        std::vector<uint8_t> buf;
+        bool writeback = false;
+    };
+    std::deque<StagedTensor> staged;
     std::vector<brokernel::KernelArg> kargs;
     kargs.reserve(passed.size());
 
@@ -491,6 +498,7 @@ Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
     heldArgs.reserve(passed.size());
     for (size_t i = 0; i < passed.size(); ++i) heldArgs.emplace_back(args[2 + i]);
 
+    std::string stageErr;
     for (size_t i = 0; i < passed.size(); ++i) {
         const brokernel::KernelParamInfo& p = *passed[i];
         Value av = heldArgs[i].get();
@@ -511,7 +519,18 @@ Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
                 sawCpu = true;
                 kargs.push_back(brokernel::KernelArg::buffer(v.host_ptr, v.bytes));
             } else {
-                return ev::throwTypeError("bro.kernel.dispatchTensors: unsupported tensor backend (expected CPU or Vulkan)");
+                // Non-Vulkan GPU backends (e.g. CUDA / Metal): stage through CPU host memory.
+                sawCpu = true;
+                StagedTensor& st = staged.emplace_back();
+                st.tensor = t;
+                st.writeback = (p.role == brokernel::ParamRole::Store) &&
+                               (p.access != brokernel::AccessMode::Read);
+                st.buf.resize(v.bytes);
+                if (v.bytes > 0 &&
+                    !brotensor::interop::copy_bytes_from_tensor(*t, st.buf.data(), v.bytes, &stageErr)) {
+                    return ev::throwError("bro.kernel.dispatchTensors: " + stageErr);
+                }
+                kargs.push_back(brokernel::KernelArg::buffer(st.buf.data(), v.bytes));
             }
         } else {
             kargs.push_back(makeScalarOrVecKernelArg(p, av));
@@ -534,6 +553,12 @@ Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
     } else {
         if (!k->dispatch_cpu(shape, kargs, nullptr, &err)) {
             return ev::throwError("bro.kernel.dispatchTensors: " + err);
+        }
+        for (const auto& st : staged) {
+            if (st.writeback && !st.buf.empty() &&
+                !brotensor::interop::copy_bytes_to_tensor(st.buf.data(), st.buf.size(), *st.tensor, &err)) {
+                return ev::throwError("bro.kernel.dispatchTensors: " + err);
+            }
         }
     }
     return ev::undefined();
