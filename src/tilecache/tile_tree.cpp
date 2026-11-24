@@ -423,6 +423,23 @@ void TileTree::evict(Node& n) {
 
 void TileTree::refresh() { ++generation_; }
 
+void TileTree::refreshRegion(const Vec3d& center, double radius) {
+    // A refresh, with every tile clear of the region carried on to the new
+    // generation as it stood: current stays current, out of date stays out
+    // of date. A tile's descendants lie within its bounds, so a refreshed
+    // tile's parent is refreshed too and is still produced before it.
+    const uint64_t was = generation_++;
+    for (Node& n : nodes_) {
+        if (!n.live) continue;
+        const Bounds b = bounds(n, n.range);
+        const double dx = b.center.x - center.x, dy = b.center.y - center.y, dz = b.center.z - center.z;
+        const double reach = b.radius + radius;
+        if (dx * dx + dy * dy + dz * dz <= reach * reach) continue;
+        if (n.gen == was) n.gen = generation_;
+        if (n.takenGen == was) n.takenGen = generation_;
+    }
+}
+
 uint32_t TileTree::stale() const {
     uint32_t n = 0;
     for (const int32_t i : wanted_)

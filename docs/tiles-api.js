@@ -382,6 +382,13 @@ const terrain = bro.tiles.createCache({
 //                   refresh batches, and only those layers' GPU pool slices
 //                   are marked dirty for texture array uploads while other
 //                   layers and height ranges remain intact.
+// cache.refreshRegion(center, radius, layers?)
+//                   refresh() for the tiles whose bounds meet the sphere
+//                   about `center` ([x, y, z], domain units, as the view's
+//                   position) of `radius` alone: what produce reads changed
+//                   there only (a shape laid on the ground). Every other tile
+//                   stays as up to date as it was, so the work and the
+//                   change over are the region's.
 // cache.stale       wanted tiles out of date since a refresh (in pending)
 
 function frame(camera, patch) {

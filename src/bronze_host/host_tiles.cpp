@@ -19,6 +19,7 @@
 #include <deque>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -723,12 +724,12 @@ Value drawnTiles(const Cache* c, const std::vector<uint32_t>* only) {
     return out.get();
 }
 
-Value js_invalidate(Value self, std::span<const Value> args) {
-    Cache* c = cacheOf(self, "TileCache.invalidate");
-    if (args.empty() || ev::isNull(args[0]) || ev::isUndefined(args[0])) {
+// The layers a refresh names (a layer name or an array of them; absent: all)
+// into c->invalidatedLayers, or an exception value for a bad argument.
+std::optional<Value> takeRefreshLayers(Cache* c, Value arg, const char* what) {
+    if (ev::isNull(arg) || ev::isUndefined(arg)) {
         c->invalidatedLayers.clear();
-        c->tree.refresh();
-        return ev::undefined();
+        return std::nullopt;
     }
     std::vector<std::string> wanted;
     auto addLayer = [&](const std::string& name) -> bool {
@@ -744,23 +745,46 @@ Value js_invalidate(Value self, std::span<const Value> args) {
             wanted.push_back(name);
         return true;
     };
-    if (ev::isString(args[0])) {
-        const std::string name = ev::toUtf8(args[0]);
+    if (ev::isString(arg)) {
+        const std::string name = ev::toUtf8(arg);
         if (!addLayer(name))
-            return ev::throwRangeError("TileCache.invalidate: no layer '" + name + "'");
-    } else if (ev::isObject(args[0])) {
-        const Rooted arr(args[0]);
+            return ev::throwRangeError(std::string(what) + ": no layer '" + name + "'");
+    } else if (ev::isObject(arg)) {
+        const Rooted arr(arg);
         const double n = numberOr(arr, "length", 0);
         for (uint32_t i = 0; i < n; ++i) {
             const std::string name = ev::toUtf8(ev::getElement(arr, i));
             if (!addLayer(name))
-                return ev::throwRangeError("TileCache.invalidate: no layer '" + name + "'");
+                return ev::throwRangeError(std::string(what) + ": no layer '" + name + "'");
         }
     } else {
-        return ev::throwTypeError("TileCache.invalidate: layers must be a layer name or array of layer names");
+        return ev::throwTypeError(std::string(what) + ": layers must be a layer name or array of layer names");
     }
     c->invalidatedLayers = std::move(wanted);
+    return std::nullopt;
+}
+
+Value js_invalidate(Value self, std::span<const Value> args) {
+    Cache* c = cacheOf(self, "TileCache.invalidate");
+    if (auto err = takeRefreshLayers(c, args.empty() ? ev::undefined() : args[0], "TileCache.invalidate")) return *err;
     c->tree.refresh();
+    return ev::undefined();
+}
+
+// refreshRegion(center [x, y, z], radius, layers?): refresh() for the tiles
+// whose bounds meet the sphere alone.
+Value js_refreshRegion(Value self, std::span<const Value> args) {
+    Cache* c = cacheOf(self, "TileCache.refreshRegion");
+    if (args.size() < 2 || !ev::isObject(args[0]))
+        return ev::throwTypeError("TileCache.refreshRegion: (center [x, y, z], radius, layers?)");
+    const Rooted ctr(args[0]);
+    const auto num = [](Value v) { return ev::isNumber(v) ? ev::toDouble(v) : std::nan(""); };
+    const tilecache::Vec3d center{num(ev::getElement(ctr, 0)), num(ev::getElement(ctr, 1)), num(ev::getElement(ctr, 2))};
+    const double radius = num(args[1]);
+    if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z) || !(radius >= 0))
+        return ev::throwRangeError("TileCache.refreshRegion: center and radius must be finite, radius >= 0");
+    if (auto err = takeRefreshLayers(c, args.size() > 2 ? args[2] : ev::undefined(), "TileCache.refreshRegion")) return *err;
+    c->tree.refreshRegion(center, radius);
     return ev::undefined();
 }
 
@@ -790,6 +814,7 @@ void decorateCache(ev::ObjectBuilder& b) {
     });
     b.def("refresh", 1, js_invalidate);
     b.def("invalidate", 1, js_invalidate);
+    b.def("refreshRegion", 3, js_refreshRegion);
     b.accessor("stale", [](Value self, std::span<const Value>) -> Value {
         return ev::fromDouble(static_cast<double>(cacheOf(self, "TileCache.stale")->tree.stale()));
     });

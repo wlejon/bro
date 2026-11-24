@@ -262,6 +262,10 @@ public:
     /// cells serve until the new are ready. A tile taken before the refresh
     /// is out of date once it is ready, and is handed out again too.
     void refresh();
+    /// refresh() for the tiles whose bounds meet the sphere about `center`
+    /// (domain units) of `radius` alone (what changed is local: a shape laid
+    /// on the ground); every other tile stays as up to date as it was.
+    void refreshRegion(const Vec3d& center, double radius);
     /// Wanted tiles ready but out of date.
     uint32_t stale() const;
 
