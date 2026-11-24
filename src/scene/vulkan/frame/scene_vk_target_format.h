@@ -104,17 +104,23 @@ struct TargetFormat {
 /// waited for.
 class PipelineVariants {
 public:
+    ///
+    /// `fallback` (a variant, or -1): while the pipeline builds, that
+    /// variant's if it is in, a sibling drawing the same surface (no skip).
     VkPipeline get(uint32_t variant, const TargetFormat& target,
-                   const std::function<VkPipeline()>& build, bool async = false) {
+                   const std::function<VkPipeline()>& build, bool async = false, int64_t fallback = -1) {
         const Key key{target.key() | (static_cast<uint64_t>(variant) << 48), target.keyMore()};
         auto it = pipelines_.find(key);
         if (it != pipelines_.end()) return it->second;
+        const auto building = [&]() -> VkPipeline {
+            if (fallback >= 0)
+                if (VkPipeline p = ready(static_cast<uint32_t>(fallback), target)) return p;
+            pipeline_async::noteSkip();
+            return VK_NULL_HANDLE;
+        };
         if (auto pit = pending_.find(key); pit != pending_.end()) {
             if (pit->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-                if (pipeline_async::async()) {
-                    pipeline_async::noteSkip();
-                    return VK_NULL_HANDLE;
-                }
+                if (pipeline_async::async()) return building();
                 pit->second.wait();  // a held render: it draws everything
             }
             VkPipeline p = pit->second.get();
@@ -130,9 +136,23 @@ public:
         cur = prev;
         if (capture.used) {
             pending_.emplace(key, capture.future);
-            pipeline_async::noteSkip();
-            return VK_NULL_HANDLE;
+            return building();
         }
+        if (p != VK_NULL_HANDLE) pipelines_.emplace(key, p);
+        return p;
+    }
+
+    /// The pipeline of (variant, target) if it is built (taken in if its
+    /// build just finished), else null: never starts or waits for a build.
+    /// A pass whose pipeline is not in yet draws with a sibling that is.
+    VkPipeline ready(uint32_t variant, const TargetFormat& target) {
+        const Key key{target.key() | (static_cast<uint64_t>(variant) << 48), target.keyMore()};
+        if (auto it = pipelines_.find(key); it != pipelines_.end()) return it->second;
+        auto pit = pending_.find(key);
+        if (pit == pending_.end() || pit->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return VK_NULL_HANDLE;
+        VkPipeline p = pit->second.get();
+        pending_.erase(pit);
         if (p != VK_NULL_HANDLE) pipelines_.emplace(key, p);
         return p;
     }

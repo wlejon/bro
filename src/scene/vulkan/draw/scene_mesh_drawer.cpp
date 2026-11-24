@@ -259,16 +259,18 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
 
 VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target) {
     const uint32_t rasterBits = rasterVariant(draw);
-    // Built off the frame thread (the draw skipped until it is in).
+    // Built off the frame thread (drawn with its sibling across the cut bit
+    // if that is in, as customPipeline does, else skipped until it is).
     const uint32_t variant = static_cast<uint32_t>(draw.kind) * raster::kCount + rasterBits;
-    return builtin_.get(variant, target, [&] {
+    VkPipeline p = builtin_.get(variant, target, [&] {
         const int f = draw.kind == MeshKind::Tube ? 2 : vegetationShading(draw.kind) ? 1 : 0;
         const int i = SceneTargets::carriesIndirect(target) ? 1 : 0;
         const int c = (rasterBits & raster::kCuts) != 0 ? 1 : 0;
         const int v = static_cast<int>(draw.kind);
         return buildPipeline(vs_[v], fs_[f][i][c], draw.kind, rasterBits, target, "mesh", true,
                              kVsEntries[v], kFsEntries[f][i][c]);
-    }, true);
+    }, true, variant ^ raster::kCuts);
+    return p;
 }
 
 SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState& cs, MeshKind kind) {
@@ -330,7 +332,7 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
 VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target) {
     const MeshKind kind = draw.kind;
     const uint32_t rasterBits = rasterVariant(draw);
-    return prog.pipelines.get(rasterBits, target, [&]() -> VkPipeline {
+    VkPipeline p = prog.pipelines.get(rasterBits, target, [&]() -> VkPipeline {
         const bool indirect = SceneTargets::carriesIndirect(target);
         const bool cuts = (rasterBits & raster::kCuts) != 0;
         const auto st = shaderTarget(kind);
@@ -364,7 +366,12 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& 
             }
         }
         return buildPipeline(vs, fs, kind, rasterBits, target, "custom mesh", true, prog.vsEntry.c_str(), fsEntry);
-    }, !probeActive_);
+    }, !probeActive_, rasterBits ^ raster::kCuts);
+    // (While it builds, its sibling across the cut bit draws the same
+    // surface, all of it or what the cut leaves: a node gaining or losing a
+    // cut (a near clip, an alpha cutoff, a fade) keeps drawing, rather than
+    // vanishing for the seconds a large hook's pipeline takes.)
+    return p;
 }
 
 VkDescriptorSet SceneMeshDrawer::boneSet(SceneFrame& frame, const std::vector<float>& palette) {

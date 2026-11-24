@@ -336,6 +336,7 @@ const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
     j["billboardsCulled"] = s.billboardsCulled;
     j["decalsDrawn"] = s.decalsDrawn;
     j["decalsCulled"] = s.decalsCulled;
+    j["pipelineSkips"] = s.pipelineSkips;
     j["shadowDrawn"] = s.shadowDrawn;
     j["shadowCulled"] = s.shadowCulled;
     j["shadowPagesNeeded"] = s.shadowPagesNeeded;

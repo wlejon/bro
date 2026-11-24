@@ -107,6 +107,9 @@ along the motion.
  * @property {number} [totalNodes]
  * @property {number} [renderedNodes]
  * @property {number} [culledNodes]
+ * @property {number} [pipelineSkips] draws the frame skipped because their pipeline was still building
+ *   (a window's policy, `perf.asyncShaders(true)`); a draw whose variant is building but whose sibling
+ *   across a cut (a near clip, an alpha cutoff, a fade) is built draws with that one and is not skipped
  * @property {number} [shadowDrawn]   shadow casters drawn this frame (per caster × page view)
  * @property {number} [shadowCulled]  shadow casters culled
  * @property {number} [shadowPagesNeeded]    shadow pages the newest marking of the depth buffer named
