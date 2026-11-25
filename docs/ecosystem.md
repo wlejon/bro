@@ -26,7 +26,7 @@ desktop libs  brovfs brosys brocas brocred broapps brothumb brodisplays
 |------|------|------------|-----------|
 | [bro](https://github.com/wlejon/bro) | The app runtime: HTML/CSS/JS apps on a GPU (Vulkan 1.3) engine with 3D, physics, audio, a native terminal element and on-device AI | every engine, terminal and desktop library (except brocas), bronze, brass | Windows, Linux, macOS |
 | [bronze](https://github.com/wlejon/bronze) | JavaScript compiler and shared runtime: AOT to native modules, plus in-process JIT. bro runs every app's script through it | brass | Windows x64, Linux x64, macOS arm64 |
-| [brass](https://github.com/wlejon/brass) | Code-generation backend and runtime for GC'd dynamic languages: MIR, JIT/AOT for x86-64 and AArch64, moving GC | none | Windows, Linux, macOS |
+| [brass](https://github.com/wlejon/brass) | Code-generation backend, GPU compiler, formal verification & runtime: MIR, JIT/AOT for x86-64 and AArch64, SPIR-V / PTX / MSL GPU targets, bitvector SMT solver, moving GC | none | Windows, Linux, macOS |
 | [brasslua](https://github.com/wlejon/brasslua) | Lua 5.4 JIT/AOT compiler and runtime on `brass` with shared `brass::gc::Heap` and `bronze::embed` bridge (`brasslua_bronze`) | brass, bronze (optional) | Windows, Linux, macOS |
 | [brokernel](https://github.com/wlejon/brokernel) | The kernel language for world code: one WGSL-like source (modules, generics, f64, grids and stencils) compiled through brass to SPIR-V for the GPU and native code for the CPU, with FastNoise2's nodes as `std::noise`; bro mounts its binding as `bro.kernel` (`BRO_WITH_KERNEL`) | brass, bronze for its JS binding (FastNoise2 for its tests and bench) | Windows, Linux, macOS |
 
