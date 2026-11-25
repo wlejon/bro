@@ -3,11 +3,13 @@
 #include <bromesh/isosurface/jit/sdf_compiler.h>
 
 #if defined(BROMESH_HAS_BRASS_JIT)
+#include <brass/cache/artifact_cache.hpp>
 #include <brass/codegen/kernel_jit.hpp>
 #include <brass/codegen/sdf_builder.hpp>
-#include <brass/mir/scalar_opt.hpp>
-#include <brass/mir/smt_guard_elim.hpp>
-#include <brass/mir/superopt.hpp>
+#include <brass/core/diagnostics.hpp>
+#include <brass/mir/gpu_opt.hpp>
+#include <brass/mir/gpu_portability.hpp>
+#include <brass/target/msl_target.hpp>
 #include <brass/target/spirv/spirv_binary_reader.hpp>
 #include <brass/target/spirv/spirv_ir.hpp>
 #include <brass/target/spirv_target.hpp>
@@ -15,6 +17,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 namespace bromesh {
 float evalScalarNode(const SdfGraph& graph, int nodeId, float px, float py, float pz);
@@ -447,16 +452,86 @@ std::vector<uint32_t> SdfGpuTracer::compileGridSpirv(
     return bromesh::JitSdfCompiler::instance().compile_spirv(graph, rootNode);
 }
 
-std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
+std::string SdfGpuTracer::compileGridMsl(
+    const bromesh::SdfGraph& graph, int rootNode) {
+    return bromesh::JitSdfCompiler::instance().compile_msl(graph, rootNode);
+}
+
+#if defined(BROMESH_HAS_BRASS_JIT)
+namespace {
+
+brass::cache::ArtifactCache& sdfRaymarchCache() {
+    static constexpr uint64_t kMaxBytes = 64ULL * 1024 * 1024;
+    static auto* store = new brass::cache::ArtifactCache(
+        brass::cache::default_cache_dir("bro", "sdf-spirv", "BRO_SDF_CACHE_DIR"), kMaxBytes);
+    return *store;
+}
+
+uint32_t floatBitsU32(float f) noexcept {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &f, sizeof(bits));
+    return bits;
+}
+
+uint64_t hashMix64(uint64_t seed, uint64_t v) noexcept {
+    return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+}
+
+uint64_t raymarchMemKey(const bromesh::SdfGraph& graph, const SdfTraceConfig& cfg, int root) {
+    uint64_t h = hashMix64(graph.computeHash(), static_cast<uint64_t>(static_cast<uint32_t>(root)));
+    h = hashMix64(h, static_cast<uint64_t>(cfg.maxSteps));
+    h = hashMix64(h, floatBitsU32(cfg.hitEpsilon));
+    h = hashMix64(h, floatBitsU32(cfg.normalEpsilon));
+    h = hashMix64(h, floatBitsU32(cfg.lightDir.x));
+    h = hashMix64(h, floatBitsU32(cfg.lightDir.y));
+    h = hashMix64(h, floatBitsU32(cfg.lightDir.z));
+    h = hashMix64(h, floatBitsU32(cfg.shadowK));
+    h = hashMix64(h, floatBitsU32(cfg.shadowMinT));
+    h = hashMix64(h, floatBitsU32(cfg.shadowMaxT));
+    h = hashMix64(h, static_cast<uint64_t>(cfg.shadowSteps));
+    h = hashMix64(h, static_cast<uint64_t>(cfg.aoSteps));
+    h = hashMix64(h, floatBitsU32(cfg.aoStepSize));
+    h = hashMix64(h, floatBitsU32(cfg.aoIntensity));
+    h = hashMix64(h, (cfg.computeShadow ? 1ULL : 0ULL) | (cfg.computeAo ? 2ULL : 0ULL));
+    return h;
+}
+
+brass::cache::CacheKey buildRaymarchCacheKey(
+    const char* domain,
     const bromesh::SdfGraph& graph,
     const SdfTraceConfig& cfg,
-    int rootNode) {
-#if defined(BROMESH_HAS_BRASS_JIT)
-    if (graph.empty()) return {};
-    const int root = resolveRoot(graph, rootNode);
-    if (root < 0 || root >= static_cast<int>(graph.size())) return {};
+    int root,
+    bool loadsThroughVar) {
+    brass::cache::KeyBuilder kb(domain);
+    kb.add_brass_codegen();
+    kb.add_u64("graph_hash", graph.computeHash());
+    kb.add_u64("node_count", static_cast<uint64_t>(graph.size()));
+    kb.add_u64("root", static_cast<uint64_t>(static_cast<int64_t>(root)));
+    kb.add_u64("max_steps", static_cast<uint64_t>(cfg.maxSteps));
+    kb.add_u64("hit_eps", floatBitsU32(cfg.hitEpsilon));
+    kb.add_u64("normal_eps", floatBitsU32(cfg.normalEpsilon));
+    kb.add_u64("lx", floatBitsU32(cfg.lightDir.x));
+    kb.add_u64("ly", floatBitsU32(cfg.lightDir.y));
+    kb.add_u64("lz", floatBitsU32(cfg.lightDir.z));
+    kb.add_u64("shadow_k", floatBitsU32(cfg.shadowK));
+    kb.add_u64("shadow_min_t", floatBitsU32(cfg.shadowMinT));
+    kb.add_u64("shadow_max_t", floatBitsU32(cfg.shadowMaxT));
+    kb.add_u64("shadow_steps", static_cast<uint64_t>(cfg.shadowSteps));
+    kb.add_u64("ao_steps", static_cast<uint64_t>(cfg.aoSteps));
+    kb.add_u64("ao_step", floatBitsU32(cfg.aoStepSize));
+    kb.add_u64("ao_intensity", floatBitsU32(cfg.aoIntensity));
+    kb.add_bool("compute_shadow", cfg.computeShadow);
+    kb.add_bool("compute_ao", cfg.computeAo);
+    kb.add_bool("loads_through_var", loadsThroughVar);
+    return kb.finish();
+}
 
-    Module mod("sdf_raymarch_" + std::to_string(graph.computeHash()));
+Function* buildRaymarchFunction(
+    Module& mod,
+    const bromesh::SdfGraph& graph,
+    const SdfTraceConfig& cfg,
+    int root,
+    bool* portabilityOkOut = nullptr) {
     Function* fn = mod.create_function("trace_sdf_rays", Type::void_type(), {
         Type::ptr(), // float* in_rays  (8 floats/ray: ox, oy, oz, tmin, dx, dy, dz, tmax)
         Type::ptr(), // float* out_hits (8 floats/ray: t, nx, ny, nz, shadow, ao, hit, steps)
@@ -646,19 +721,99 @@ std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
 
     kb.builder().build_ret_void();
 
-    brass::run_smt_guard_elimination(*fn, mod);
-    brass::run_mir_superopt(*fn, mod);
-    brass::eliminate_dead_code(*fn);
+    brass::GpuOptOptions gpuOpts;
+    gpuOpts.opt_level = 2;
+    gpuOpts.enable_smt_guard_elim = true;
+    gpuOpts.enable_gpu_superopt = true;
+    brass::optimize_gpu_function(*fn, mod, gpuOpts);
+
+    brass::DiagnosticReporter portDiag;
+    const bool portOk = brass::verify_gpu_portability(*fn, {}, &portDiag);
+    if (portabilityOkOut) *portabilityOkOut = portOk;
+    return fn;
+}
+
+} // namespace
+#endif // BROMESH_HAS_BRASS_JIT
+
+std::vector<uint32_t> SdfGpuTracer::compileRaymarchSpirv(
+    const bromesh::SdfGraph& graph,
+    const SdfTraceConfig& cfg,
+    int rootNode) {
+#if defined(BROMESH_HAS_BRASS_JIT)
+    if (graph.empty()) return {};
+    const int root = resolveRoot(graph, rootNode);
+    if (root < 0 || root >= static_cast<int>(graph.size())) return {};
+
+#ifdef __APPLE__
+    constexpr bool kLoadsThroughVar = true;
+#else
+    constexpr bool kLoadsThroughVar = false;
+#endif
+    const brass::cache::CacheKey ckey =
+        buildRaymarchCacheKey("bro.scene.sdf_raymarch/1", graph, cfg, root, kLoadsThroughVar);
+    auto& cache = sdfRaymarchCache();
+    if (auto art = cache.get(ckey)) {
+        const auto words = art->as<uint32_t>("spirv");
+        if (!words.empty()) {
+            return std::vector<uint32_t>(words.begin(), words.end());
+        }
+    }
+
+    Module mod("sdf_raymarch_" + std::to_string(raymarchMemKey(graph, cfg, root)));
+    Function* fn = buildRaymarchFunction(mod, graph, cfg, root);
 
     brass::target::SpirvOptions opts;
     opts.local_size_x = 64;
     opts.local_size_y = 1;
     opts.local_size_z = 1;
-#ifdef __APPLE__
-    opts.loads_through_variable = true;   // MoltenVK's SPIRV-Cross (brokernel CompileOptions)
-#endif
+    opts.loads_through_variable = kLoadsThroughVar;
     auto kernel = brass::target::SpirvTarget::compile(*fn, opts);
+    if (!kernel.words.empty()) {
+        std::string putErr;
+        cache.put(ckey, {brass::cache::BlobRef::of("spirv", std::span<const uint32_t>(kernel.words))}, &putErr);
+    }
     return kernel.words;
+#else
+    (void)graph;
+    (void)cfg;
+    (void)rootNode;
+    return {};
+#endif
+}
+
+std::string SdfGpuTracer::compileRaymarchMsl(
+    const bromesh::SdfGraph& graph,
+    const SdfTraceConfig& cfg,
+    int rootNode) {
+#if defined(BROMESH_HAS_BRASS_JIT)
+    if (graph.empty()) return {};
+    const int root = resolveRoot(graph, rootNode);
+    if (root < 0 || root >= static_cast<int>(graph.size())) return {};
+
+    const brass::cache::CacheKey ckey =
+        buildRaymarchCacheKey("bro.scene.sdf_raymarch_msl/1", graph, cfg, root, false);
+    auto& cache = sdfRaymarchCache();
+    if (auto art = cache.get(ckey)) {
+        const std::string_view sv = art->text("msl");
+        if (!sv.empty()) {
+            return std::string(sv);
+        }
+    }
+
+    Module mod("sdf_raymarch_msl_" + std::to_string(raymarchMemKey(graph, cfg, root)));
+    bool portOk = false;
+    Function* fn = buildRaymarchFunction(mod, graph, cfg, root, &portOk);
+    if (!portOk) return {};
+
+    brass::target::MslOptions mslOpts;
+    mslOpts.workgroup_x = 64;
+    auto msl = brass::target::MslTarget::compile(*fn, mslOpts);
+    if (!msl.source.empty()) {
+        std::string putErr;
+        cache.put(ckey, {brass::cache::BlobRef("msl", msl.source)}, &putErr);
+    }
+    return msl.source;
 #else
     (void)graph;
     (void)cfg;
@@ -699,6 +854,7 @@ SdfSpirvAuditSummary SdfGpuTracer::auditSpirvBinary(std::span<const uint32_t> wo
         summary.diagnostics.push_back(h.message);
     }
     summary.ok = report.ok() && (summary.provenSafeDivisions == summary.divisionCount);
+    summary.portabilityOk = summary.ok;
 #endif
     return summary;
 }

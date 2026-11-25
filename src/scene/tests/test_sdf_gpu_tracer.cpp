@@ -323,6 +323,57 @@ void testVulkanGpuComputeExecution() {
     }
     check(hits > 0, "some GPU rays hit the CSG scene");
     check(surfaceOk, "GPU hits lie on the surface with its normal; soft shadow & AO in [0, 1]");
+
+    // 3. GPU extractMesh (Marching Cubes & Surface Nets) + growing scratch buffer reuse
+    bool mcUsedGpu = false;
+    const bromesh::MeshData mcMesh = SdfGpuTracer::extractMesh(
+        g, 24, 24, 24, bounds, false, 0.0f, true, true, root, &mcUsedGpu);
+    check(mcUsedGpu, "extractMesh Marching Cubes executes on Vulkan GPU");
+    check(mcMesh.vertexCount() > 0 && mcMesh.hasNormals(),
+          "extractMesh Marching Cubes produces non-empty mesh with normals");
+    bool mcBoundsOk = true;
+    for (size_t i = 0; i < mcMesh.positions.size(); i += 3) {
+        if (mcMesh.positions[i] < bounds.min.x - 0.1f || mcMesh.positions[i] > bounds.max.x + 0.1f ||
+            mcMesh.positions[i + 1] < bounds.min.y - 0.1f || mcMesh.positions[i + 1] > bounds.max.y + 0.1f ||
+            mcMesh.positions[i + 2] < bounds.min.z - 0.1f || mcMesh.positions[i + 2] > bounds.max.z + 0.1f) {
+            mcBoundsOk = false;
+            break;
+        }
+    }
+    check(mcBoundsOk, "extractMesh Marching Cubes vertices lie within bounds");
+
+    bool snUsedGpu = false;
+    const bromesh::MeshData snMesh = SdfGpuTracer::extractMesh(
+        g, 20, 20, 20, bounds, true, 0.0f, true, true, root, &snUsedGpu);
+    check(snUsedGpu, "extractMesh Surface Nets executes on Vulkan GPU");
+    check(snMesh.vertexCount() > 0 && snMesh.hasNormals(),
+          "extractMesh Surface Nets produces non-empty mesh with normals");
+
+    // Larger ray batch (64 rays vs previous 36) exercises high-water scratch buffer growth/reuse
+    std::vector<SdfRay> largeRays(64);
+    for (int i = 0; i < 64; ++i) {
+        const float u = (static_cast<float>(i % 8) - 3.5f) * 0.3f;
+        const float v = (static_cast<float>(i / 8) - 3.5f) * 0.3f;
+        largeRays[static_cast<size_t>(i)].origin = {u, v + 0.5f, 4.5f};
+        largeRays[static_cast<size_t>(i)].dir = {0.0f, -0.15f, -1.0f};
+        largeRays[static_cast<size_t>(i)].tMax = 20.0f;
+    }
+    std::vector<SdfTraceHit> largeHits;
+    check(SdfGpuTracer::traceRays(g, largeRays, largeHits, cfg, root) && largeHits.size() == 64,
+          "traceRays succeeds after growing pooled scratch buffers");
+
+    // 4. MSL codegen for both grid and raymarch + raymarch SPIR-V cache hit determinism
+    const std::string gridMsl = SdfGpuTracer::compileGridMsl(g, root);
+    const std::string rayMsl = SdfGpuTracer::compileRaymarchMsl(g, cfg, root);
+    check(gridMsl.find("#include <metal_stdlib>") != std::string::npos &&
+          gridMsl.find("eval_sdf_gpu") != std::string::npos,
+          "compileGridMsl produces Metal compute shader");
+    check(rayMsl.find("#include <metal_stdlib>") != std::string::npos &&
+          rayMsl.find("trace_sdf_rays") != std::string::npos,
+          "compileRaymarchMsl produces Metal raymarch compute shader");
+    const auto spvA = SdfGpuTracer::compileRaymarchSpirv(g, cfg, root);
+    const auto spvB = SdfGpuTracer::compileRaymarchSpirv(g, cfg, root);
+    check(!spvA.empty() && spvA == spvB, "compileRaymarchSpirv hits cache deterministically");
 }
 
 } // namespace

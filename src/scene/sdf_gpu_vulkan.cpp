@@ -4,6 +4,7 @@
 #include "render/vulkan_context.h"
 #include "scene/scene_renderer.h"
 
+#include <bromesh/isosurface/jit/jit_mesher.h>
 #include <bromesh/isosurface/jit/sdf_compiler.h>
 
 #include <algorithm>
@@ -65,11 +66,24 @@ render::VulkanCompute* engineCompute() {
 struct PipelineCache {
     render::VulkanCompute* compute = nullptr;
     std::unordered_map<uint64_t, std::shared_ptr<render::ComputePipeline>> pipelines;
+    std::shared_ptr<render::ComputeBuffer> gridOutBuf;
+    std::shared_ptr<render::ComputeBuffer> rayInBuf;
+    std::shared_ptr<render::ComputeBuffer> rayOutBuf;
 };
 
 PipelineCache& pipelineCache() {
     static auto* c = new PipelineCache();
     return *c;
+}
+
+std::shared_ptr<render::ComputeBuffer> ensureScratchBuffer(
+    render::VulkanCompute& compute,
+    std::shared_ptr<render::ComputeBuffer>& slot,
+    size_t bytes) {
+    if (!slot || slot->size() < bytes) {
+        slot = compute.createBuffer(bytes);
+    }
+    return slot;
 }
 
 template <typename Compile>
@@ -79,6 +93,9 @@ std::shared_ptr<render::ComputePipeline> cachedPipeline(
     PipelineCache& cache = pipelineCache();
     if (cache.compute != &compute) {
         cache.pipelines.clear();
+        cache.gridOutBuf.reset();
+        cache.rayInBuf.reset();
+        cache.rayOutBuf.reset();
         cache.compute = &compute;
     }
     if (auto it = cache.pipelines.find(key); it != cache.pipelines.end()) return it->second;
@@ -112,6 +129,9 @@ uint32_t SdfGpuTracer::cachedVulkanPipelineCount() {
 void SdfGpuTracer::releasePipelines() {
     PipelineCache& cache = pipelineCache();
     cache.pipelines.clear();
+    cache.gridOutBuf.reset();
+    cache.rayInBuf.reset();
+    cache.rayOutBuf.reset();
     cache.compute = nullptr;
 }
 
@@ -139,7 +159,7 @@ bool SdfGpuTracer::evaluateGrid(
         auto pipeline = cachedPipeline(*compute, key,
             [&] { return compileGridSpirv(graph, resolvedRoot); }, "eval_sdf_gpu", 44, 256);
         const size_t byteSize = total * sizeof(float);
-        auto outBuf = pipeline ? compute->createBuffer(byteSize) : nullptr;
+        auto outBuf = pipeline ? ensureScratchBuffer(*compute, pipelineCache().gridOutBuf, byteSize) : nullptr;
         if (outBuf) {
             const float stepX = dimX > 1 ? (bounds.max.x - bounds.min.x) / static_cast<float>(dimX - 1) : 1.0f;
             const float stepY = dimY > 1 ? (bounds.max.y - bounds.min.y) / static_cast<float>(dimY - 1) : 1.0f;
@@ -201,8 +221,9 @@ bool SdfGpuTracer::traceRays(
         }
 
         const size_t byteSize = n * 8 * sizeof(float);
-        auto inBuf = pipeline ? compute->createBuffer(byteSize) : nullptr;
-        auto outBuf = pipeline ? compute->createBuffer(byteSize) : nullptr;
+        auto& pc = pipelineCache();
+        auto inBuf = pipeline ? ensureScratchBuffer(*compute, pc.rayInBuf, byteSize) : nullptr;
+        auto outBuf = pipeline ? ensureScratchBuffer(*compute, pc.rayOutBuf, byteSize) : nullptr;
         std::vector<float> packedHits(n * 8, 0.0f);
         if (inBuf && outBuf && compute->write(*inBuf, 0, packedRays.data(), byteSize)) {
             PushBlock<20> push;
@@ -239,6 +260,38 @@ bool SdfGpuTracer::traceRays(
         }
     }
     return false;
+}
+
+bromesh::MeshData SdfGpuTracer::extractMesh(
+    const bromesh::SdfGraph& graph,
+    int dimX,
+    int dimY,
+    int dimZ,
+    const bromath::AABB3& bounds,
+    bool useSurfaceNets,
+    float isoLevel,
+    bool closeBoundary,
+    bool computeGradients,
+    int rootNode,
+    bool* usedGpuOut) {
+    if (usedGpuOut) *usedGpuOut = false;
+    if (graph.empty() || dimX < 2 || dimY < 2 || dimZ < 2) {
+        return {};
+    }
+    std::vector<float> field;
+    if (evaluateGrid(graph, dimX, dimY, dimZ, bounds, field, rootNode) && !field.empty()) {
+        if (usedGpuOut) *usedGpuOut = true;
+        return useSurfaceNets
+            ? bromesh::surfaceNetsFromField(
+                  graph, field.data(), dimX, dimY, dimZ, bounds, isoLevel, nullptr, rootNode)
+            : bromesh::marchingCubesFromField(
+                  graph, field.data(), dimX, dimY, dimZ, bounds, isoLevel, closeBoundary,
+                  computeGradients, nullptr, rootNode);
+    }
+    return useSurfaceNets
+        ? bromesh::surfaceNetsFromSDF(graph, dimX, dimY, dimZ, bounds, isoLevel, true)
+        : bromesh::marchingCubesFromSDF(
+              graph, dimX, dimY, dimZ, bounds, isoLevel, closeBoundary, computeGradients, true);
 }
 
 } // namespace bro::scene

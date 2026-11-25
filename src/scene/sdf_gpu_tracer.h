@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bromesh/isosurface/jit/sdf_node.h>
+#include <bromesh/mesh_data.h>
 #include <bromath/aabb.h>
 #include <bromath/vec.h>
 
@@ -58,6 +59,7 @@ struct SdfSpirvAuditSummary {
     bool barriersUniform = false;
     bool sharedBoundsOk = false;
     bool divSqrtOk = false;
+    bool portabilityOk = true;
     uint32_t wordCount = 0;
     uint32_t numFunctions = 0;
     uint32_t numBlocks = 0;
@@ -94,6 +96,32 @@ public:
         const bromesh::SdfGraph& graph,
         const SdfTraceConfig& cfg = {},
         int rootNode = -1);
+
+    /// Compile an SdfGraph into a Metal Shading Language (MSL) grid compute kernel.
+    static std::string compileGridMsl(
+        const bromesh::SdfGraph& graph, int rootNode = -1);
+
+    /// Compile an SdfGraph into a portable Metal Shading Language (MSL) sphere-tracing kernel.
+    static std::string compileRaymarchMsl(
+        const bromesh::SdfGraph& graph,
+        const SdfTraceConfig& cfg = {},
+        int rootNode = -1);
+
+    /// Extract a triangle mesh from `graph`, evaluating the 3D distance grid on the
+    /// Vulkan compute queue when available and extracting vertices/normals via Marching Cubes
+    /// or Surface Nets (falling back to CPU SIMD evaluation when Vulkan is unavailable).
+    static bromesh::MeshData extractMesh(
+        const bromesh::SdfGraph& graph,
+        int dimX,
+        int dimY,
+        int dimZ,
+        const bromath::AABB3& bounds,
+        bool useSurfaceNets = false,
+        float isoLevel = 0.0f,
+        bool closeBoundary = true,
+        bool computeGradients = true,
+        int rootNode = -1,
+        bool* usedGpuOut = nullptr);
 
     /// Formally verify a SPIR-V 1.5 binary word stream using both `brass::spirv::verify`
     /// and `brass::spirv::audit_compute_shader_binary`.

@@ -33,11 +33,36 @@ for (let i = 0; i < 16; i++) {
     const one = g.traceRay([r[0], r[1], r[2]], [r[4], r[5], r[6]]);
     const t = hits[i * 8], hit = hits[i * 8 + 6] > 0.5;
     assert(hit === one.hit, `ray ${i}: hit agrees (${hit} vs ${one.hit})`);
-    if (hit) {
-        hitCount++;
-        assert(Math.abs(t - one.t) < 1e-5, `ray ${i}: t agrees (${t} vs ${one.t})`);
-        const d = g.evalPoint(r[0], r[1], r[2] - t);
-        assert(Math.abs(d) < 1e-3, `ray ${i}: the hit is on the surface (${d})`);
+        if (hit) {
+            hitCount++;
+            assert(Math.abs(t - one.t) < 1e-5, `ray ${i}: t agrees (${t} vs ${one.t})`);
+            const d = g.evalPoint(r[0], r[1], r[2] - t);
+            assert(Math.abs(d) < 1e-3, `ray ${i}: the hit is on the surface (${d})`);
+        }
     }
-}
 assert(hitCount > 4 && hitCount < 16, `some rays hit and some miss (${hitCount})`);
+
+// Portable SPIR-V audit portabilityOk + MSL multi-target codegen
+const rayAudit = g.auditSpirv('raymarch');
+assert(rayAudit && rayAudit.ok === true, 'raymarch SPIR-V audit ok');
+assert(rayAudit.portabilityOk === true, 'raymarch SPIR-V audit portabilityOk');
+
+const gridMsl = g.compileMsl();
+assert(typeof gridMsl === 'string' && gridMsl.includes('#include <metal_stdlib>') &&
+    gridMsl.includes('eval_sdf_gpu'), 'compileMsl emits valid Metal compute shader');
+const rayMsl = g.compileRaymarchMsl();
+assert(typeof rayMsl === 'string' && rayMsl.includes('#include <metal_stdlib>') &&
+    rayMsl.includes('trace_sdf_rays'), 'compileRaymarchMsl emits valid Metal raymarch shader');
+
+// GPU-accelerated toMesh (Marching Cubes & Surface Nets)
+const mcMesh = g.toMesh({ resolution: 24, gpu: true });
+assert(mcMesh && mcMesh.vertexCount > 0, 'toMesh Marching Cubes (gpu:true) produces vertices');
+assert(mcMesh.triangleCount > 0, 'toMesh Marching Cubes (gpu:true) produces triangles');
+assert(mcMesh.normals && mcMesh.normals.length === mcMesh.vertexCount * 3,
+    'toMesh Marching Cubes (gpu:true) produces vertex normals');
+
+const snMesh = g.toMesh({ resolution: 20, mode: 'surfaceNets', gpu: true });
+assert(snMesh && snMesh.vertexCount > 0, 'toMesh Surface Nets (gpu:true) produces vertices');
+assert(snMesh.triangleCount > 0, 'toMesh Surface Nets (gpu:true) produces triangles');
+assert(snMesh.normals && snMesh.normals.length === snMesh.vertexCount * 3,
+    'toMesh Surface Nets (gpu:true) produces vertex normals');

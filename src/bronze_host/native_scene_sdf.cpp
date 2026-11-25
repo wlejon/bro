@@ -2,6 +2,7 @@
 #include "bronze_host/host_values.h"
 #include "scene/sdf_gpu_tracer.h"
 
+#include <bromesh/api.h>
 #include <bromesh/isosurface/jit/sdf_node.h>
 
 #include <algorithm>
@@ -119,6 +120,7 @@ Value buildAuditObject(const scene::SdfSpirvAuditSummary& s) {
     b.set("barriersUniform", ev::fromBool(s.barriersUniform));
     b.set("sharedBoundsOk", ev::fromBool(s.sharedBoundsOk));
     b.set("divSqrtOk", ev::fromBool(s.divSqrtOk));
+    b.set("portabilityOk", ev::fromBool(s.portabilityOk));
     b.set("wordCount", ev::fromDouble(s.wordCount));
     b.set("numFunctions", ev::fromDouble(s.numFunctions));
     b.set("numBlocks", ev::fromDouble(s.numBlocks));
@@ -157,6 +159,17 @@ Value implCompileRaymarchSpirv(const bromesh::SdfGraph& g, std::span<const Value
     int rootNode = hasArg(args, 1) ? i32At(args, 1) : -1;
     scene::SdfTraceConfig cfg = parseTraceConfig(argAt(args, 0), &rootNode);
     return makeUint32Array(scene::SdfGpuTracer::compileRaymarchSpirv(g, cfg, rootNode));
+}
+
+Value implCompileMsl(const bromesh::SdfGraph& g, std::span<const Value> args) {
+    const int rootNode = hasArg(args, 0) ? i32At(args, 0) : -1;
+    return ev::fromUtf8(scene::SdfGpuTracer::compileGridMsl(g, rootNode));
+}
+
+Value implCompileRaymarchMsl(const bromesh::SdfGraph& g, std::span<const Value> args) {
+    int rootNode = hasArg(args, 1) ? i32At(args, 1) : -1;
+    scene::SdfTraceConfig cfg = parseTraceConfig(argAt(args, 0), &rootNode);
+    return ev::fromUtf8(scene::SdfGpuTracer::compileRaymarchMsl(g, cfg, rootNode));
 }
 
 Value implAuditSpirv(const bromesh::SdfGraph* g, std::span<const Value> args) {
@@ -317,16 +330,95 @@ Value implToMesh(Value selfObj, std::span<const Value> args) {
     if (!ev::isObject(selfObj)) return ev::null();
     ev::Persistent selfRoot(selfObj);
     bool useSurfaceNets = false;
+    int dimX = 64, dimY = 64, dimZ = 64;
+    bromath::AABB3 bounds{{-2.0f, -2.0f, -2.0f}, {2.0f, 2.0f, 2.0f}};
+    float isoLevel = 0.0f;
+    bool closeBoundary = true;
+    bool computeGradients = true;
+    int rootNode = -1;
+    int gpuOpt = -1; // -1: auto, 0: false, 1: true
+
     if (!args.empty() && ev::isObject(args[0])) {
         ev::Persistent opts(args[0]);
-        Value modeV = ev::getProperty(opts.get(), "mode");
-        if (modeV.isString()) {
-            const std::string mode = ev::toUtf8(modeV);
-            if (mode == "surfaceNets" || mode == "surface_nets") {
-                useSurfaceNets = true;
+        auto readAlg = [&](const char* key) {
+            Value v = ev::getProperty(opts.get(), key);
+            if (v.isString()) {
+                const std::string mode = ev::toUtf8(v);
+                if (mode == "surfaceNets" || mode == "surface_nets" || mode == "sn") {
+                    useSurfaceNets = true;
+                }
+            }
+        };
+        readAlg("mode");
+        readAlg("algorithm");
+
+        Value gpuV = ev::getProperty(opts.get(), "gpu");
+        if (!gpuV.isUndefined()) gpuOpt = ev::toBool(gpuV) ? 1 : 0;
+
+        Value dimsV = ev::getProperty(opts.get(), "dims");
+        if (dimsV.isNumber()) {
+            const int r = std::clamp(static_cast<int>(dimsV.asNumber()), 2, 512);
+            dimX = dimY = dimZ = r;
+        } else if (ev::isObject(dimsV)) {
+            bromath::Vec3 dv{64.0f, 64.0f, 64.0f};
+            if (readVec3(dimsV, dv)) {
+                dimX = std::clamp(static_cast<int>(dv.x), 2, 512);
+                dimY = std::clamp(static_cast<int>(dv.y), 2, 512);
+                dimZ = std::clamp(static_cast<int>(dv.z), 2, 512);
+            }
+        }
+        Value resV = ev::getProperty(opts.get(), "resolution");
+        if (resV.isNumber()) {
+            const int r = std::clamp(static_cast<int>(resV.asNumber()), 2, 512);
+            dimX = dimY = dimZ = r;
+        }
+        Value dxV = ev::getProperty(opts.get(), "dimX");
+        Value dyV = ev::getProperty(opts.get(), "dimY");
+        Value dzV = ev::getProperty(opts.get(), "dimZ");
+        if (dxV.isNumber()) dimX = std::clamp(static_cast<int>(dxV.asNumber()), 2, 512);
+        if (dyV.isNumber()) dimY = std::clamp(static_cast<int>(dyV.asNumber()), 2, 512);
+        if (dzV.isNumber()) dimZ = std::clamp(static_cast<int>(dzV.asNumber()), 2, 512);
+
+        Value boundsV = ev::getProperty(opts.get(), "bounds");
+        if (ev::isObject(boundsV)) {
+            ev::Persistent bObj(boundsV);
+            readVec3(ev::getProperty(bObj.get(), "min"), bounds.min);
+            readVec3(ev::getProperty(bObj.get(), "max"), bounds.max);
+            Value szV = ev::getProperty(bObj.get(), "size");
+            if (szV.isNumber()) {
+                const float s = static_cast<float>(szV.asNumber());
+                bounds = {{-s, -s, -s}, {s, s, s}};
+            }
+        }
+        readVec3(ev::getProperty(opts.get(), "boundsMin"), bounds.min);
+        readVec3(ev::getProperty(opts.get(), "boundsMax"), bounds.max);
+        readVec3(ev::getProperty(opts.get(), "min"), bounds.min);
+        readVec3(ev::getProperty(opts.get(), "max"), bounds.max);
+
+        Value isoV = ev::getProperty(opts.get(), "isoLevel");
+        if (isoV.isNumber()) isoLevel = static_cast<float>(isoV.asNumber());
+        Value closeV = ev::getProperty(opts.get(), "closeBoundary");
+        if (!closeV.isUndefined()) closeBoundary = ev::toBool(closeV);
+        Value gradV = ev::getProperty(opts.get(), "computeGradients");
+        if (!gradV.isUndefined()) computeGradients = ev::toBool(gradV);
+        Value rootV = ev::getProperty(opts.get(), "rootNode");
+        if (rootV.isNumber()) rootNode = static_cast<int>(rootV.asNumber());
+    }
+
+    const int64_t totalCells = int64_t(dimX) * int64_t(dimY) * int64_t(dimZ);
+    const bool wantGpu = (gpuOpt == 1) || (gpuOpt == -1 && totalCells >= 16 * 16 * 16);
+    if (wantGpu) {
+        if (auto* g = unwrapSdfGraph(selfRoot.get())) {
+            bool usedGpu = false;
+            bromesh::MeshData mesh = scene::SdfGpuTracer::extractMesh(
+                *g, dimX, dimY, dimZ, bounds, useSurfaceNets, isoLevel, closeBoundary,
+                computeGradients, rootNode, &usedGpu);
+            if (usedGpu || !mesh.empty()) {
+                return bromesh::api::makeMeshValue(std::move(mesh));
             }
         }
     }
+
     const char* methodName = useSurfaceNets ? "surfaceNets" : "marchingCubes";
     Value fn = ev::getProperty(selfRoot.get(), methodName);
     if (!ev::isFunction(fn)) return ev::null();
@@ -479,6 +571,14 @@ void attachSdfFunctionsToObject(ObjectBuilder& b) {
         auto* g = unwrapSdfGraph(argAt(a, 0));
         return g ? implCompileRaymarchSpirv(*g, a.empty() ? a : a.subspan(1)) : ev::null();
     });
+    b.def("compileSdfMsl", 2, [](Value, std::span<const Value> a) -> Value {
+        auto* g = unwrapSdfGraph(argAt(a, 0));
+        return g ? implCompileMsl(*g, a.empty() ? a : a.subspan(1)) : ev::null();
+    });
+    b.def("compileSdfRaymarchMsl", 3, [](Value, std::span<const Value> a) -> Value {
+        auto* g = unwrapSdfGraph(argAt(a, 0));
+        return g ? implCompileRaymarchMsl(*g, a.empty() ? a : a.subspan(1)) : ev::null();
+    });
     b.def("auditSdfSpirv", 3, [](Value, std::span<const Value> a) -> Value {
         auto* g = unwrapSdfGraph(argAt(a, 0));
         if (g) return implAuditSpirv(g, a.empty() ? a : a.subspan(1));
@@ -545,6 +645,14 @@ void installSdfGraphGpuExtensions() {
             proto.def("compileRaymarchSpirv", 2, [](Value self, std::span<const Value> a) -> Value {
                 auto* g = unwrapSdfGraph(self);
                 return g ? implCompileRaymarchSpirv(*g, a) : ev::null();
+            });
+            proto.def("compileMsl", 1, [](Value self, std::span<const Value> a) -> Value {
+                auto* g = unwrapSdfGraph(self);
+                return g ? implCompileMsl(*g, a) : ev::null();
+            });
+            proto.def("compileRaymarchMsl", 2, [](Value self, std::span<const Value> a) -> Value {
+                auto* g = unwrapSdfGraph(self);
+                return g ? implCompileRaymarchMsl(*g, a) : ev::null();
             });
             proto.def("auditSpirv", 2, [](Value self, std::span<const Value> a) -> Value {
                 auto* g = unwrapSdfGraph(self);
