@@ -501,25 +501,133 @@ bool dispatchPtxOnBrotensor(brotensor::Device cudaDev, const brokernel::Compiled
     return brotensor::interop::dispatch_ptx(cudaDev, desc, err);
 }
 
-Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
+bool dispatchMslOnBrotensor(brotensor::Device metalDev, const brokernel::CompiledKernel& k,
+                            const brokernel::GpuLaunch& launch, std::string* err) {
+    const brokernel::MslArtifact& art = k.ensure_msl(err);
+    if (art.source.empty()) {
+        if (err && err->empty()) *err = "kernel '" + k.name + "' has no MSL build";
+        return false;
+    }
+    if (!brotensor::interop::metal_msl_dispatch_available(metalDev)) {
+        if (err) *err = "brotensor Metal MSL dispatch is unavailable";
+        return false;
+    }
+    if (k.spirv.params.size() != launch.args.size()) {
+        if (err) {
+            *err = "kernel '" + k.name + "' MIR parameter count (" + std::to_string(k.spirv.params.size()) +
+                   ") mismatches launch args (" + std::to_string(launch.args.size()) + ")";
+        }
+        return false;
+    }
+
+    std::vector<const void*> bufPtrs;
+    bufPtrs.reserve(art.num_buffers);
+    std::vector<uint8_t> scalarBuf(art.scalar_params_bytes, 0);
+    size_t scalarIdx = 0;
+
+    for (size_t i = 0; i < launch.args.size(); ++i) {
+        if (k.spirv.params[i].type.is_pointer()) {
+            bufPtrs.push_back(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(launch.args[i].bits())));
+        } else {
+            if (scalarIdx >= art.scalar_param_offsets.size()) {
+                if (err) *err = "kernel '" + k.name + "' MSL scalar parameter offset count mismatch";
+                return false;
+            }
+            const uint32_t off = art.scalar_param_offsets[scalarIdx++];
+            const uint32_t sz = (k.spirv.params[i].size == 8u) ? 8u : 4u;
+            if (static_cast<size_t>(off) + sz > scalarBuf.size()) {
+                if (err) *err = "kernel '" + k.name + "' MSL scalar parameter overflow";
+                return false;
+            }
+            const uint64_t bits = launch.args[i].bits();
+            std::memcpy(scalarBuf.data() + off, &bits, sz);
+        }
+    }
+
+    if (bufPtrs.size() != art.num_buffers || scalarIdx != art.scalar_param_offsets.size()) {
+        if (err) {
+            *err = "kernel '" + k.name + "' MSL ABI mismatch (buffers=" + std::to_string(bufPtrs.size()) +
+                   "/" + std::to_string(art.num_buffers) + ", scalars=" + std::to_string(scalarIdx) +
+                   "/" + std::to_string(art.scalar_param_offsets.size()) + ")";
+        }
+        return false;
+    }
+
+    brotensor::interop::MslDispatchDesc desc;
+    desc.msl = art.source.c_str();
+    desc.msl_bytes = art.source.size();
+    desc.entry_name = art.entry_name.empty() ? k.name.c_str() : art.entry_name.c_str();
+    for (int i = 0; i < 3; ++i) {
+        desc.local_size[i] = launch.local_size[i];
+        desc.groups[i] = launch.groups[i];
+    }
+    desc.buffer_ptrs = bufPtrs.empty() ? nullptr : bufPtrs.data();
+    desc.buffer_count = static_cast<uint32_t>(bufPtrs.size());
+    desc.scalar_data = scalarBuf.empty() ? nullptr : scalarBuf.data();
+    desc.scalar_bytes = static_cast<uint32_t>(scalarBuf.size());
+    desc.scalar_buffer_index = static_cast<uint32_t>(bufPtrs.size());
+    return brotensor::interop::dispatch_msl(metalDev, desc, err);
+}
+
+struct SandboxCacheEntry {
+    bool passed = false;
+    std::string diagnostic;
+};
+
+std::mutex& sandboxCacheMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::unordered_map<uint64_t, SandboxCacheEntry>& sandboxCacheMap() {
+    static std::unordered_map<uint64_t, SandboxCacheEntry> m;
+    return m;
+}
+
+bool checkKernelSandboxCached(const brokernel::CompiledKernel& k, std::string& diag) {
+    if (k.code_hash != 0) {
+        std::lock_guard<std::mutex> lk(sandboxCacheMutex());
+        auto it = sandboxCacheMap().find(k.code_hash);
+        if (it != sandboxCacheMap().end()) {
+            diag = it->second.diagnostic;
+            return it->second.passed;
+        }
+        const auto rep = k.verify_sandbox();
+        sandboxCacheMap().emplace(k.code_hash, SandboxCacheEntry{rep.passed, rep.diagnostic});
+        diag = rep.diagnostic;
+        return rep.passed;
+    }
+    const auto rep = k.verify_sandbox();
+    diag = rep.diagnostic;
+    return rep.passed;
+}
+
+Value dispatchTensorsImpl(std::span<const Value> args, bool requireSandbox, const char* fnName) {
     if (args.size() < 2) {
-        return ev::throwTypeError("bro.kernel.dispatchTensors: expects (kernel, gridShape, ...args)");
+        return ev::throwTypeError(std::string(fnName) + ": expects (kernel, gridShape, ...args)");
     }
     std::shared_ptr<const brokernel::CompiledKernel> k = brokernel::api::kernelOf(args[0]);
-    if (!k) return ev::throwTypeError("bro.kernel.dispatchTensors: argument 0 must be a Kernel");
+    if (!k) return ev::throwTypeError(std::string(fnName) + ": argument 0 must be a Kernel");
+    if (requireSandbox) {
+        std::string sbDiag;
+        if (!checkKernelSandboxCached(*k, sbDiag)) {
+            return ev::throwError(std::string(fnName) + ": kernel '" + k->name +
+                                  "' failed sandbox verification: " + sbDiag);
+        }
+    }
     if (k->stage != brokernel::Stage::Compute || k->grid_dim == 0) {
-        return ev::throwTypeError("bro.kernel.dispatchTensors: kernel must be a @compute @grid(D) kernel");
+        return ev::throwTypeError(std::string(fnName) + ": kernel must be a @compute @grid(D) kernel");
     }
     if (!k->return_type.is_void()) {
-        return ev::throwTypeError("bro.kernel.dispatchTensors: kernel must write outputs to tensor store(s) and return void");
+        return ev::throwTypeError(std::string(fnName) + ": kernel must write outputs to tensor store(s) and return void");
     }
     if (!k->block_bindings.empty()) {
-        return ev::throwTypeError("bro.kernel.dispatchTensors: descriptor-bound @binding uniforms/buffers are not supported");
+        return ev::throwTypeError(std::string(fnName) + ": descriptor-bound @binding uniforms/buffers are not supported");
     }
 
     brokernel::GridShape shape;
     if (!parseTensorGridShape(args[1], k->grid_dim, shape)) {
-        return ev::throwRangeError("bro.kernel.dispatchTensors: invalid gridShape");
+        return ev::throwRangeError(std::string(fnName) + ": invalid gridShape");
     }
 
     std::vector<const brokernel::KernelParamInfo*> passed;
@@ -527,12 +635,13 @@ Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
         if (!brokernel::is_bound_param(p.role)) passed.push_back(&p);
     }
     if (args.size() - 2 != passed.size()) {
-        return ev::throwTypeError("bro.kernel.dispatchTensors: kernel '" + k->name + "' expects " +
+        return ev::throwTypeError(std::string(fnName) + ": kernel '" + k->name + "' expects " +
                                   std::to_string(passed.size()) + " argument(s)");
     }
 
     bool sawVulkan = false;
     bool sawCuda = false;
+    bool sawMetal = false;
     bool sawCpu = false;
     brotensor::Device gpuDev = brotensor::Device::CPU;
     std::vector<brokernel::KernelArg> kargs;
@@ -546,43 +655,56 @@ Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
         const brokernel::KernelParamInfo& p = *passed[i];
         Value av = heldArgs[i].get();
         if (p.role == brokernel::ParamRole::Store || p.role == brokernel::ParamRole::Stencil) {
-            brotensor::Tensor* t = requireTensor(av, "bro.kernel.dispatchTensors");
+            brotensor::Tensor* t = requireTensor(av, fnName);
             const auto v = brotensor::interop::view(*t);
             if (v.is_vulkan()) {
-                if (sawCuda || sawCpu) {
-                    return ev::throwTypeError("bro.kernel.dispatchTensors: cannot mix tensors across backends in one dispatch");
+                if (sawCuda || sawMetal || sawCpu) {
+                    return ev::throwTypeError(std::string(fnName) + ": cannot mix tensors across backends in one dispatch");
                 }
                 if (sawVulkan && v.device.index != gpuDev.index) {
-                    return ev::throwTypeError("bro.kernel.dispatchTensors: tensors must reside on the same Vulkan device");
+                    return ev::throwTypeError(std::string(fnName) + ": tensors must reside on the same Vulkan device");
                 }
                 sawVulkan = true;
                 gpuDev = v.device;
                 if (v.bytes > 0 && v.device_address == 0) {
-                    return ev::throwError("bro.kernel.dispatchTensors: Vulkan tensor has no BDA device address");
+                    return ev::throwError(std::string(fnName) + ": Vulkan tensor has no BDA device address");
                 }
                 kargs.push_back(brokernel::KernelArg::device(v.device_address, v.bytes, v.bytes));
             } else if (v.is_cuda()) {
-                if (sawVulkan || sawCpu) {
-                    return ev::throwTypeError("bro.kernel.dispatchTensors: cannot mix tensors across backends in one dispatch");
+                if (sawVulkan || sawMetal || sawCpu) {
+                    return ev::throwTypeError(std::string(fnName) + ": cannot mix tensors across backends in one dispatch");
                 }
                 if (sawCuda && v.device.index != gpuDev.index) {
-                    return ev::throwTypeError("bro.kernel.dispatchTensors: tensors must reside on the same CUDA device");
+                    return ev::throwTypeError(std::string(fnName) + ": tensors must reside on the same CUDA device");
                 }
                 sawCuda = true;
                 gpuDev = v.device;
                 if (v.bytes > 0 && v.device_address == 0) {
-                    return ev::throwError("bro.kernel.dispatchTensors: CUDA tensor has no device pointer");
+                    return ev::throwError(std::string(fnName) + ": CUDA tensor has no device pointer");
+                }
+                kargs.push_back(brokernel::KernelArg::device(v.device_address, v.bytes, v.bytes));
+            } else if (v.is_metal()) {
+                if (sawVulkan || sawCuda || sawCpu) {
+                    return ev::throwTypeError(std::string(fnName) + ": cannot mix tensors across backends in one dispatch");
+                }
+                if (sawMetal && v.device.index != gpuDev.index) {
+                    return ev::throwTypeError(std::string(fnName) + ": tensors must reside on the same Metal device");
+                }
+                sawMetal = true;
+                gpuDev = v.device;
+                if (v.bytes > 0 && v.device_address == 0) {
+                    return ev::throwError(std::string(fnName) + ": Metal tensor has no buffer handle");
                 }
                 kargs.push_back(brokernel::KernelArg::device(v.device_address, v.bytes, v.bytes));
             } else if (!v.is_gpu()) {
-                if (sawVulkan || sawCuda) {
-                    return ev::throwTypeError("bro.kernel.dispatchTensors: cannot mix tensors across backends in one dispatch");
+                if (sawVulkan || sawCuda || sawMetal) {
+                    return ev::throwTypeError(std::string(fnName) + ": cannot mix tensors across backends in one dispatch");
                 }
                 sawCpu = true;
                 kargs.push_back(brokernel::KernelArg::buffer(v.host_ptr, v.bytes));
             } else {
                 return ev::throwTypeError(
-                    "bro.kernel.dispatchTensors: tensor GPU backend does not support zero-copy kernel dispatch");
+                    std::string(fnName) + ": tensor GPU backend does not support zero-copy kernel dispatch");
             }
         } else {
             kargs.push_back(makeScalarOrVecKernelArg(p, av));
@@ -593,25 +715,41 @@ Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
     if (sawVulkan) {
         brokernel::GpuLaunch launch;
         if (!k->gpu_launch(shape, kargs, 0, launch, &err)) {
-            return ev::throwError("bro.kernel.dispatchTensors: " + err);
+            return ev::throwError(std::string(fnName) + ": " + err);
         }
         if (!dispatchSpirvOnBrotensor(gpuDev, k->spirv, launch, &err)) {
-            return ev::throwError("bro.kernel.dispatchTensors: " + err);
+            return ev::throwError(std::string(fnName) + ": " + err);
         }
     } else if (sawCuda) {
         brokernel::GpuLaunch launch;
         if (!k->gpu_launch(shape, kargs, 0, launch, &err)) {
-            return ev::throwError("bro.kernel.dispatchTensors: " + err);
+            return ev::throwError(std::string(fnName) + ": " + err);
         }
         if (!dispatchPtxOnBrotensor(gpuDev, *k, launch, &err)) {
-            return ev::throwError("bro.kernel.dispatchTensors: " + err);
+            return ev::throwError(std::string(fnName) + ": " + err);
+        }
+    } else if (sawMetal) {
+        brokernel::GpuLaunch launch;
+        if (!k->gpu_launch(shape, kargs, 0, launch, &err)) {
+            return ev::throwError(std::string(fnName) + ": " + err);
+        }
+        if (!dispatchMslOnBrotensor(gpuDev, *k, launch, &err)) {
+            return ev::throwError(std::string(fnName) + ": " + err);
         }
     } else {
         if (!k->dispatch_cpu(shape, kargs, nullptr, &err)) {
-            return ev::throwError("bro.kernel.dispatchTensors: " + err);
+            return ev::throwError(std::string(fnName) + ": " + err);
         }
     }
     return ev::undefined();
+}
+
+Value js_kernelDispatchTensors(Value, std::span<const Value> args) {
+    return dispatchTensorsImpl(args, false, "bro.kernel.dispatchTensors");
+}
+
+Value js_kernelDispatchTensorsVerified(Value, std::span<const Value> args) {
+    return dispatchTensorsImpl(args, true, "bro.kernel.dispatchTensorsVerified");
 }
 
 } // namespace
@@ -693,6 +831,8 @@ void installKernelTensorInterop() {
     ev::setProperty(kernelObj.get(), "copyToTensor", ev::makeFunction(js_kernelCopyToTensor, 2, "copyToTensor"));
     ev::setProperty(kernelObj.get(), "copyFromTensor", ev::makeFunction(js_kernelCopyFromTensor, 2, "copyFromTensor"));
     ev::setProperty(kernelObj.get(), "dispatchTensors", ev::makeFunction(js_kernelDispatchTensors, 2, "dispatchTensors"));
+    ev::setProperty(kernelObj.get(), "dispatchTensorsVerified",
+                    ev::makeFunction(js_kernelDispatchTensorsVerified, 2, "dispatchTensorsVerified"));
 }
 
 } // namespace bro::bronze_host
