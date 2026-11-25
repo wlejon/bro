@@ -130,8 +130,14 @@ bool registerPhysicsNatives(std::string* error);
 // The PhysicsWorld behind a `Physics` value, else the engine's own
 // (native_physics_core.cpp).
 physics::PhysicsWorld* unwrapPhysicsWorld(bronze::Value v);
+// The engine's own world, the one a call reaches with no world of its own;
+// none on a thread that called physicsWithoutEngineWorld (a Worker's: the
+// engine's world steps on the engine thread).
+physics::PhysicsWorld* enginePhysicsWorld();
+void physicsWithoutEngineWorld();
 #else
 inline bool registerPhysicsNatives(std::string*) { return true; }
+inline void physicsWithoutEngineWorld() {}
 #endif
 bool registerAnimationNatives(std::string* error);
 bool registerTerrainNatives(std::string* error);

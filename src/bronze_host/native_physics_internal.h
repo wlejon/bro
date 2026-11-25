@@ -113,8 +113,7 @@ struct HostPhysicsWorld {
 
     physics::PhysicsWorld* getWorld() const {
         if (world) return world;
-        auto* eng = hostEngine();
-        return eng ? eng->physicsWorld() : nullptr;
+        return enginePhysicsWorld();
     }
 
     ~HostPhysicsWorld();

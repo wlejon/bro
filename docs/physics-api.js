@@ -19,6 +19,13 @@
  * `getContacts()` is the exception: it lists contacts in the order
  * Jolt's worker threads found them, which varies; a lockstep simulation that
  * acts on contacts sorts them first (by body pair, then impulse and point).
+ *
+ * Workers: `Physics` is there in a Worker too, over the worlds the worker
+ * makes (`Physics.createWorldHandle`, entered with `enter()` / `exit()` and
+ * stepped with `step(dt)`), so a simulation can step off the page's thread.
+ * A worker has no default world: the engine's steps on the engine's thread,
+ * and a call outside any world the worker entered finds none (createBody
+ * answers -1).
  * @typedef {Object} PhysicsVec3
  * @property {number} [x]
  * @property {number} [y]

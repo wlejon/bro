@@ -444,12 +444,15 @@ void markAvailableNamespaces() {
 // audio) are not here at all.
 void installWorkerBroRoot() {
     auto* bro = new ev::Persistent(makeRoot({"net", "server", "motion"}));
-    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion", "vision"}));
+    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion", "vision", "physics"}));
     publish("bro", *bro);
     publish("__bro_native", *native);
 
     std::string err;
-    bool ok = registerServerNatives(&err) && registerMotionNatives(&err) && registerVisionNatives(&err);
+    // (A worker's Physics is the worlds it makes: Physics.createWorldHandle.)
+    physicsWithoutEngineWorld();
+    bool ok = registerServerNatives(&err) && registerMotionNatives(&err) && registerVisionNatives(&err) &&
+              registerPhysicsNatives(&err);
 #if BRO_WITH_NET
     ok = ok && registerNetNatives(&err);
 #endif
@@ -502,6 +505,14 @@ void installWorkerBroRoot() {
     setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
 #endif
     installServerModule();
+#if BRO_WITH_PHYSICS
+    installPhysicsModule();
+#else
+    {
+        ev::Persistent stub(makeUnavailableNamespace("physics", "BRO_WITH_PHYSICS"));
+        publish("Physics", stub);
+    }
+#endif
 #if !BRO_WITH_VIDEO && !BRO_WITH_AUDIO
     setUnavailable("media", "BRO_WITH_VIDEO");
 #endif

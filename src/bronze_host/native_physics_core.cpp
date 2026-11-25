@@ -53,9 +53,18 @@ physics::PhysicsWorld* unwrapPhysicsWorld(Value v) {
             if (w->tag == kHostPhysicsWorldTag) return w->getWorld();
         }
     }
+    return enginePhysicsWorld();
+}
+
+static thread_local bool tl_noEngineWorld = false;
+
+physics::PhysicsWorld* enginePhysicsWorld() {
+    if (tl_noEngineWorld) return nullptr;
     auto* e = hostEngine();
     return e ? e->physicsWorld() : nullptr;
 }
+
+void physicsWithoutEngineWorld() { tl_noEngineWorld = true; }
 
 }  // namespace bro::bronze_host
 

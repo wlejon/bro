@@ -8,6 +8,11 @@
  * Dedicated background thread running an isolated JavaScript runtime
  * communicating via structured clone postMessage/onmessage.
  *
+ * A worker has `Physics` over worlds of its own (physics-api.js "Workers"),
+ * beside `bro.net`, `bro.server`, `bro.motion`, `bro.vision` and the sibling
+ * libraries' compute APIs; the engine-bound namespaces (the scene, window,
+ * settings, time, audio) are the page's alone.
+ *
  * A worker made with `{ type: 'module' }` runs its script as a module: its
  * top-level declarations are its own. Without it the script is a classic
  * script, as on the web: its top-level `var` and function declarations are
