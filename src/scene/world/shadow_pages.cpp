@@ -626,27 +626,24 @@ void ShadowPages::markDynamic(std::vector<int>& pages) {
     std::vector<uint8_t> climbed;
     if (sun_.on) {
         climbed.assign(static_cast<size_t>(config_.levels) * SP_LEVEL_ENTRIES, 0);
-        for (int level = 0; level + 1 < config_.levels; ++level)
-            for (int k = 0; k < SP_LEVEL_ENTRIES; ++k) {
-                const Entry& e = entries_[static_cast<size_t>(level) * SP_LEVEL_ENTRIES + k];
-                if (!e.occupied || !neededNow(e) || (e.physical >= 0 && e.drawn)) continue;
-                for (int up = level + 1; up < config_.levels; ++up) {
-                    const int a = clipmapEntry(up, e.x >> (up - level), e.y >> (up - level));
-                    if (a < 0) break;
-                    const int over = up < s ? clipmapEntry(s, e.x >> (s - level), e.y >> (s - level)) : a;
-                    if (over >= 0) climbed[static_cast<size_t>(over)] = 1;
-                    const Entry& p = entries_[static_cast<size_t>(a)];
-                    if (p.physical >= 0 && p.drawn) break;
-                }
-            }
-        // With none coarser drawn the lookup takes a finer page, a base
-        // page: those under a needed page not drawn, and every one of them
-        // before any request has named a page.
         for (int level = 0; level < config_.levels; ++level)
             for (int k = 0; k < SP_LEVEL_ENTRIES; ++k) {
                 const int i = level * SP_LEVEL_ENTRIES + k;
                 const Entry& e = entries_[static_cast<size_t>(i)];
-                if (!e.occupied || e.base != serial_) continue;
+                if (!e.occupied) continue;
+                if (!(e.physical >= 0 && e.drawn) && neededNow(e))
+                    for (int up = level + 1; up < config_.levels; ++up) {
+                        const int a = clipmapEntry(up, e.x >> (up - level), e.y >> (up - level));
+                        if (a < 0) break;
+                        const int over = up < s ? clipmapEntry(s, e.x >> (s - level), e.y >> (s - level)) : a;
+                        if (over >= 0) climbed[static_cast<size_t>(over)] = 1;
+                        const Entry& p = entries_[static_cast<size_t>(a)];
+                        if (p.physical >= 0 && p.drawn) break;
+                    }
+                // With none coarser drawn the lookup takes a finer page, a
+                // base page: those under a needed page not drawn, and every
+                // one of them before any request has named a page.
+                if (e.base != serial_) continue;
                 bool read = newestRequest_ == 0;
                 for (int up = level + 1; up < config_.levels && !read; ++up) {
                     const int a = clipmapEntry(up, e.x >> (up - level), e.y >> (up - level));
