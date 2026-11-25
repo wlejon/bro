@@ -19,6 +19,7 @@
 
 namespace bro::bronze_host::eye_detail {
 
+#if BRO_WITH_3D
 using namespace bro::eye;
 
 static std::string strProp(Value obj, const char* key, const std::string& def = {}) {
@@ -39,7 +40,6 @@ static bool boolProp(Value obj, const char* key, bool def) {
     return v.isBool() ? v.asBool() : def;
 }
 
-#if BRO_WITH_3D
 static scene::SceneGraph* unwrapGraph(Value v) {
     if (!ev::isObject(v)) return nullptr;
     void* raw = ev::handleData(v);

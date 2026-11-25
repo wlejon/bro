@@ -33,7 +33,9 @@ if(BRO_WITH_3D)
 endif()
 
 target_include_directories(bro_eye PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_eye PUBLIC bro_engine broimage::broimage)
+# Keep broimage::broimage (which pulls brotensor -> brass) ahead of bro_engine
+# (which pulls bronze_runtime_shared) so MSVC does not hit LNK2005 on brass_parallel_for.
+target_link_libraries(bro_eye PUBLIC broimage::broimage bro_engine)
 target_compile_features(bro_eye PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_eye)
 
@@ -72,11 +74,15 @@ if(BRO_BUILD_TESTS)
         # in the DOM, whose style code calls back into bro_engine, so bro_engine is
         # named again after bro_dom. Avoids $<LINK_GROUP:RESCAN> (unsupported by
         # Ninja+MSVC and Apple ld64), avoids hardcoding bro_a11y (absent when
-        # BRO_WITH_A11Y=OFF), and keeps brass ahead of bronze_runtime_shared on
-        # MSVC so parallel_runtime.obj does not collide on brass_parallel_for.
+        # BRO_WITH_A11Y=OFF), and appends bronze::runtime_shared at the end so
+        # CMake places it after broimage -> brotensor -> brass on MSVC,
+        # preventing LNK2005 on brass_parallel_for.
         target_link_libraries(bro_eye_structure_test PRIVATE
             bro_eye bro_scene bro_engine bro_dom bro_engine
             bro_render bro_platform bro_util brass skia Vulkan::Vulkan)
+        if(TARGET bronze::runtime_shared)
+            target_link_libraries(bro_eye_structure_test PRIVATE bronze::runtime_shared)
+        endif()
         target_compile_features(bro_eye_structure_test PRIVATE cxx_std_20)
         bro_apply_feature_defs(bro_eye_structure_test)
         if(MSVC)

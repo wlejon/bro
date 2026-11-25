@@ -19,6 +19,7 @@
 
 namespace bro::bronze_host::eye_detail {
 
+#if BRO_WITH_3D
 using namespace bro::eye;
 
 static std::string strProp(Value obj, const char* key, const std::string& def = {}) {
@@ -131,6 +132,7 @@ static void parseStructureWalkOpts(Value walkVal, EyeStructureInteriorWalkOption
         }
     }
 }
+#endif
 
 Value jsEyeStructure(Value, std::span<const Value> a) {
 #if !BRO_WITH_3D
