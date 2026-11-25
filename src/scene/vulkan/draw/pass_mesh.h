@@ -6,6 +6,10 @@
 //   PassOpaque       the opaque meshes. Always runs, so the frame's first
 //                    HDR scope (which clears) always exists. Carries the
 //                    indirect-light attachment while SSAO is on.
+//   PassOpaqueLate   the instances of the opaque culled draws that this
+//                    frame's depth shows in sight and PassOpaque, drawing
+//                    those seen last frame, left out (pass_draw_counts.h):
+//                    into the same targets, after the late cull.
 //   PassTranslucent  alpha-blended meshes, far to near, after decals.
 //   PassOverlay      after tonemapping, into the LDR frame: the unlit meshes
 //                    (so their authored colours are not tonemapped), depth
@@ -29,6 +33,16 @@ class PassOpaque final : public ScenePass {
 public:
     const char* name() const override { return "opaque"; }
     bool setup(SceneGpu&) override { return true; }
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu&) override {}
+};
+
+class PassOpaqueLate final : public ScenePass {
+public:
+    const char* name() const override { return "opaque-late"; }
+    bool setup(SceneGpu&) override { return true; }
+    bool active(const SceneFrame& frame) const override;
     void declare(const SceneFrame& frame, PassIO& io) const override;
     void record(SceneFrame& frame) override;
     void cleanup(SceneGpu&) override {}

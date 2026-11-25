@@ -104,9 +104,13 @@ constexpr bool streamless(MeshKind k) {
 /// InstancedMeshNode::setInstanceCullSpheres): per view (0 the camera, 1 + i
 /// the frame's shadow view i) its compacted rows and instance indices in
 /// `out` and its two commands in `commands`. A view without a region (`has`
-/// false) draws the draw's own rows.
+/// false) draws the draw's own rows. An opaque draw's camera region holds
+/// the instances seen last frame, and kLate the rest of those in sight.
 struct InstanceCullViews {
-    static constexpr int kViews = 1 + SP_MAX_VIEWS;
+    /// The camera's second region of an opaque draw: the instances in sight
+    /// that view 0, last frame's, left out (pass_draw_counts.h).
+    static constexpr int kLate = 1 + SP_MAX_VIEWS;
+    static constexpr int kViews = 2 + SP_MAX_VIEWS;
     VkBuffer out = VK_NULL_HANDLE;
     VkBuffer commands = VK_NULL_HANDLE;
     bool has[kViews] = {};

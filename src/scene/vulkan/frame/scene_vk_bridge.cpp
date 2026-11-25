@@ -52,7 +52,7 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     // their commands before any pass draws them.
     auto voxelDag = std::make_unique<PassVoxelDag>();
     PassVoxelDag& voxelDagPass = *voxelDag;
-    graph_.add(std::make_unique<PassDrawCounts>());
+    auto& drawCounts = static_cast<PassDrawCounts&>(graph_.add(std::make_unique<PassDrawCounts>()));
     graph_.add(std::make_unique<PassShadow>());
     // The voxel worlds cast into the same pages (their pools synced here
     // first, for the colour pass later the same frame).
@@ -67,6 +67,10 @@ SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     graph_.add(std::make_unique<PassOpaque>());
     graph_.add(std::make_unique<PassVoxelDagPreDepth>());
     graph_.add(std::move(voxelDag));
+    // The opaque culled draws' instances that this depth shows and the
+    // opaque pass, drawing the ones seen last frame, left out.
+    graph_.add(std::make_unique<PassInstanceOcclusion>(drawCounts));
+    graph_.add(std::make_unique<PassOpaqueLate>());
     // The pages the opaque surfaces' pixels need, for the next plans.
     graph_.add(std::make_unique<PassShadowMark>());
     graph_.add(std::make_unique<PassDepthSnapshot>());

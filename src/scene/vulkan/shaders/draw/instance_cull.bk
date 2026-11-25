@@ -6,6 +6,15 @@
 // b.y of `commands` (written beforehand with no instances) count them.
 // The instances are the node's rows, or the count a kernel left at word a.x
 // of `source` when there is one (a.x != NONE), clamped to them.
+//
+// The camera's region of an opaque draw is two (b.z != NONE: the draw's
+// words of `seen`, one an instance). instance_cull keeps the instances seen
+// last frame; instance_cull_late, run once the opaque surfaces are drawn,
+// tests every instance in the view against their depth (`pyramid`:
+// depth_pyramid.bk's levels, the farthest depth of each texel), notes what
+// it finds in `seen`, and keeps in a second region those in sight that the
+// first left out. So what is drawn is what this frame's depth shows, and
+// `seen` only says which of the two regions an instance is drawn from.
 
 pub const NONE: u32 = 0xffffffffu;
 
@@ -20,8 +29,14 @@ struct CullUBO {
     m1: vec4<f32>,
     m2: vec4<f32>,
     s: vec4<f32>,    // x: the model's largest axis scale, y: the max distance (0: none), z: its fade share, w: the min distance (0: none)
+    v0: vec4<f32>,   // the camera's view-projection, relative to the eye: its rows
+    v1: vec4<f32>,
+    v2: vec4<f32>,
+    v3: vec4<f32>,
+    o: vec4<f32>,    // the depth target's width and height, 1 a perspective view, 0
     a: vec4<u32>,    // count word (NONE: none), rows, rows' first word, the region's rows' first word
-    b: vec4<u32>,    // the region's indices' first word, commands word, 0, 0
+    b: vec4<u32>,    // the region's indices' first word, commands word, seen's first word (NONE: none), 0
+    c: vec4<u32>,    // the pyramid's first level's width and height, its levels, 0
 }
 
 @binding(0, 0) var u: uniform<CullUBO>;
@@ -30,20 +45,23 @@ struct CullUBO {
 @binding(0, 3) var rows: buffer<u32>;
 @binding(0, 4) var out: buffer<u32>;
 @binding(0, 5) var commands: buffer<u32>;
+@binding(0, 6) var seen: buffer<u32>;
+@binding(0, 7) var pyramid: buffer<f32>;
 
 fn behind(p: vec4<f32>, c: vec3<f32>, r: f32) -> bool {
     return dot(p.xyz, c) + p.w < -r;
 }
 
-@compute @workgroup_size(64, 1, 1)
-fn instance_cull() {
-    let k = global_id().x;
+// Instance k's sphere in the view (xyz the centre from the eye, w the
+// radius), or w < 0: not one of the instances, or outside the view.
+fn in_view(k: i32) -> vec4<f32> {
+    let gone = vec4<f32>(0.0, 0.0, 0.0, -1.0);
     var n = u.a.y as i32;
     if (u.a.x != NONE) {
         n = min(source[u.a.x as i32] as i32, n);
     }
     if (k >= n) {
-        return;
+        return gone;
     }
     let s = k * 4;
     let lc = vec3<f32>(spheres[s], spheres[s + 1], spheres[s + 2]);
@@ -51,11 +69,11 @@ fn instance_cull() {
     let r = spheres[s + 3] * u.s.x;
     if (behind(u.p0, c, r) || behind(u.p1, c, r) || behind(u.p2, c, r) ||
         behind(u.p3, c, r) || behind(u.p4, c, r) || behind(u.p5, c, r)) {
-        return;
+        return gone;
     }
     // Wholly nearer than the min distance: culled in every view.
     if (u.s.w > 0.0 && length(c) + r < u.s.w) {
-        return;
+        return gone;
     }
     // Past the max distance from the eye (each instance its own, hashed
     // within the fade share of it): culled in every view.
@@ -65,9 +83,13 @@ fn instance_cull() {
         h = (h >> 22u) ^ h;
         let at = u.s.y * (1.0 - u.s.z * ((h & 0xffffu) as f32) / 65535.0);
         if (length(c) - r > at) {
-            return;
+            return gone;
         }
     }
+    return vec4<f32>(c, max(r, 0.0));
+}
+
+fn keep(k: i32) {
     let cw = u.b.y as i32;
     let i = commands.atomic_add(cw + 1, 1u) as i32;
     commands.atomic_add(cw + 6, 1u);
@@ -77,4 +99,93 @@ fn instance_cull() {
         out[dst + w] = rows[src + w];
     }
     out[(u.b.x as i32) + i] = k as u32;
+}
+
+fn clip_of(p: vec3<f32>) -> vec4<f32> {
+    return vec4<f32>(dot(u.v0.xyz, p) + u.v0.w, dot(u.v1.xyz, p) + u.v1.w, dot(u.v2.xyz, p) + u.v2.w, dot(u.v3.xyz, p) + u.v3.w);
+}
+
+// Whether any of the sphere may show against the depth drawn: its nearest
+// point's depth (reversed: nearer is greater) against the farthest depth
+// under its rectangle of the screen.
+fn in_sight(c: vec3<f32>, r: f32) -> bool {
+    let persp = u.o.z > 0.5;
+    // Toward the eye's plane: where the sphere's depth is nearest.
+    var dir = normalize(u.v2.xyz);
+    if (persp) { dir = -normalize(u.v3.xyz); }
+    let near = clip_of(c + dir * r);
+    if (near.w <= 0.0001) { return true; }
+    let depth = near.z / near.w;
+    let mid = clip_of(c);
+    if (mid.w <= 0.0001) { return true; }
+    // Half its size on the screen (NDC), no smaller than its true one.
+    var ex = r * length(u.v0.xyz);
+    var ey = r * length(u.v1.xyz);
+    if (persp) { ex = ex / near.w; ey = ey / near.w; }
+    let cx = mid.x / mid.w;
+    let cy = mid.y / mid.w;
+    // Pixels, a pixel wider each way; the pyramid's first level is 2 a side.
+    let x0f = ((cx - ex) * 0.5 + 0.5) * u.o.x - 1.0;
+    let x1f = ((cx + ex) * 0.5 + 0.5) * u.o.x + 1.0;
+    let y0f = ((cy - ey) * 0.5 + 0.5) * u.o.y - 1.0;
+    let y1f = ((cy + ey) * 0.5 + 0.5) * u.o.y + 1.0;
+    var w = u.c.x as i32;
+    var h = u.c.y as i32;
+    var x0 = clamp(floor(x0f * 0.5) as i32, 0, w - 1);
+    var x1 = clamp(floor(x1f * 0.5) as i32, 0, w - 1);
+    var y0 = clamp(floor(y0f * 0.5) as i32, 0, h - 1);
+    var y1 = clamp(floor(y1f * 0.5) as i32, 0, h - 1);
+    // The level at which the rectangle is two texels a side at most.
+    var off = 0;
+    let levels = u.c.z as i32;
+    var level = 0;
+    while ((x1 - x0 > 1 || y1 - y0 > 1) && level + 1 < levels) {
+        off += w * h;
+        w = (w + 1) / 2;
+        h = (h + 1) / 2;
+        x0 = x0 / 2;
+        x1 = x1 / 2;
+        y0 = y0 / 2;
+        y1 = y1 / 2;
+        level += 1;
+    }
+    if (x1 - x0 > 1 || y1 - y0 > 1) { return true; }
+    let far = min(min(pyramid[off + y0 * w + x0], pyramid[off + y0 * w + x1]),
+                  min(pyramid[off + y1 * w + x0], pyramid[off + y1 * w + x1]));
+    return depth >= far;
+}
+
+@compute @workgroup_size(64, 1, 1)
+fn instance_cull() {
+    let k = global_id().x;
+    let s = in_view(k);
+    if (s.w < 0.0) {
+        return;
+    }
+    if (u.b.z != NONE && seen[(u.b.z as i32) + k] == 0u) {
+        return;
+    }
+    keep(k);
+}
+
+@compute @workgroup_size(64, 1, 1)
+fn instance_cull_late() {
+    let k = global_id().x;
+    if (k >= (u.a.y as i32)) {
+        return;
+    }
+    let at = (u.b.z as i32) + k;
+    let s = in_view(k);
+    if (s.w < 0.0) {
+        // Out of the view: drawn first when it comes back, as what comes into
+        // a view mostly shows.
+        seen[at] = 1u;
+        return;
+    }
+    let was = seen[at];
+    let now = in_sight(s.xyz, s.w);
+    seen[at] = select(now, 1u, 0u);
+    if (now && was == 0u) {
+        keep(k);
+    }
 }

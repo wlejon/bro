@@ -26,7 +26,11 @@ void PassOpaque::declare(const SceneFrame& frame, PassIO& io) const {
     io.sample(frame.gpu.shadows.scratch);
 }
 
-void PassOpaque::record(SceneFrame& frame) {
+namespace {
+
+// The opaque draws as the camera's region `view` holds them (0: every draw,
+// a culled one its first region; kLate: the culled draws' second regions).
+void recordOpaque(SceneFrame& frame, int view) {
     // Each draw's own time when the passes are timed (SceneGpuTimer), by kind.
     static constexpr const char* kKind[kMeshKindCount] = {
         "opaque:static", "opaque:instanced", "opaque:skinned", "opaque:scatter", "opaque:tube",
@@ -37,7 +41,8 @@ void PassOpaque::record(SceneFrame& frame) {
     SceneMeshDrawer& meshes = frame.gpu.meshes;
     for (uint32_t i : frame.lists.opaque) {
         const MeshDraw& draw = frame.lists.meshes[i];
-        MeshDraw d = draw.culledIn(0) ? draw.inView(0) : draw;
+        if (view != 0 && !draw.culledIn(view)) continue;
+        MeshDraw d = draw.culledIn(view) ? draw.inView(view) : draw;
         if (idView) {
             const uint32_t nid = d.nodeId;
             d.push.emissive[0] = static_cast<float>(nid & 0xFFu) / 255.0f;
@@ -56,6 +61,24 @@ void PassOpaque::record(SceneFrame& frame) {
             frame.timer->mark(frame.cmd, draw.timerLabel ? draw.timerLabel : kKind[static_cast<int>(draw.kind)]);
     }
 }
+
+}  // namespace
+
+void PassOpaque::record(SceneFrame& frame) { recordOpaque(frame, 0); }
+
+bool PassOpaqueLate::active(const SceneFrame& frame) const {
+    for (uint32_t i : frame.lists.opaque)
+        if (frame.lists.meshes[i].culledIn(InstanceCullViews::kLate)) return true;
+    return false;
+}
+
+void PassOpaqueLate::declare(const SceneFrame& frame, PassIO& io) const {
+    io.hdr({.indirect = frame.ssao});
+    io.sample(frame.gpu.shadows.pool);
+    io.sample(frame.gpu.shadows.scratch);
+}
+
+void PassOpaqueLate::record(SceneFrame& frame) { recordOpaque(frame, InstanceCullViews::kLate); }
 
 bool PassTranslucent::active(const SceneFrame& frame) const {
     return frame.renderer.debugView() != 6 && !frame.lists.translucent.empty();

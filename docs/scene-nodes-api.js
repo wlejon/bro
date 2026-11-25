@@ -1196,6 +1196,13 @@ class SceneNode {
    * Views with none of their own (reflection probe faces) draw every row.
    * `null` stops culling.
    *
+   * An opaque node's instances hidden from the camera behind what the frame
+   * draws (other instances, a wall, the ground) are left out too, by the
+   * frame's own depth: an instance buried in a heap costs nothing, and one
+   * that comes into sight is drawn the frame it does. So a sphere must hold
+   * everything its instance draws, a hook's displacement included: one too
+   * small drops an instance whose sphere is hidden while a corner shows.
+   *
    * `maxDistance` (m, 0 by default: none) also culls an instance whose
    * sphere lies wholly past it from the eye, in every view: a shadow page
    * is drawn with the instances in reach of the eye then, and keeps them
