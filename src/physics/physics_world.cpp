@@ -1,6 +1,8 @@
 #include "physics/physics_internal.h"
 #include "physics/physics_decomposition.h"
 
+#include <mutex>
+
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Physics/PhysicsSettings.h>
@@ -61,14 +63,16 @@ namespace bro::physics {
 
 // --- Jolt global init (once) ---
 
-static bool s_joltInitialized = false;
+// (Once per process, whichever thread makes the first world: a Worker's can
+// be first, or race the engine's.)
+static std::once_flag s_joltInit;
 
 static void ensureJoltInit() {
-    if (s_joltInitialized) return;
-    RegisterDefaultAllocator();
-    Factory::sInstance = new Factory();
-    RegisterTypes();
-    s_joltInitialized = true;
+    std::call_once(s_joltInit, [] {
+        RegisterDefaultAllocator();
+        Factory::sInstance = new Factory();
+        RegisterTypes();
+    });
 }
 
 // --- PhysicsWorld ---
