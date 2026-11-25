@@ -343,6 +343,10 @@ if(BRO_WITH_PHYSICS AND NOT TARGET Jolt)
     set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
     set(CPP_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
     set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+    # The same steps on Windows, Linux and macOS, x64 and arm64: lockstep and
+    # rollback peers (bro.net, lib/kit/rollback.js, lib/destruct) send inputs,
+    # not state, so every platform must simulate them bit for bit alike.
+    set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
     set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
     set(PROFILER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
     set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
