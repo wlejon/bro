@@ -162,6 +162,8 @@ public:
     void setMotionType(JPH::BodyID id, bool isStatic);
     void activate(JPH::BodyID id);
     bool isActive(JPH::BodyID id) const;
+    /// The rigid bodies awake now (moving, not asleep or static), in no set order.
+    void getActiveBodies(JPH::BodyIDVector& out) const;
     bool isSensor(JPH::BodyID id) const;
 
     /// Install/replace the field override on a sensor body (see AreaOverride).

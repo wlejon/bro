@@ -555,6 +555,11 @@ void bro_physics_activate(int32_t tag);
 //   result: f32[] in *out; out->release == NULL, the runtime copies
 void bro_physics_getAllTransforms(bool opts_interpolated, bronze_native_buffer* out);
 
+// Physics.getActiveTransforms
+//   registered at __bro_native.physics.getActiveTransforms
+//   result: f32[] in *out; out->release == NULL, the runtime copies
+void bro_physics_getActiveTransforms(bool opts_interpolated, bronze_native_buffer* out);
+
 // Physics.createCharacter
 //   registered at __bro_native.physics.createCharacter
 //   config: JSON of PhysicsCharacterOptions

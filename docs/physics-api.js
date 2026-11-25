@@ -1132,6 +1132,17 @@ Physics.activate = function(tag) {};
 Physics.getAllTransforms = function(opts) {};
 
 /**
+ *  The awake bodies' transforms only (moving: not asleep, not static), the
+ *  same 8 floats per body as `getAllTransforms`, in tag order. A body Jolt
+ *  has put to sleep, or one made static, keeps the pose it had: a scene of
+ *  many settled bodies reads only the few in motion.
+ *
+ * @param {PhysicsTransformOptions} [opts]
+ * @returns {Float32Array}
+ */
+Physics.getActiveTransforms = function(opts) {};
+
+/**
  * @param {PhysicsCharacterOptions} config
  * @returns {PhysicsCharacter}
  */

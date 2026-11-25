@@ -317,6 +317,10 @@
         }
         return __bro_native.physics.getAllTransforms(interpolated);
     });
+    fn(ns_Physics, "getActiveTransforms", function getActiveTransforms(opts) {
+        const interpolated = !!(opts && typeof opts === 'object' && opts.interpolated);
+        return __bro_native.physics.getActiveTransforms(interpolated);
+    });
     fn(ns_Physics, "createCharacter", function createCharacter(config) {
         if (config === undefined) throw new TypeError("Physics.createCharacter: config is required");
         return __bro_native.physics.createCharacter(JSON.stringify(config));

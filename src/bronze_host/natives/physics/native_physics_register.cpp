@@ -178,6 +178,7 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.isActive", BRO_NATIVE_FN(bro_physics_isActive), "bool", {"i32"}, error) &&
         fn("__bro_native.physics.activate", BRO_NATIVE_FN(bro_physics_activate), "void", {"i32"}, error) &&
         fn("__bro_native.physics.getAllTransforms", BRO_NATIVE_FN(bro_physics_getAllTransforms), "f32[]", {"bool"}, error) &&
+        fn("__bro_native.physics.getActiveTransforms", BRO_NATIVE_FN(bro_physics_getActiveTransforms), "f32[]", {"bool"}, error) &&
         fn("__bro_native.physics.createCharacter", BRO_NATIVE_FN(bro_physics_createCharacter), "__bro_native.physics.PhysicsCharacter", {"str"}, error) &&
         fn("__bro_native.physics.createVehicle", BRO_NATIVE_FN(bro_physics_createVehicle), "__bro_native.physics.PhysicsVehicle", {"str"}, error) &&
         fn("__bro_native.physics.createRagdoll", BRO_NATIVE_FN(bro_physics_createRagdoll), "__bro_native.physics.PhysicsRagdoll", {"str"}, error) &&

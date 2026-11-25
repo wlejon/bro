@@ -551,6 +551,10 @@ bool PhysicsWorld::isActive(BodyID id) const {
     return physicsSystem_.GetBodyInterface().IsActive(id);
 }
 
+void PhysicsWorld::getActiveBodies(BodyIDVector& out) const {
+    physicsSystem_.GetActiveBodies(EBodyType::RigidBody, out);
+}
+
 bool PhysicsWorld::isSensor(BodyID id) const {
     BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
     if (!lock.Succeeded()) return false;

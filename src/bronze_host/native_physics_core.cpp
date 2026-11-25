@@ -2,6 +2,7 @@
 
 #include "bronze_host/native_physics_internal.h"
 #include "natives/physics/native_physics_decl.h"
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 
@@ -662,6 +663,52 @@ void bro_physics_getAllTransforms(bool interpolated, bronze_native_buffer* out) 
     out->data = tl_allTransformsBuf.data();
     out->length = static_cast<uint32_t>(tl_allTransformsBuf.size());
     out->release = nullptr;
+}
+
+void bro_physics_getActiveTransforms(bool interpolated, bronze_native_buffer* out) {
+    out->data = nullptr;
+    out->length = 0;
+    out->release = nullptr;
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
+    if (!w) return;
+
+    // The awake bodies with a tag, by tag (Jolt's active list is in the
+    // order bodies woke: the same on every peer only by luck).
+    static thread_local JPH::BodyIDVector active;
+    static thread_local std::vector<std::pair<int32_t, JPH::BodyID>> tagged;
+    active.clear();
+    tagged.clear();
+    w->getActiveBodies(active);
+    for (JPH::BodyID id : active) {
+        int32_t tag = pw->tagForBodyId(id);
+        if (tag >= 0) tagged.emplace_back(tag, id);
+    }
+    std::sort(tagged.begin(), tagged.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    constexpr size_t stride = 8;
+    tl_allTransformsBuf.resize(tagged.size() * stride);
+    for (size_t k = 0; k < tagged.size(); k++) {
+        JPH::RVec3 pos;
+        JPH::Quat rot;
+        if (interpolated) {
+            w->getRenderTransform(tagged[k].second, pos, rot);
+        } else {
+            pos = w->getPosition(tagged[k].second);
+            rot = w->getRotation(tagged[k].second);
+        }
+        float* p = tl_allTransformsBuf.data() + k * stride;
+        p[0] = static_cast<float>(tagged[k].first);
+        p[1] = static_cast<float>(pos.GetX());
+        p[2] = static_cast<float>(pos.GetY());
+        p[3] = static_cast<float>(pos.GetZ());
+        p[4] = rot.GetX();
+        p[5] = rot.GetY();
+        p[6] = rot.GetZ();
+        p[7] = rot.GetW();
+    }
+    out->data = tl_allTransformsBuf.data();
+    out->length = static_cast<uint32_t>(tl_allTransformsBuf.size());
 }
 
 }  // extern "C"
