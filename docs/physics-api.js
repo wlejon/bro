@@ -9,6 +9,12 @@
  * Includes rigid body dynamics, collision queries (raycast, shape cast, overlap),
  * character virtual controllers, vehicles, ragdolls, soft bodies, constraints,
  * and sandbox worlds.
+ *
+ * Determinism: Jolt is built CROSS_PLATFORM_DETERMINISTIC, so a world given
+ * the same calls in the same order steps bit for bit alike on every platform
+ * and run. `getContacts()` is the exception: it lists contacts in the order
+ * Jolt's worker threads found them, which varies; a lockstep simulation that
+ * acts on contacts sorts them first (by body pair, then impulse and point).
  * @typedef {Object} PhysicsVec3
  * @property {number} [x]
  * @property {number} [y]
