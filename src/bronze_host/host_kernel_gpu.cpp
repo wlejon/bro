@@ -302,6 +302,26 @@ public:
 
     bool dispatch(brokernel::api::GpuProgram& program, const brokernel::CompiledKernel& kernel,
                   const brokernel::GpuLaunch& launch, std::string* err) override {
+        return run(program, kernel, launch, nullptr, 0, err);
+    }
+
+    bool dispatchCounted(brokernel::api::GpuProgram& program, const brokernel::CompiledKernel& kernel,
+                         const brokernel::GpuLaunch& launch, brokernel::api::GpuBuffer& counts, size_t offset,
+                         std::string* err) override {
+        auto* buffer = dynamic_cast<Buffer*>(&counts);
+        if (!buffer || !buffer->computeBuffer()) {
+            if (err) *err = "the counts are a KernelBuffer of this device";
+            return false;
+        }
+        return run(program, kernel, launch, buffer->computeBuffer().get(), offset, err);
+    }
+
+private:
+    // One dispatch; `counts` (may be null): where the GPU reads its
+    // workgroup counts, at `offset`.
+    bool run(brokernel::api::GpuProgram& program, const brokernel::CompiledKernel& kernel,
+             const brokernel::GpuLaunch& launch, const render::ComputeBuffer* counts, size_t offset,
+             std::string* err) {
 #if BRO_WITH_TENSOR
         {
             bool sawTensorVk = false;
@@ -332,6 +352,10 @@ public:
                 return false;
             }
             if (sawTensorVk) {
+                if (counts) {
+                    if (err) *err = "a counted dispatch does not run on zero-copy bro.tensor buffers";
+                    return false;
+                }
                 return dispatchSpirvOnBrotensor(tensorDev, kernel.spirv, launch, err);
             }
         }
@@ -361,9 +385,11 @@ public:
             block.resize(8);
             std::memcpy(block.data(), &paramAddr, 8);
         }
-        if (compute.dispatch(*p.pipeline, block, launch.groups,
-                             known ? std::span<const render::ComputeAccess>(access_)
-                                   : std::span<const render::ComputeAccess>(render::kAnyAccess)))
+        if (counts && known) access_.push_back(render::ComputeAccess{counts->address() + offset, 12, false});
+        const auto access = known ? std::span<const render::ComputeAccess>(access_)
+                                  : std::span<const render::ComputeAccess>(render::kAnyAccess);
+        if (counts ? compute.dispatchCounted(*p.pipeline, block, *counts, offset, access)
+                   : compute.dispatch(*p.pipeline, block, launch.groups, access))
             return true;
         if (err) {
             *err = isDeviceLost(*device_->context()) ? kDeviceLostError

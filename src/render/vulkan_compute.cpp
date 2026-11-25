@@ -33,8 +33,11 @@ constexpr uint32_t kSpanQueries = 256;
 constexpr uint32_t kBackgroundQueries = 128;
 
 constexpr VkAccessFlags kComputeAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-                                         VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-constexpr VkPipelineStageFlags kComputeStages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+                                         VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+                                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+// (The indirect stage: where a counted dispatch reads its workgroup counts.)
+constexpr VkPipelineStageFlags kComputeStages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+                                                VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
 
 void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStages, VkAccessFlags srcAccess,
                    VkPipelineStageFlags dstStages, VkAccessFlags dstAccess) {
@@ -625,6 +628,20 @@ bool VulkanCompute::uploadSpilledParams(std::span<const uint8_t> params, uint64_
 
 bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
                              std::span<const ComputeAccess> access) {
+    return dispatch(pipeline, push, groups, nullptr, 0, access);
+}
+
+bool VulkanCompute::dispatchCounted(const ComputePipeline& pipeline, std::span<const uint8_t> push,
+                                    const ComputeBuffer& counts, VkDeviceSize offset,
+                                    std::span<const ComputeAccess> access) {
+    if (counts.buffer() == VK_NULL_HANDLE || offset % 4 != 0 || offset + 12 > counts.size()) return false;
+    const uint32_t some[3] = {1, 1, 1};
+    return dispatch(pipeline, push, some, &counts, offset, access);
+}
+
+bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
+                             const ComputeBuffer* counts, VkDeviceSize countsOffset,
+                             std::span<const ComputeAccess> access) {
     if (!context_ || pipeline.pipeline_ == VK_NULL_HANDLE || push.size() != pipeline.pushBytes_) return false;
     if (groups[0] == 0 || groups[1] == 0 || groups[2] == 0) return true;
     VkCommandBuffer cmd = commands(access);
@@ -641,7 +658,11 @@ bool VulkanCompute::dispatch(const ComputePipeline& pipeline, std::span<const ui
         vkCmdResetQueryPool(cmd, timePool_, query, 2);
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timePool_, query);
     }
-    vkCmdDispatch(cmd, groups[0], groups[1], groups[2]);
+    if (counts) {
+        vkCmdDispatchIndirect(cmd, counts->buffer(), countsOffset);
+    } else {
+        vkCmdDispatch(cmd, groups[0], groups[1], groups[2]);
+    }
     if (timed) {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timePool_, query + 1);
         timed_.push_back({pipeline.label_, query, 0, recordingBackground()});

@@ -306,6 +306,38 @@ if (bro.kernel.gpu) {
     looked.read(new Float32Array(4));                         // [7, 5, 0, 0]
 }
 
+// kernel.dispatchCounted(counts, byteOffset, grid, ...args) is dispatch(grid,
+// ...args) run over as many thread groups as the GPU finds in `counts` when
+// the dispatch runs: three u32 (x, y, z groups) at byteOffset of that
+// KernelBuffer, which an earlier dispatch may have written. So a pass over a
+// list a kernel built costs what the list holds, with no read back to script
+// for its length. A group is kernel.localSize threads along x; the kernel is
+// told it has `grid` (the most it could be), so it bounds its own work by the
+// count it reads. Not on zero-copy bro.tensor buffers.
+{
+    const listed = bro.kernel.compile(`
+        @kernel @grid(1)
+        fn k_list(g: grid<1>, IN: read_store<f32, 1>, N: rw_store<i32, 1>, L: write_store<i32, 1>) {
+            if (IN[g.x()] > 0.0) { L[N.atomic_add(0, 1)] = g.x(); }
+        }
+        // (The groups a pass over the list takes, of ls threads.)
+        @kernel @grid(1)
+        fn k_groups(g: grid<1>, N: read_store<i32, 1>, G: write_store<i32, 1>, ls: i32) {
+            G[0] = (N[0] + ls - 1) / ls; G[1] = 1; G[2] = 1;
+        }
+        @kernel @grid(1)
+        fn k_double(g: grid<1>, N: read_store<i32, 1>, L: read_store<i32, 1>, IN: rw_store<f32, 1>) {
+            if (g.x() >= N[0]) { return; }
+            IN[L[g.x()]] = IN[L[g.x()]] * 2.0;
+        }`);
+    const M = 4096, values = bro.kernel.createBuffer(new Float32Array(M).fill(1));
+    const count = bro.kernel.createBuffer(4), list = bro.kernel.createBuffer(4 * M), groups = bro.kernel.createBuffer(12);
+    const double = listed.kernel('k_double');
+    listed.kernel('k_list').dispatch(M, values, count, list);
+    listed.kernel('k_groups').dispatch(1, count, groups, double.localSize);
+    double.dispatchCounted(groups, 0, M, count, list, values);   // over the listed ones only
+}
+
 // Errors: a typed array where a KernelBuffer goes, dispatch() of a point
 // kernel, or a read / write outside the buffer (RangeError) throws; a kernel
 // the device cannot run (a capability it lacks) throws an Error naming it.

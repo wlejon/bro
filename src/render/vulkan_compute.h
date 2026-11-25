@@ -256,6 +256,11 @@ public:
     /// against everything).
     bool dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
                   std::span<const ComputeAccess> access = kAnyAccess);
+    /// The same with the workgroup counts read by the GPU when it runs:
+    /// three u32 at `offset` of `counts`, which earlier dispatches may have
+    /// written. `access` names that range as read, with the rest.
+    bool dispatchCounted(const ComputePipeline& pipeline, std::span<const uint8_t> push, const ComputeBuffer& counts,
+                         VkDeviceSize offset, std::span<const ComputeAccess> access = kAnyAccess);
     /// Upload a spilled parameter block into the current stream's BDA ring
     /// and return its GPU address plus a ComputeAccess read dependency.
     bool uploadSpilledParams(std::span<const uint8_t> params, uint64_t& outAddress, ComputeAccess& outRead);
@@ -375,6 +380,8 @@ private:
     // whatever recorded before `access` conflicts with; `access` is then
     // what the operation recorded next touches.
     VkCommandBuffer commands(std::span<const ComputeAccess> access = kAnyAccess);
+    bool dispatch(const ComputePipeline& pipeline, std::span<const uint8_t> push, const uint32_t groups[3],
+                  const ComputeBuffer* counts, VkDeviceSize countsOffset, std::span<const ComputeAccess> access);
     void barrier(Stream& s);
     // The timestamp period and valid bits into owner_, once: false when the
     // queue writes no timestamps.
