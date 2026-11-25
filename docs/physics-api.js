@@ -11,7 +11,7 @@
  * and sandbox worlds.
  *
  * Determinism: a world given the same calls in the same order steps bit for
- * bit alike, run to run and on Windows, Linux and macOS (x64 and arm64).
+ * bit alike, run to run and across Windows and Linux (x64) and macOS (arm64).
  * Jolt is built CROSS_PLATFORM_DETERMINISTIC (no fused multiply-adds, its
  * own trigonometry), and the script feeding it is too: every `Math` function
  * is bronze's own (V8's fdlibm), not the platform's libm, so a lockstep or
