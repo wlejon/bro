@@ -10,11 +10,13 @@
  * character virtual controllers, vehicles, ragdolls, soft bodies, constraints,
  * and sandbox worlds.
  *
- * Determinism: a world given the same calls in the same order repeats bit
- * for bit, run to run. Jolt is built CROSS_PLATFORM_DETERMINISTIC (no fused
- * multiply-adds, its own trigonometry), so its stepping does not lean on a
- * platform's compiler or math library; what a script computes and hands it
- * is the script's own. `getContacts()` is the exception: it lists contacts in the order
+ * Determinism: a world given the same calls in the same order steps bit for
+ * bit alike, run to run and on Windows, Linux and macOS (x64 and arm64).
+ * Jolt is built CROSS_PLATFORM_DETERMINISTIC (no fused multiply-adds, its
+ * own trigonometry), and the script feeding it is too: every `Math` function
+ * is bronze's own (V8's fdlibm), not the platform's libm, so a lockstep or
+ * rollback peer computes the same inputs from the same state.
+ * `getContacts()` is the exception: it lists contacts in the order
  * Jolt's worker threads found them, which varies; a lockstep simulation that
  * acts on contacts sorts them first (by body pair, then impulse and point).
  * @typedef {Object} PhysicsVec3
