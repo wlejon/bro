@@ -7,7 +7,7 @@ Chromium: `three_meshes`, `three_instanced`, `three_skinned`, `three_lights`,
 instances, sprites, ...). The harness checks that bro runs them correctly,
 then times them in a window against Chromium.
 
-`rw.py` drives everything; `timing.py` holds its timing commands. Work files
+`rw.js` drives everything (run via `bronze run bench/realworld/rw.js -- <cmd>` or compiled with `bronze build bench/realworld/rw.js -o rw`); `timing.js` holds its timing commands. Work files
 go to `bench/realworld/.work/` (or `$RW_WORK`). Windowed runs use the Wayland
 display in `WAYLAND_DISPLAY` / `XDG_RUNTIME_DIR` (default: helm's `wayland-0`).
 bro comes from `build-release/`, Chromium is `chromium` on the PATH.
@@ -32,18 +32,18 @@ installed app's ahead-of-time build alike.
 
 | Command | Level | What it checks |
 |---|---|---|
-| `rw.py l1` | 1, JS state | After K frames with no renderer, the scene's state (world matrices, the culled and sorted render list, bone matrices, pixi transforms and batched vertices) hashed in node and in bro-headless at each bronze tier (`jit`, `aot`, `tier0`, `tier2`, `deopt3`, `gcstress`). `match` is bit-exact; `ulp` means the float64 hash differs but the float32 hash and counts agree (last-ulp libm differences). |
-| `rw.py surface` | 2a, WebGL surface | Extensions, `getParameter` values, shader precision and context attributes in windowed bro and Chromium, diffed. |
-| `rw.py record` | 2b, WebGL calls | Every WebGL call of frames 0-2 at a small N, in both, diffed; prints the calls per frame and the functions whose counts differ. Equal per-frame counts mean the library made the same decisions in both. |
-| `rw.py shot --scene S` | 3, pixels | `readPixels` of one frame in both, compared by `compare_shots.py`. |
+| `rw.js l1` | 1, JS state | After K frames with no renderer, the scene's state (world matrices, the culled and sorted render list, bone matrices, pixi transforms and batched vertices) hashed in node and in bro-headless at each bronze tier (`jit`, `aot`, `tier0`, `tier2`, `deopt3`, `gcstress`). `match` is bit-exact; `ulp` means the float64 hash differs but the float32 hash and counts agree (last-ulp libm differences). |
+| `rw.js surface` | 2a, WebGL surface | Extensions, `getParameter` values, shader precision and context attributes in windowed bro and Chromium, diffed. |
+| `rw.js record` | 2b, WebGL calls | Every WebGL call of frames 0-2 at a small N, in both, diffed; prints the calls per frame and the functions whose counts differ. Equal per-frame counts mean the library made the same decisions in both. |
+| `rw.js shot --scene S` | 3, pixels | `readPixels` of one frame in both, compared by `compare_shots.js`. |
 
 ## Timing
 
 ```bash
-python3 bench/realworld/rw.py time --browser chromium|bro|bro-aot --scene S --n N
-python3 bench/realworld/rw.py sweep [--scenes a,b] [--out DIR]
-python3 bench/realworld/rw.py perf --scene S --n N [--aot]
-python3 bench/realworld/rw.py report --json DIR/timing.json [--out DIR/report.md]
+bronze run bench/realworld/rw.js -- time --browser chromium|bro|bro-aot --scene S --n N
+bronze run bench/realworld/rw.js -- sweep [--scenes a,b] [--out DIR]
+bronze run bench/realworld/rw.js -- perf --scene S --n N [--aot]
+bronze run bench/realworld/rw.js -- report --json DIR/timing.json [--out DIR/report.md]
 ```
 
 `bro` is the folder under the JIT, and `bro-aot` the app as an installed one
@@ -118,9 +118,9 @@ its profile, and the measured `--aot` run.
 
 ```bash
 node bench/realworld/scenes/<scene>.js mode=bench n=N warm=W frames=F
-python3 bench/realworld/rw.py js <scene>|all [--n N] [--warm W] [--frames F] [--bronze PATH] [--flags "..."] [--harvest] [--frontend]
-python3 bench/realworld/rw.py js <scene> --profile [--harvest]
-python3 bench/realworld/rw.py js <scene> --versus [--harvest] [--top N]
+bronze run bench/realworld/rw.js -- js <scene>|all [--n N] [--warm W] [--frames F] [--bronze PATH] [--flags "..."] [--harvest] [--frontend]
+bronze run bench/realworld/rw.js -- js <scene> --profile [--harvest]
+bronze run bench/realworld/rw.js -- js <scene> --versus [--harvest] [--top N]
 ```
 
 `mode=bench` runs the page's whole frame, scene step plus the library's
@@ -144,25 +144,24 @@ variable with an attribute's name (three's `uv`) keeps that attribute active.
 at a fixed advance and draws nothing, a `requestAnimationFrame` that never
 calls back (pixi's scheduler and texture GC never run), a minimal `document`.
 
-`rw.py js` (`jsbench.py`) builds each scene with bronze into
+`rw.js js` (`jsbench.js`) builds each scene with bronze into
 `.work/js/<scene>/<key>/` and runs node and the executable, each pinned to one
 core (`taskset -c 4`) under `perf stat -e instructions:u,cycles:u`, twice,
 the faster run reported, and checks the checksums agree (a mismatch is
 printed as `MISMATCH`). Counting covers the timed frames only: with `mark=1`
 the page prints a marker before and after them, padded so the write blocks
-on a one-page pipe until `rw.py` has switched counting on or off through
+on a one-page pipe until `rw.js` has switched counting on or off through
 perf's control fifo. Instructions are user space, all threads (node's JIT
 compiler threads included, on the same core).
 
-A bronze executable takes no arguments (its host passes none to the
-program), so its configuration is compiled in: a generated `main.js`
+Each build's configuration is compiled in: a generated `main.js`
 imports `cfg.js` (`globalThis.BENCH_CONFIG`) and then the scene. A build is
 cached by the digest of the bronze binary (mtime + size), the flags, the
 configuration and the scene, `lib/` and `vendor/` files; a new N is a new
 build (about a minute: three.js and pixi are big). `bronze build
 scenes/<scene>.js` alone also works and benches at the scene's defaults.
 A bronze executable has no `eval` either, and pixi generates its uniform,
-UBO and shader sync functions with `new Function`: for pixi scenes `rw.py`
+UBO and shader sync functions with `new Function`: for pixi scenes `rw.js`
 first runs node with `capture=<file>`, which records every body pixi passes
 to `Function`, and compiles them into the build (`gen.js`, a `Function` that
 returns the compiled body for its arguments). The code that runs is the

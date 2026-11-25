@@ -27,7 +27,7 @@
 # for a race before blaming the compiler. Names that look like timing tests
 # (perf, budget, latency) are marked `timing?`.
 #
-# To turn a divergence into a small repro, scripts/reduce-js.py shrinks a JS
+# To turn a divergence into a small repro, scripts/reduce-js.js shrinks a JS
 # file while a run of it in the failing mode still shows the symptom.
 #
 # Writes <out>/<mode>.log (the runner's output) and <out>/matrix.txt (every
@@ -73,48 +73,6 @@ for m in "${mode_list[@]}"; do
 done
 
 # One row per test: name, then its verdict in each mode (- = not run).
-python3 - "$out" "${mode_list[@]}" <<'EOF'
-import re, sys
-out, modes = sys.argv[1], sys.argv[2:]
-# `PASS  name`, or validate.sh's `PASS  test  name` / `PASS  smoke  name`.
-line = re.compile(r'^\s*(PASS|FAIL|SKIP)\s+(?:(test|smoke)\s+)?(\S+?)(?::|\s|$)')
-# ctest: `  3/23 Test  #3: ui-bar .....   Passed    2.1 sec`, `***Failed`,
-# `***Timeout`, `***Skipped`, `***Exception: SegFault`, `***Not Run`.
-ctest = re.compile(r'^\s*\d+/\d+\s+Test\s+#\d+:\s+(\S+)\s+\.*\s*(\*\*\*)?(\w+)')
-verdicts = {}
-for m in modes:
-    with open(f'{out}/{m}.log', errors='replace') as f:
-        for l in f:
-            hit = line.match(l)
-            if hit:
-                name = (hit.group(2) + ' ' if hit.group(2) else '') + hit.group(3)
-                verdicts.setdefault(name, {})[m] = hit.group(1)
-                continue
-            hit = ctest.match(l)
-            if hit:
-                word = hit.group(3)
-                v = 'PASS' if word == 'Passed' else 'SKIP' if word == 'Skipped' else 'FAIL'
-                verdicts.setdefault(hit.group(1), {})[m] = v
-timing = re.compile(r'perf|budget|latency|timing|stall|jank', re.I)
-ref = modes[0]
-rows, diverged = [], []
-for name in sorted(verdicts):
-    v = verdicts[name]
-    cells = [v.get(m, '-') for m in modes]
-    rows.append(name + '\t' + '\t'.join(cells))
-    base = v.get(ref)
-    odd = [m for m in modes[1:] if m in v and base and v[m] != base and 'SKIP' not in (v[m], base)]
-    if odd:
-        diverged.append((name, base, {m: v[m] for m in odd}))
-with open(f'{out}/matrix.txt', 'w') as f:
-    f.write('test\t' + '\t'.join(modes) + '\n' + '\n'.join(rows) + '\n')
-print(f'{len(verdicts)} tests; matrix in {out}/matrix.txt')
-if not diverged:
-    print(f'no test\'s verdict depends on the mode ({ref} is the reference)')
-    sys.exit(0)
-print(f'{len(diverged)} tests differ from {ref}:')
-for name, base, odd in diverged:
-    tag = '  timing?' if timing.search(name) else ''
-    print(f'  {name}: {ref} {base}, ' + ', '.join(f'{m} {r}' for m, r in odd.items()) + tag)
-sys.exit(1)
-EOF
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+bronze_bin="${BRONZE_BIN:-$script_dir/../../bronze/build/src/cli/bronze}"
+"$bronze_bin" run "$script_dir/exec-matrix-report.js" -- "$out" "${mode_list[@]}"
