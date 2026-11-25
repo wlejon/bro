@@ -89,6 +89,8 @@ void PassShadowMark::record(SceneFrame& frame) {
     float soft[4];
     shadowSoftUniform(frame.renderer, soft);
     u.soft[0] = soft[2];
+    u.soft[1] = static_cast<float>(pages.requestBytes() / 8);
+    u.soft[2] = static_cast<float>(plan.swayLevel);
     const std::vector<LightNode*>& lights = frame.renderer.frameLights();
     int count = 0;
     for (int i = 0; i < static_cast<int>(lights.size()) && i < ShadowPlan::kMaxLights; ++i) {

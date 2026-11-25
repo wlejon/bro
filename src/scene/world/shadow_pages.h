@@ -52,9 +52,13 @@
 // passes); a stale one keeps drawing until it is redrawn in place.
 //
 // What moves. A page holds what does not move. What moves every frame is
-// drawn alone each frame into an overlay of each needed page its bounds
-// touch (addDynamic): a page of the scratch target, cleared and sampled in
-// place, its shadow multiplied into the cached page's. Overlays are drawn in
+// drawn alone each frame into an overlay of each page its bounds touch
+// (addDynamic) whose overlay a pixel's lookup reads (the marking pass names
+// them apart from the pages needed: a guard level's page, or a far band's
+// under what moves near the eye, is needed and never read for it; and over
+// a needed page not drawn yet, the coarser ones the lookup climbs to): a
+// page of the scratch target, cleared and sampled in place, its shadow
+// multiplied into the cached page's. Overlays are drawn in
 // the sun's levels from the sway level (swayLevel(), its texel about
 // swayTexel) up; a finer level reads its sway-level ancestor's, since a
 // leaf's shadow is softer than that texel (the sun's half degree across the
@@ -189,9 +193,11 @@ public:
     /// penumbra is wider (a gather there spans about that penumbra).
     int searchLevel() const;
 
-    /// The marking pass's requests for the plan `serial` named: a bit an
-    /// entry (SP_LEVEL_ENTRIES a clipmap level, then the local maps', then
-    /// the next clipmap's levels), set where a pixel needed it.
+    /// The marking pass's requests for the plan `serial` named: two runs of
+    /// bits, half of `bits` each, a bit an entry (SP_LEVEL_ENTRIES a clipmap
+    /// level, then the local maps', then the next clipmap's levels): set
+    /// where a pixel needed the page, and where its lookup reads the page's
+    /// overlay (a sun level's: what moves is drawn into those alone).
     void request(uint64_t serial, std::span<const uint32_t> bits);
 
     /// The frame's plan: its maps and page table, and what it draws (the
@@ -240,6 +246,7 @@ private:
         int32_t physical = -1;
         uint32_t overlay = 0;    // its overlay's table word this frame (0: none)
         uint64_t needed = 0;     // the newest plan serial whose requests named it
+        uint64_t overlayRead = 0;   // and the newest whose requests named its overlay
         uint64_t base = 0;       // the plan serial it was a base page of (setSeen)
         bool occupied = false;   // a clipmap slot: (x, y) is in its level's window
         bool drawn = false;
@@ -353,6 +360,7 @@ private:
     bool neededNow(const Entry& e) const {
         return (e.needed != 0 && e.needed + 1 >= newestRequest_) || e.base == serial_;
     }
+    bool overlayReadNow(const Entry& e) const { return e.overlayRead != 0 && e.overlayRead + 1 >= newestRequest_; }
     int allocate();
     void viewMatrix(const Map& m, const Rect& r, ShadowViewPlan& v) const;
 

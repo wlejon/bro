@@ -164,6 +164,7 @@ void ShadowPages::releaseMap(int first, int count) {
     for (int i = first; i < first + count; ++i) {
         release(i);
         entries_[static_cast<size_t>(i)].needed = 0;
+        entries_[static_cast<size_t>(i)].overlayRead = 0;
         entries_[static_cast<size_t>(i)].occupied = false;
     }
 }
@@ -193,6 +194,7 @@ void ShadowPages::moveWindows(Sun& sun, int first) {
                 e.x = x;
                 e.y = y;
                 e.needed = 0;
+                e.overlayRead = 0;
             }
     }
     sun.haveWindows = true;
@@ -612,19 +614,49 @@ int ShadowPages::searchLevel() const {
 void ShadowPages::addDynamic(const bromath::AABB3& box, bool sways) { dynamic_.push_back({box, sways}); }
 
 void ShadowPages::markDynamic(std::vector<int>& pages) {
-    // A sway-level page is wanted for its overlay when it is needed or a
-    // needed page finer than it lies under it (the finer levels read its).
+    // A sun level's page is wanted for its overlay where a pixel's lookup
+    // reads it (the marking pass names those: the level the lookup settles
+    // on, the sway level's page over it when that is finer), not wherever
+    // its cached depth is needed: the guard levels and the far bands' pages
+    // lie under what moves near the eye too, and are never read there.
+    // And over a needed page not drawn yet, the pages the lookup climbs to
+    // in its place: the coarser ones up to the first that is drawn.
     if (dynamic_.empty()) return;
     const int s = swayLevel();
-    std::vector<uint8_t> under;
+    std::vector<uint8_t> climbed;
     if (sun_.on) {
-        under.assign(SP_LEVEL_ENTRIES, 0);
-        for (int level = 0; level < s; ++level)
+        climbed.assign(static_cast<size_t>(config_.levels) * SP_LEVEL_ENTRIES, 0);
+        for (int level = 0; level + 1 < config_.levels; ++level)
             for (int k = 0; k < SP_LEVEL_ENTRIES; ++k) {
                 const Entry& e = entries_[static_cast<size_t>(level) * SP_LEVEL_ENTRIES + k];
-                if (!e.occupied || !neededNow(e)) continue;
-                const int a = clipmapEntry(s, e.x >> (s - level), e.y >> (s - level));
-                if (a >= 0) under[static_cast<size_t>(a - s * SP_LEVEL_ENTRIES)] = 1;
+                if (!e.occupied || !neededNow(e) || (e.physical >= 0 && e.drawn)) continue;
+                for (int up = level + 1; up < config_.levels; ++up) {
+                    const int a = clipmapEntry(up, e.x >> (up - level), e.y >> (up - level));
+                    if (a < 0) break;
+                    const int over = up < s ? clipmapEntry(s, e.x >> (s - level), e.y >> (s - level)) : a;
+                    if (over >= 0) climbed[static_cast<size_t>(over)] = 1;
+                    const Entry& p = entries_[static_cast<size_t>(a)];
+                    if (p.physical >= 0 && p.drawn) break;
+                }
+            }
+        // With none coarser drawn the lookup takes a finer page, a base
+        // page: those under a needed page not drawn, and every one of them
+        // before any request has named a page.
+        for (int level = 0; level < config_.levels; ++level)
+            for (int k = 0; k < SP_LEVEL_ENTRIES; ++k) {
+                const int i = level * SP_LEVEL_ENTRIES + k;
+                const Entry& e = entries_[static_cast<size_t>(i)];
+                if (!e.occupied || e.base != serial_) continue;
+                bool read = newestRequest_ == 0;
+                for (int up = level + 1; up < config_.levels && !read; ++up) {
+                    const int a = clipmapEntry(up, e.x >> (up - level), e.y >> (up - level));
+                    if (a < 0) break;
+                    const Entry& p = entries_[static_cast<size_t>(a)];
+                    read = neededNow(p) && !(p.physical >= 0 && p.drawn);
+                }
+                if (!read) continue;
+                const int over = level < s ? clipmapEntry(s, e.x >> (s - level), e.y >> (s - level)) : i;
+                if (over >= 0) climbed[static_cast<size_t>(over)] = 1;
             }
     }
     // The pages that would take an overlay, each tested against the boxes'
@@ -641,7 +673,7 @@ void ShadowPages::markDynamic(std::vector<int>& pages) {
             if (m.level < s) continue;
             for (int k = 0; k < SP_LEVEL_ENTRIES; ++k) {
                 const Entry& e = entries_[static_cast<size_t>(m.first + k)];
-                if (e.occupied && (neededNow(e) || (m.level == s && under[static_cast<size_t>(k)])))
+                if (e.occupied && (overlayReadNow(e) || climbed[static_cast<size_t>(m.first + k)]))
                     wanted.push_back({m.first + k, static_cast<int>(mi), 0});
             }
         } else {
@@ -738,9 +770,12 @@ void ShadowPages::request(uint64_t serial, std::span<const uint32_t> bits) {
     if (h.serial != serial || serial == 0) return;
     newestRequest_ = std::max(newestRequest_, serial);
     const int clip = config_.levels * SP_LEVEL_ENTRIES, nextFirst = clipFirst(true);
-    const size_t words = std::min(bits.size(), (entries_.size() + 31) / 32);
-    for (size_t w = 0; w < words; ++w) {
-        uint32_t word = bits[w];
+    const size_t run = bits.size() / 2;
+    const size_t words = std::min(run, (entries_.size() + 31) / 32);
+    for (size_t hw = 0; hw < 2 * words; ++hw) {
+        const bool overlay = hw >= words;
+        const size_t w = overlay ? hw - words : hw;
+        uint32_t word = bits[overlay ? run + w : w];
         while (word) {
             const int bit = std::countr_zero(word);
             word &= word - 1;
@@ -773,7 +808,8 @@ void ShadowPages::request(uint64_t serial, std::span<const uint32_t> bits) {
                     continue;
             }
             Entry& e = entries_[static_cast<size_t>(i)];
-            e.needed = std::max(e.needed, serial);
+            if (overlay) e.overlayRead = std::max(e.overlayRead, serial);
+            else e.needed = std::max(e.needed, serial);
         }
     }
 }

@@ -9,6 +9,10 @@
 // the search level and the two finer (a wide
 // penumbra's); a local light's mip and its one-page top. A point near its
 // page's edge marks the neighbour the filter and the normal offset may reach.
+// A second run of bits (from word soft.y) names the sun pages whose overlay
+// the lookup reads, what moves being drawn into those alone: the settled
+// level's, its band's neighbours' and the search levels', each the sway
+// level's page when it is finer than that; never the guard's.
 
 const SP_PAGE: i32 = 128;
 const SP_BORDER: i32 = 4;
@@ -70,12 +74,41 @@ fn shadow_cube_face(to_frag: vec3<f32>) -> i32 {
     return to_frag.z > 0.0 ? 4 : 5;
 }
 
-fn mark_entry(e: i32) {
+// (`at`: the bits' first word: the pages wanted at 0, the overlays read
+// after them.)
+fn mark_entry_at(e: i32, at: u32) {
     let eu = e as u32;
-    let w = eu >> 5u;
+    let w = at + (eu >> 5u);
     let m = 1u << (eu & 31u);
     if ((requests[w] & m) == 0u) {
         requests.atomic_or(w, m);
+    }
+}
+
+fn mark_entry(e: i32) {
+    mark_entry_at(e, 0u);
+}
+
+// The page of clipmap map `m` whose overlay the lookup of `pos` reads there
+// (and the neighbour its filter may reach).
+fn mark_overlay(m: i32, pos: vec3<f32>) {
+    let at = u.soft.y as u32;
+    let map = u.maps[m];
+    let pc = mul4(map.matrix, vec4<f32>(pos, 1.0)).xy * (SP_WINDOW as f32);
+    if (pc.x < 0.0 || pc.y < 0.0 || pc.x >= (SP_WINDOW as f32) || pc.y >= (SP_WINDOW as f32)) {
+        return;
+    }
+    let fl = floor(pc);
+    let p = vec2<i32>(fl.x as i32, fl.y as i32);
+    mark_entry_at(shadow_clipmap_entry(map, p), at);
+    let t = (pc - fl) * (SP_PAGE as f32);
+    let dx = t.x < (SP_BORDER as f32) ? -1 : (t.x > ((SP_PAGE - SP_BORDER) as f32) ? 1 : 0);
+    let dy = t.y < (SP_BORDER as f32) ? -1 : (t.y > ((SP_PAGE - SP_BORDER) as f32) ? 1 : 0);
+    if (dx != 0 && p.x + dx >= 0 && p.x + dx < SP_WINDOW) {
+        mark_entry_at(shadow_clipmap_entry(map, p + vec2<i32>(dx, 0)), at);
+    }
+    if (dy != 0 && p.y + dy >= 0 && p.y + dy < SP_WINDOW) {
+        mark_entry_at(shadow_clipmap_entry(map, p + vec2<i32>(0, dy)), at);
     }
 }
 
@@ -132,12 +165,20 @@ fn shadow_mark() {
                     // The next level, which the top of the band fades into,
                     // and near its bottom the finer one an approach is about
                     // to want (drawn before it is shown, not after).
+                    // What moves is read from the overlay of the level the
+                    // lookup settles on, the sway level's when that is
+                    // finer: that level's, and those beside it in the band.
+                    // (The guard is cached depth alone.)
+                    let sway = min(u.soft.z as i32, count - 1);
                     let fr = lf - (level as f32);
+                    mark_overlay(first + max(level, sway), pos);
                     if (fr > 0.7 && level + 1 < count) {
                         mark_clipmap(first + level + 1, pos);
+                        mark_overlay(first + max(level + 1, sway), pos);
                     }
                     if (level == want && level > 0 && fr < 0.3) {
                         mark_clipmap(first + level - 1, pos);
+                        mark_overlay(first + max(level - 1, sway), pos);
                     }
                     mark_clipmap(first + min(level + SP_GUARD_LEVELS, count - 1), pos);
                     let search = u.soft.x as i32;
@@ -145,6 +186,7 @@ fn shadow_mark() {
                         let s_end = min(search, count - 1);
                         for (var s: i32 = max(search - 2, level + 1); s <= s_end; s += 1) {
                             mark_clipmap(first + s, pos);
+                            mark_overlay(first + max(s, sway), pos);
                         }
                     }
                 }

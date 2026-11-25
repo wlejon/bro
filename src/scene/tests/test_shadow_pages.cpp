@@ -41,8 +41,21 @@ ShadowSun downSun(Vec3 dir = {0.0f, -1.0f, 0.0f}) {
 
 /// The requests that name `entries` (a bit an entry).
 std::vector<uint32_t> bitsOf(const ShadowPages& p, const std::vector<int>& entries) {
-    std::vector<uint32_t> bits(static_cast<size_t>(p.entryCount() + 31) / 32, 0u);
-    for (int e : entries) bits[static_cast<size_t>(e) / 32] |= 1u << (e % 32);
+    // (Both runs, as the marking pass sets them: a page's overlay read where
+    // the page is needed, the sway level's page over it for a finer one.)
+    const size_t run = static_cast<size_t>(p.entryCount() + 31) / 32;
+    std::vector<uint32_t> bits(2 * run, 0u);
+    const int s = p.swayLevel(), clip = p.config().levels * SP_LEVEL_ENTRIES;
+    for (int e : entries) {
+        bits[static_cast<size_t>(e) / 32] |= 1u << (e % 32);
+        int o = e;
+        if (e < clip && e / SP_LEVEL_ENTRIES < s) {
+            const int level = e / SP_LEVEL_ENTRIES;
+            const ShadowPages::EntryView v = p.entry(e);
+            o = p.clipmapEntry(s, v.x >> (s - level), v.y >> (s - level));
+        }
+        if (o >= 0) bits[run + static_cast<size_t>(o) / 32] |= 1u << (o % 32);
+    }
     return bits;
 }
 

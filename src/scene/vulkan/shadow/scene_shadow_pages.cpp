@@ -87,10 +87,11 @@ bool SceneShadowPages::beginFrame(SceneGpu& gpu, SceneRenderer& renderer) {
     const bool had = pool.width > 1;
     const uint32_t poolSide = static_cast<uint32_t>(std::max(plan.poolColumns, plan.poolRows) * SP_STRIDE);
     const bool poolOk = pool.isValid() && pool.width == poolSide;
-    // (A request bit an entry.)
+    // (Two request bits an entry, a run of words each: its page wanted, its
+    // overlay read.)
     if (!ensureImage(gpu, pool, poolSide, kPoolUsage, "page pool") ||
         !ensureImage(gpu, scratch, static_cast<uint32_t>(plan.scratchSize), kScratchUsage, "scratch target") ||
-        !ensureRequests(gpu, static_cast<VkDeviceSize>((plan.entryCount + 31) / 32) * 4u)) {
+        !ensureRequests(gpu, static_cast<VkDeviceSize>((plan.entryCount + 31) / 32) * 8u)) {
         gpu.allocator.destroyImage(pool);
         gpu.allocator.destroyImage(scratch);
         ensureImage(gpu, pool, 1, kPoolUsage, "pool");
