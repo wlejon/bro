@@ -131,6 +131,14 @@ void clearMenuHandlers();
 /// Cancel and drain in-flight async sibling jobs and per-realm listeners on app reload.
 void shutdownSiblingApisForReload();
 
+#if BRO_WITH_DYNAMICS
+/// Destroy every bro.dynamics World owned by the calling thread before thread or
+/// engine teardown so Box3D worker threads join outside the OS loader lock.
+void releaseDynamicsWorlds();
+#else
+inline void releaseDynamicsWorlds() {}
+#endif
+
 /// Terminate and join all active worker threads on shutdown.
 void terminateAllWorkers();
 // A reload: every Worker the page made stops, its queued replies dropped and

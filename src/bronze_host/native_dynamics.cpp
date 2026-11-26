@@ -20,13 +20,20 @@ namespace {
 
 using bro::dynamics::World;
 
+// A trivially-destructible thread_local pointer (never a thread_local
+// vector/unique_ptr): destroying a World that owns Box3D scheduler threads
+// joins those threads, which deadlocks on Windows if run inside dynamic TLS
+// teardown under DllMain(DLL_THREAD_DETACH) while holding the OS loader lock.
+static thread_local std::vector<std::unique_ptr<World>>* t_worlds = nullptr;
+
 std::vector<std::unique_ptr<World>>& worlds() {
-    thread_local std::vector<std::unique_ptr<World>> table;
-    return table;
+    if (!t_worlds) t_worlds = new std::vector<std::unique_ptr<World>>();
+    return *t_worlds;
 }
 
 World* worldOf(int32_t id) {
-    auto& t = worlds();
+    if (!t_worlds) return nullptr;
+    auto& t = *t_worlds;
     if (id < 0 || static_cast<std::size_t>(id) >= t.size()) return nullptr;
     return t[static_cast<std::size_t>(id)].get();
 }
@@ -96,6 +103,13 @@ int32_t dynamicsWorldId(bronze::Value world) {
     return worldOf(n) ? n : -1;
 }
 
+void releaseDynamicsWorlds() {
+    if (!t_worlds) return;
+    auto* table = t_worlds;
+    t_worlds = nullptr;
+    delete table;
+}
+
 }  // namespace bro::bronze_host
 
 extern "C" {
@@ -110,7 +124,8 @@ int32_t bro_dynamics_create(void) {
 }
 
 void bro_dynamics_destroy(int32_t world) {
-    auto& t = worlds();
+    if (!t_worlds) return;
+    auto& t = *t_worlds;
     if (world >= 0 && static_cast<std::size_t>(world) < t.size()) t[static_cast<std::size_t>(world)].reset();
 }
 
@@ -146,12 +161,27 @@ int32_t bro_dynamics_addMesh(int32_t world, const float* desc, uint32_t descLen,
                             static_cast<int>(indexLen / 3)));
 }
 
+int32_t bro_dynamics_addHeightField(int32_t world, const float* desc, uint32_t descLen, int32_t layers, int32_t mask,
+                                    const float* heights, uint32_t heightsLen, int32_t countX, int32_t countZ,
+                                    const float* params, uint32_t paramsLen) {
+    World* w = worldOf(world);
+    if (!w || descLen < 22 || paramsLen < 5 || countX < 2 || countZ < 2 ||
+        static_cast<uint64_t>(countX) * static_cast<uint64_t>(countZ) > heightsLen) {
+        return -1;
+    }
+    return named(w->addHeightField(bodyDesc(desc, 0, layers, mask), heights, countX, countZ, params, params[3], params[4]));
+}
+
 void bro_dynamics_setMaxSpeed(int32_t world, double speed) {
     if (World* w = worldOf(world)) w->setMaxSpeed(static_cast<float>(speed));
 }
 
 void bro_dynamics_setHitSpeed(int32_t world, double speed) {
     if (World* w = worldOf(world)) w->setHitSpeed(static_cast<float>(speed));
+}
+
+void bro_dynamics_setWorkers(int32_t world, int32_t workers) {
+    if (World* w = worldOf(world)) w->setWorkers(workers);
 }
 
 void bro_dynamics_moveTo(int32_t world, int32_t body, const float* pose, uint32_t poseLen, double dt) {
@@ -365,6 +395,7 @@ int32_t bro_dynamics_addStructure(int32_t world, const float* frames, uint32_t f
     d.safety = options[1];
     d.friction = options[2];
     d.restitution = options[3];
+    if (optionsLen >= 5) d.maxPieces = static_cast<int>(options[4]);
     d.layers = static_cast<std::uint32_t>(layers);
     d.mask = static_cast<std::uint32_t>(mask);
     return static_cast<int32_t>(w->addStructure(d));

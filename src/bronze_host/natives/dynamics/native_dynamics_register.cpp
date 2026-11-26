@@ -21,8 +21,10 @@ bool registerNatives_dynamics(std::string* error) {
            fn("__bro_native.dynamics.addBody", BRO_NATIVE_FN(bro_dynamics_addBody), "i32", {"i32", "i32", "f32[]", "i32", "i32", "i32"}, error) &&
            fn("__bro_native.dynamics.addHull", BRO_NATIVE_FN(bro_dynamics_addHull), "i32", {"i32", "f32[]", "i32", "i32", "i32", "f32[]"}, error) &&
            fn("__bro_native.dynamics.addMesh", BRO_NATIVE_FN(bro_dynamics_addMesh), "i32", {"i32", "f32[]", "i32", "i32", "f32[]", "i32[]"}, error) &&
+           fn("__bro_native.dynamics.addHeightField", BRO_NATIVE_FN(bro_dynamics_addHeightField), "i32", {"i32", "f32[]", "i32", "i32", "f32[]", "i32", "i32", "f32[]"}, error) &&
            fn("__bro_native.dynamics.setMaxSpeed", BRO_NATIVE_FN(bro_dynamics_setMaxSpeed), "void", {"i32", "f64"}, error) &&
            fn("__bro_native.dynamics.setHitSpeed", BRO_NATIVE_FN(bro_dynamics_setHitSpeed), "void", {"i32", "f64"}, error) &&
+           fn("__bro_native.dynamics.setWorkers", BRO_NATIVE_FN(bro_dynamics_setWorkers), "void", {"i32", "i32"}, error) &&
            fn("__bro_native.dynamics.moveTo", BRO_NATIVE_FN(bro_dynamics_moveTo), "void", {"i32", "i32", "f32[]", "f64"}, error) &&
            fn("__bro_native.dynamics.wake", BRO_NATIVE_FN(bro_dynamics_wake), "void", {"i32", "i32"}, error) &&
            fn("__bro_native.dynamics.hasBody", BRO_NATIVE_FN(bro_dynamics_hasBody), "bool", {"i32", "i32"}, error) &&

@@ -3,6 +3,7 @@
 // none are re-entrant. Header comments trimmed for file-size compliance; order:
 //   brotensor before ML inference stacks; installKernelGpu/Background/Tiles with kernel.
 
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/host_js_modules.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
@@ -779,6 +780,7 @@ void installSiblingApis(engine::Engine& engine) {
 }
 
 void shutdownSiblingApisForReload() {
+    releaseDynamicsWorlds();
 #if BRO_WITH_LM
     brolm::api::shutdownLM();
 #endif

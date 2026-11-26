@@ -61,6 +61,7 @@
             this._id = __bro_native.dynamics.create();
             const g = options && options.gravity;
             if (g) __bro_native.dynamics.setGravity(this._id, +g[0], +g[1], +g[2]);
+            if (options && options.workers !== undefined) __bro_native.dynamics.setWorkers(this._id, options.workers | 0);
         }
 
         destroy() {
@@ -123,11 +124,26 @@
             return made('addMesh', __bro_native.dynamics.addMesh(this._id, d, layersOf(o), maskOf(o), xyz, idx));
         }
 
+        addHeightField(o) {
+            const d = bodyDesc('addHeightField', o, ZERO);
+            const cx = o && (o.countX | 0), cz = o && (o.countZ | 0);
+            const heights = o.heights instanceof Float32Array ? o.heights : Float32Array.from(o.heights || []);
+            if (cx < 2 || cz < 2 || heights.length < cx * cz) {
+                throw new RangeError('bro.dynamics: addHeightField: countX and countZ >= 2 with heights[countX * countZ]');
+            }
+            const sc = o.scale || [1, 1, 1];
+            const minH = o.minHeight === undefined ? -100 : +o.minHeight;
+            const maxH = o.maxHeight === undefined ? 500 : +o.maxHeight;
+            const params = Float32Array.of(+sc[0], +sc[1], +sc[2], minH, maxH);
+            return made('addHeightField', __bro_native.dynamics.addHeightField(this._id, d, layersOf(o), maskOf(o), heights, cx, cz, params));
+        }
+
         removeBody(body) { __bro_native.dynamics.removeBody(this._id, body | 0); }
         hasBody(body) { return __bro_native.dynamics.hasBody(this._id, body | 0); }
 
         set maxSpeed(v) { __bro_native.dynamics.setMaxSpeed(this._id, +v); }
         set hitSpeed(v) { __bro_native.dynamics.setHitSpeed(this._id, +v); }
+        setWorkers(n) { __bro_native.dynamics.setWorkers(this._id, n | 0); }
 
         addJoint(o) {
             if (o === null || typeof o !== 'object') throw new TypeError('bro.dynamics: addJoint takes an object');
@@ -234,7 +250,8 @@
                 ties[i * 2] = a; ties[i * 2 + 1] = b;
             }
             const options = Float32Array.of(o.chunk === undefined ? 1.2 : +o.chunk, o.safety === undefined ? 2 : +o.safety,
-                o.friction === undefined ? 0.7 : +o.friction, o.restitution === undefined ? 0 : +o.restitution);
+                o.friction === undefined ? 0.7 : +o.friction, o.restitution === undefined ? 0 : +o.restitution,
+                o.maxPieces === undefined ? 0 : +o.maxPieces);
             if (!(options[0] > 0)) throw new RangeError('bro.dynamics: addStructure: chunk must be over 0');
             const id = __bro_native.dynamics.addStructure(this._id, frames, members, ties, options, layersOf(o), maskOf(o));
             return new Structure(this._id, id);

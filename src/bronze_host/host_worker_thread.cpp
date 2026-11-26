@@ -621,6 +621,7 @@ void WorkerInstance::threadFunc() {
     brokit::api::cleanupSqlite();
     brokit::api::cleanupIndexedDB();
     uninstallRejectionTracking();
+    releaseDynamicsWorlds();
     releaseNetState();
     setWorkerServerControl(nullptr);
     alive_.store(false, std::memory_order_release);

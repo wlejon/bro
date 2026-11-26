@@ -5,6 +5,7 @@
 #include "box3d/box3d.h"
 #include "box3d/math_functions.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -43,6 +44,7 @@ struct BodyRec {
     b3BodyId id = b3_nullBodyId;
     std::vector<std::uint32_t> joints;
     b3MeshData* mesh = nullptr;  // a mesh body's triangles, which its shape reads in place
+    b3HeightFieldData* heightField = nullptr;
     std::uint32_t layers = 1;
     std::uint32_t structure = kWorld;  // the structure it is a body of
     bool fixed = false;
@@ -76,6 +78,7 @@ struct World::Impl {
     std::vector<Touch> touched;
     std::vector<Hit> hits;
     std::vector<Awake> awake;
+    mutable std::vector<b3ContactData> contactScratch;
     int bodyCount = 0, jointCount = 0;
     double stepMs = 0;
 
@@ -118,6 +121,7 @@ struct World::Impl {
         bd.angularDamping = d.angularDamping;
         bd.gravityScale = d.gravityScale;
         bd.isBullet = d.bullet;
+        if (d.sleepThreshold > 0.0f) bd.sleepThreshold = d.sleepThreshold;
         std::uint32_t slot;
         if (!freeBodies.empty()) {
             slot = freeBodies.back();
@@ -134,6 +138,7 @@ struct World::Impl {
         bodies[slot].layers = d.layers;
         bodies[slot].structure = d.structure;
         bodies[slot].mesh = nullptr;
+        bodies[slot].heightField = nullptr;
         bodies[slot].joints.clear();
         bodyCount++;
         if (!fixed) fresh.push_back(slot);
@@ -159,8 +164,8 @@ struct World::Impl {
         sd.baseMaterial.restitution = d.restitution;
         sd.filter.categoryBits = d.layers;
         sd.filter.maskBits = d.mask;
-        sd.enableContactEvents = true;
-        sd.enableHitEvents = true;
+        sd.enableContactEvents = d.events;
+        sd.enableHitEvents = d.events;
         sd.enablePreSolveEvents = d.structure != kWorld;
         return sd;
     }
@@ -197,12 +202,14 @@ World::~World() {
     if (b3World_IsValid(impl_->world)) b3DestroyWorld(impl_->world);
     for (BodyRec& r : impl_->bodies) {
         if (r.mesh) b3DestroyMesh(r.mesh);
+        if (r.heightField) b3DestroyHeightField(r.heightField);
     }
 }
 
 void World::setGravity(float x, float y, float z) { b3World_SetGravity(impl_->world, b3Vec3{x, y, z}); }
 void World::setMaxSpeed(float speed) { b3World_SetMaximumLinearSpeed(impl_->world, speed); }
 void World::setHitSpeed(float speed) { b3World_SetHitEventThreshold(impl_->world, speed); }
+void World::setWorkers(int workers) { b3World_SetWorkerCount(impl_->world, std::clamp(workers, 1, 16)); }
 
 std::uint32_t World::addCapsule(const BodyDesc& d, float radius, float halfHeight) {
     b3BodyId id;
@@ -253,6 +260,35 @@ std::uint32_t World::addMesh(const BodyDesc& d, const float* xyz, int vertices, 
     return slot;
 }
 
+std::uint32_t World::addHeightField(const BodyDesc& d, const float* heights, int countX, int countZ,
+                                    const float scale[3], float minH, float maxH) {
+    if (!heights || countX < 2 || countZ < 2 || !(scale[0] > 0.0f) || !(scale[1] > 0.0f) || !(scale[2] > 0.0f) ||
+        maxH < minH) {
+        return kWorld;
+    }
+    const std::size_t n = static_cast<std::size_t>(countX) * static_cast<std::size_t>(countZ);
+    std::vector<float> copy(heights, heights + n);
+    b3HeightFieldDef hfd = {};
+    hfd.heights = copy.data();
+    hfd.materialIndices = nullptr;
+    hfd.scale = v3(scale);
+    hfd.countX = countX;
+    hfd.countZ = countZ;
+    hfd.globalMinimumHeight = minH;
+    hfd.globalMaximumHeight = maxH;
+    hfd.clockwiseWinding = false;
+    b3HeightFieldData* hf = b3CreateHeightField(&hfd);
+    if (!hf) return kWorld;
+    b3BodyId id;
+    const std::uint32_t slot = impl_->add(d, id, true);
+    BodyDesc sdDesc = d;
+    sdDesc.events = false;
+    const b3ShapeDef sd = impl_->shape(sdDesc, 0.0f);
+    b3CreateHeightFieldShape(id, &sd, hf);
+    impl_->bodies[slot].heightField = hf;
+    return slot;
+}
+
 std::uint32_t World::addBox(const BodyDesc& d, const float half[3]) {
     b3BodyId id;
     const std::uint32_t slot = impl_->add(d, id);
@@ -300,10 +336,12 @@ void World::pressing(std::uint32_t body, std::vector<Press>& out) const {
     const b3BodyId id = impl_->bodies[body].id;
     const int capacity = b3Body_GetContactCapacity(id);
     if (capacity < 1) return;
-    std::vector<b3ContactData> data(static_cast<std::size_t>(capacity));
-    const int count = b3Body_GetContactData(id, data.data(), capacity);
+    if (static_cast<int>(impl_->contactScratch.size()) < capacity) {
+        impl_->contactScratch.resize(static_cast<std::size_t>(capacity));
+    }
+    const int count = b3Body_GetContactData(id, impl_->contactScratch.data(), capacity);
     for (int i = 0; i < count; i++) {
-        const b3ContactData& c = data[static_cast<std::size_t>(i)];
+        const b3ContactData& c = impl_->contactScratch[static_cast<std::size_t>(i)];
         std::uint32_t a, b;
         if (!impl_->bodyOf(c.shapeIdA, a) || !impl_->bodyOf(c.shapeIdB, b)) continue;
         const bool first = a == body;
@@ -341,6 +379,10 @@ void World::velocityAt(std::uint32_t body, const float at[3], float out[3]) cons
 
 int World::touching(std::uint32_t body) const {
     return hasBody(body) ? b3Body_GetContactCapacity(impl_->bodies[body].id) : 0;
+}
+
+bool World::isAwake(std::uint32_t body) const {
+    return hasBody(body) && b3Body_IsAwake(impl_->bodies[body].id);
 }
 
 void World::awake(std::vector<Awake>& out) const {
@@ -401,7 +443,9 @@ void World::removeBody(std::uint32_t body) {
     for (std::uint32_t j : on) impl_->dropJoint(j, false);
     b3DestroyBody(r.id);
     if (r.mesh) b3DestroyMesh(r.mesh);
+    if (r.heightField) b3DestroyHeightField(r.heightField);
     r.mesh = nullptr;
+    r.heightField = nullptr;
     r.alive = false;
     r.id = b3_nullBodyId;
     r.joints.clear();

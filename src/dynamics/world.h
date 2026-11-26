@@ -40,6 +40,8 @@ struct BodyDesc {
     bool planar = false;       // held to the plane z = its z, turning about z only
     std::uint32_t layers = 1;            // the layers it is on
     std::uint32_t mask = 0xffffffffu;    // the layers it touches
+    float sleepThreshold = 0.0f;         // m/s: >0 overrides Box3D's default
+    bool events = true;                  // whether contacts and hits are reported
     // The structure whose body this is (set by the structure): it is shown what meets the
     // body before the step solves it.
     std::uint32_t structure = kWorld;
@@ -137,6 +139,7 @@ public:
     // The fastest a body moves, and the closing speed past which a meeting is a hit.
     void setMaxSpeed(float speed);
     void setHitSpeed(float speed);
+    void setWorkers(int workers);
 
     std::uint32_t addBox(const BodyDesc& d, const float half[3]);
     std::uint32_t addSphere(const BodyDesc& d, float radius);
@@ -147,6 +150,9 @@ public:
     // Triangles (body space), fixed in place whatever the mass; kWorld when they make none.
     std::uint32_t addMesh(const BodyDesc& d, const float* xyz, int vertices, const std::int32_t* indices,
                           int triangles);
+    // Height grid (row * countX + col), fixed in place; kWorld on invalid inputs.
+    std::uint32_t addHeightField(const BodyDesc& d, const float* heights, int countX, int countZ,
+                                 const float scale[3], float minH, float maxH);
     // One body of several boxes, each with its own mass (d.mass is not read); fixed in
     // place when no part has any.
     std::uint32_t addBoxes(const BodyDesc& d, const Part* parts, int count);
@@ -175,6 +181,7 @@ public:
     void velocityAt(std::uint32_t body, const float at[3], float out[3]) const;
     // How many contacts a body has, and the box about it.
     int touching(std::uint32_t body) const;
+    bool isAwake(std::uint32_t body) const;
     void bounds(std::uint32_t body, float min[3], float max[3]) const;
     // What the bodies touching a body pressed on it with in the last step, a row a contact
     // point.

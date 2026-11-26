@@ -57,10 +57,18 @@ int32_t bro_dynamics_addHull(int32_t world, const float* desc, uint32_t descLen,
 int32_t bro_dynamics_addMesh(int32_t world, const float* desc, uint32_t descLen, int32_t layers, int32_t mask,
                              const float* xyz, uint32_t xyzLen, const int32_t* indices, uint32_t indexLen);
 
-// World.maxSpeed / World.hitSpeed writes
-//   registered at __bro_native.dynamics.setMaxSpeed / setHitSpeed
+// World.addHeightField
+//   registered at __bro_native.dynamics.addHeightField
+//   params: scaleX, scaleY, scaleZ, minH, maxH
+int32_t bro_dynamics_addHeightField(int32_t world, const float* desc, uint32_t descLen, int32_t layers, int32_t mask,
+                                    const float* heights, uint32_t heightsLen, int32_t countX, int32_t countZ,
+                                    const float* params, uint32_t paramsLen);
+
+// World.maxSpeed / World.hitSpeed / World.setWorkers writes
+//   registered at __bro_native.dynamics.setMaxSpeed / setHitSpeed / setWorkers
 void bro_dynamics_setMaxSpeed(int32_t world, double speed);
 void bro_dynamics_setHitSpeed(int32_t world, double speed);
+void bro_dynamics_setWorkers(int32_t world, int32_t workers);
 
 // World.moveTo
 //   registered at __bro_native.dynamics.moveTo; pose: position 3, rotation 4
@@ -155,7 +163,7 @@ void bro_dynamics_counts(int32_t world, bronze_native_buffer* out);
 //   registered at __bro_native.dynamics.addStructure; the structure's number, -1 for none
 //   frames: position 3, rotation 4 each. members, 13 floats each: frame, centre 3, half 3,
 //   mass, sigma, crush, give, 1 when anchored, span. ties: two members each. options:
-//   chunk, safety, friction, restitution
+//   chunk, safety, friction, restitution[, maxPieces]
 int32_t bro_dynamics_addStructure(int32_t world, const float* frames, uint32_t framesLen, const float* members,
                                   uint32_t membersLen, const int32_t* ties, uint32_t tiesLen, const float* options,
                                   uint32_t optionsLen, int32_t layers, int32_t mask);

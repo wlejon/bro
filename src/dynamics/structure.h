@@ -60,6 +60,7 @@ struct StructureDesc {
     float safety = 2.0f;   // a joint holds this many times what it carried as built
     float friction = 0.7f;
     float restitution = 0.0f;
+    int maxPieces = 0;     // 0: unlimited loose bodies
     std::uint32_t layers = 1;
     std::uint32_t mask = 0xffffffffu;
 };

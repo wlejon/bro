@@ -150,6 +150,7 @@ void Engine::teardown() {
     // Join dedicated JS Workers before shutting down bro.tensor; workers may
     // hold or invoke tensor ops (e.g. bro.tensor in runBatch) until terminated.
     bro::bronze_host::terminateAllWorkers();
+    bro::bronze_host::releaseDynamicsWorlds();
 
 #if BRO_WITH_TENSOR
     brotensor::shutdown();

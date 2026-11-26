@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <queue>
 #include <unordered_map>
 #include <utility>
@@ -132,6 +133,7 @@ struct Structure::Impl {
     World& world;
     std::uint32_t index;
     float chunk, safety, friction, restitution;
+    int maxPieces = 0;
     std::uint32_t layers, mask;
     V3 up{0, 1, 0};
     float g = 9.81f;
@@ -166,10 +168,13 @@ struct Structure::Impl {
     std::vector<V3> push;  // N s on each loose cell, in the space it was built in, since squeeze
     std::vector<std::uint32_t> order, found, mark;
     std::vector<std::pair<float, std::uint32_t>> near;
+    std::vector<Press> pressScratch;
+    std::mutex meetMutex;
 
     Impl(World& w, std::uint32_t i, const StructureDesc& d)
         : world(w), index(i), chunk(d.chunk > 0.05f ? d.chunk : 0.05f), safety(d.safety > 1.0f ? d.safety : 1.0f),
-          friction(d.friction), restitution(d.restitution), layers(d.layers), mask(d.mask) {
+          friction(d.friction), restitution(d.restitution), maxPieces(d.maxPieces > 0 ? d.maxPieces : 0),
+          layers(d.layers), mask(d.mask) {
         float gv[3];
         world.gravity(gv);
         g = length(from(gv));
@@ -531,7 +536,57 @@ struct Structure::Impl {
             }
             parts.push_back(p);
         }
+        if (maxPieces > 0 && parts.size() > 48) {
+            parts.clear();
+            for (std::size_t i = 0; i < list.size();) {
+                const std::uint32_t mi = cells[list[i]].member;
+                const Member& m = members[mi];
+                std::size_t j = i + 1;
+                while (j < list.size() && cells[list[j]].member == mi) j++;
+                Part p;
+                p.q[0] = m.q.x; p.q[1] = m.q.y; p.q[2] = m.q.z; p.q[3] = m.q.w;
+                if (j - i == 1) {
+                    const Cell& c = cells[list[i]];
+                    to(p.c, c.p - origin);
+                    for (int k = 0; k < 3; k++) p.h[k] = c.h[k];
+                    p.mass = c.mass;
+                } else if (static_cast<int>(j - i) == m.cells) {
+                    to(p.c, m.c - origin);
+                    for (int k = 0; k < 3; k++) p.h[k] = m.h[k];
+                    p.mass = m.mass;
+                } else {
+                    const Q toM = conj(m.q);
+                    V3 mn{kInf, kInf, kInf}, mx{-kInf, -kInf, -kInf};
+                    float subMass = 0;
+                    for (std::size_t k = i; k < j; k++) {
+                        const Cell& c = cells[list[k]];
+                        const V3 lp = rot(toM, c.p - m.c);
+                        mn = {std::min(mn.x, lp.x - c.h[0]), std::min(mn.y, lp.y - c.h[1]), std::min(mn.z, lp.z - c.h[2])};
+                        mx = {std::max(mx.x, lp.x + c.h[0]), std::max(mx.y, lp.y + c.h[1]), std::max(mx.z, lp.z + c.h[2])};
+                        subMass += c.mass;
+                    }
+                    to(p.c, m.c + rot(m.q, (mn + mx) * 0.5f) - origin);
+                    const V3 lh = (mx - mn) * 0.5f;
+                    p.h[0] = lh.x; p.h[1] = lh.y; p.h[2] = lh.z;
+                    p.mass = subMass;
+                }
+                parts.push_back(p);
+                i = j;
+            }
+        }
         BodyDesc d = bodyDesc();
+        if (maxPieces > 0) {
+            if (list.size() == 1) {
+                d.events = false;
+                d.linearDamping = 0.25f;
+                d.angularDamping = 0.45f;
+                d.sleepThreshold = 0.35f;
+            } else {
+                d.linearDamping = 0.08f;
+                d.angularDamping = 0.15f;
+                d.sleepThreshold = 0.18f;
+            }
+        }
         if (old) {
             const Q q = fromQ(old->q);
             const V3 at = from(old->p) + rot(q, origin - oldOrigin);
@@ -773,13 +828,12 @@ struct Structure::Impl {
 
     // What rests on the members that have bodies, kept for the next sending of the weight.
     void pressing(float dt) {
-        std::vector<Press> list;
         bool any = false;
         for (std::uint32_t mi : held) {
             const Member& m = members[mi];
             if (m.body == kWorld || world.touching(m.body) == 0) continue;
-            world.pressing(m.body, list);
-            for (const Press& p : list) {
+            world.pressing(m.body, pressScratch);
+            for (const Press& p : pressScratch) {
                 const float down = -dot(from(p.impulse), up);
                 if (!(down > 0)) continue;
                 const V3 at = from(p.point);
@@ -788,9 +842,10 @@ struct Structure::Impl {
                 for (int i = 0; i < m.cells; i++) {
                     const std::uint32_t c = m.cell0 + static_cast<std::uint32_t>(i);
                     if (cells[c].piece != kStanding) continue;
-                    const float d = length(cells[c].p - at);
-                    if (d < best) {
-                        best = d;
+                    const V3 diff = cells[c].p - at;
+                    const float d2 = dot(diff, diff);
+                    if (d2 < best) {
+                        best = d2;
                         nearest = c;
                     }
                 }
@@ -803,19 +858,25 @@ struct Structure::Impl {
         // And on the loose bodies, whichever way it pushes.
         if (push.size() != cells.size()) push.assign(cells.size(), V3{});
         for (const Piece& p : pieces) {
-            if (!p.alive || world.touching(p.body) == 0) continue;
-            world.pressing(p.body, list);
-            if (list.empty()) continue;
+            if (!p.alive || !world.isAwake(p.body) || world.touching(p.body) == 0) continue;
+            world.pressing(p.body, pressScratch);
+            if (pressScratch.empty()) continue;
+            if (p.cells.size() == 1) {
+                const std::uint32_t c = p.cells[0];
+                for (const Press& pr : pressScratch) cells[c].pressed += length(from(pr.impulse));
+                continue;
+            }
             const Pose pose = world.pose(p.body);
             const Q back = conj(fromQ(pose.q));
-            for (const Press& pr : list) {
+            for (const Press& pr : pressScratch) {
                 const V3 at = p.origin + rot(back, from(pr.point) - from(pose.p));
                 std::uint32_t nearest = p.cells[0];
                 float best = kInf;
                 for (std::uint32_t c : p.cells) {
-                    const float d = length(cells[c].p - at);
-                    if (d < best) {
-                        best = d;
+                    const V3 diff = cells[c].p - at;
+                    const float d2 = dot(diff, diff);
+                    if (d2 < best) {
+                        best = d2;
                         nearest = c;
                     }
                 }
@@ -908,7 +969,13 @@ struct Structure::Impl {
                 world.setVelocity(b.other, lin, ang);
             }
             std::sort(freed.begin(), freed.end());
-            for (std::uint32_t c : freed) loose(std::vector<std::uint32_t>{c}, nullptr, V3{}, kWorld, v);
+            for (std::uint32_t c : freed) {
+                if (maxPieces > 0 && pieceCount >= maxPieces) {
+                    gone.push_back(c);
+                } else {
+                    loose(std::vector<std::uint32_t>{c}, nullptr, V3{}, kWorld, v);
+                }
+            }
             any = any || !freed.empty();
         }
         blows.clear();
@@ -932,6 +999,7 @@ struct Structure::Impl {
         const std::uint32_t tag = ++stamp;
         std::size_t rest = 0;
         for (; rest < near.size(); rest++) {
+            if (maxPieces > 0 && freed.size() >= 8) break;
             const std::uint32_t c = near[rest].second;
             if (near[rest].first > reach && !freed.empty()) break;
             const float need = cost(c);
@@ -995,7 +1063,7 @@ struct Structure::Impl {
         std::vector<std::vector<std::uint32_t>> made;
         std::sort(out.begin(), out.end());
         for (std::uint32_t c : out) {
-            if (crushed) {
+            if (crushed || (maxPieces > 0 && pieceCount + static_cast<int>(made.size()) >= maxPieces)) {
                 cells[c].piece = kGone;
                 gone.push_back(c);
             } else {
@@ -1209,7 +1277,7 @@ struct Structure::Impl {
         if (push.size() != cells.size()) push.assign(cells.size(), V3{});
         std::vector<std::uint32_t> out;
         for (std::uint32_t pi = 0; pi < pieces.size(); pi++) {
-            if (!pieces[pi].alive) continue;
+            if (!pieces[pi].alive || !world.isAwake(pieces[pi].body)) continue;
             out.clear();
             V3 sum{};
             for (std::uint32_t c : pieces[pi].cells) sum = sum + push[c];
@@ -1476,14 +1544,16 @@ bool Structure::meet(std::uint32_t mine, std::uint32_t other, const float point[
     for (int i = 0; i < m.cells; i++) {
         const std::uint32_t c = m.cell0 + static_cast<std::uint32_t>(i);
         if (s.cells[c].piece != kStanding) continue;
-        const float d = length(s.cells[c].p - at);
-        if (d < best) {
-            best = d;
+        const V3 diff = s.cells[c].p - at;
+        const float d2 = dot(diff, diff);
+        if (d2 < best) {
+            best = d2;
             nearest = c;
         }
     }
     if (nearest == kWorld) return false;
     if (s.cells[nearest].anchored) return true;  // the ground's own
+    std::lock_guard<std::mutex> lock(s.meetMutex);
     if (energy >= s.cost(nearest)) {
         Blow b;
         b.member = static_cast<std::uint32_t>(mi);
@@ -1513,6 +1583,30 @@ void Structure::after(float dt) {
             if (s.unsettled) s.release();
         } else {
             for (Cell& c : s.cells) c.pressed = 0;
+        }
+        if (s.maxPieces > 0 && s.pieceCount > s.maxPieces) {
+            struct Cand { int cells; float speed2; std::uint32_t pi; };
+            std::vector<Cand> cands;
+            for (std::uint32_t pi = 0; pi < s.pieces.size(); pi++) {
+                const Piece& p = s.pieces[pi];
+                if (!p.alive || p.cells.size() > 8) continue;
+                float s2 = -1.0f;
+                if (s.world.isAwake(p.body)) {
+                    float lin[3], ang[3];
+                    s.world.velocity(p.body, lin, ang);
+                    s2 = dot(from(lin), from(lin));
+                }
+                cands.push_back({static_cast<int>(p.cells.size()), s2, pi});
+            }
+            std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) {
+                return a.cells != b.cells ? a.cells < b.cells : a.speed2 < b.speed2;
+            });
+            int dropN = s.pieceCount - s.maxPieces;
+            for (const Cand& cnd : cands) {
+                if (dropN-- <= 0) break;
+                for (std::uint32_t c : s.pieces[cnd.pi].cells) s.gone.push_back(c);
+                s.retire(cnd.pi, true);
+            }
         }
         s.pressedOver = 0;
     }
