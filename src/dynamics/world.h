@@ -40,6 +40,9 @@ struct BodyDesc {
     bool planar = false;       // held to the plane z = its z, turning about z only
     std::uint32_t layers = 1;            // the layers it is on
     std::uint32_t mask = 0xffffffffu;    // the layers it touches
+    // The structure whose body this is (set by the structure): it is shown what meets the
+    // body before the step solves it.
+    std::uint32_t structure = kWorld;
 };
 
 // Two bodies that began to touch in a step.
@@ -80,6 +83,34 @@ struct JointDesc {
     bool collide = false;             // whether the two bodies touch each other
 };
 
+// One box of a body made of several: its centre, turn and half extents in the body's space,
+// and its share of the mass.
+struct Part {
+    float c[3] = {0, 0, 0};
+    float q[4] = {0, 0, 0, 1};
+    float h[3] = {0.5f, 0.5f, 0.5f};
+    float mass = 0;
+};
+
+// A body that is moving: where it is, how fast, how heavy.
+struct Awake {
+    std::uint32_t body = 0;
+    float min[3] = {0, 0, 0};
+    float max[3] = {0, 0, 0};
+    float velocity[3] = {0, 0, 0};
+    float mass = 0;
+};
+
+// What another body pressed on a body with over the last step.
+struct Press {
+    std::uint32_t other = 0;
+    float point[3] = {0, 0, 0};
+    float impulse[3] = {0, 0, 0};  // N s, on the body
+};
+
+class Structure;
+struct StructureDesc;
+
 struct Moved {
     std::uint32_t body = 0;
     Pose pose;
@@ -116,6 +147,9 @@ public:
     // Triangles (body space), fixed in place whatever the mass; kWorld when they make none.
     std::uint32_t addMesh(const BodyDesc& d, const float* xyz, int vertices, const std::int32_t* indices,
                           int triangles);
+    // One body of several boxes, each with its own mass (d.mass is not read); fixed in
+    // place when no part has any.
+    std::uint32_t addBoxes(const BodyDesc& d, const Part* parts, int count);
     void removeBody(std::uint32_t body);  // and the joints on it
     bool hasBody(std::uint32_t body) const;
 
@@ -136,6 +170,25 @@ public:
     // A kinematic body, given the velocity that has it at the pose a step of dt from now.
     void moveTo(std::uint32_t body, const Pose& pose, float dt);
     void wake(std::uint32_t body);
+    // A body's centre of mass, and the velocity of the point of it at `at` (world).
+    void center(std::uint32_t body, float out[3]) const;
+    void velocityAt(std::uint32_t body, const float at[3], float out[3]) const;
+    // How many contacts a body has, and the box about it.
+    int touching(std::uint32_t body) const;
+    void bounds(std::uint32_t body, float min[3], float max[3]) const;
+    // What the bodies touching a body pressed on it with in the last step, a row a contact
+    // point.
+    void pressing(std::uint32_t body, std::vector<Press>& out) const;
+    void gravity(float out[3]) const;
+    // The bodies that are not at rest: those the last step moved and left awake, and those
+    // made since.
+    void awake(std::vector<Awake>& out) const;
+
+    // A structure standing in this world (dynamics/structure.h), stepped with it. Named by
+    // a small index, reused once removed.
+    std::uint32_t addStructure(const StructureDesc& d);
+    void removeStructure(std::uint32_t structure);
+    Structure* structure(std::uint32_t structure) const;
 
     // The bodies the last step moved, the joints it broke, the pairs that began to touch in
     // it and the pairs that hit.

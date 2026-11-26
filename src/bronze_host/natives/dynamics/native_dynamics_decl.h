@@ -151,6 +151,59 @@ void bro_dynamics_broken(int32_t world, bronze_native_buffer* out);
 //   registered at __bro_native.dynamics.counts; bodies, joints, awake, contacts, stepMs
 void bro_dynamics_counts(int32_t world, bronze_native_buffer* out);
 
+// World.addStructure
+//   registered at __bro_native.dynamics.addStructure; the structure's number, -1 for none
+//   frames: position 3, rotation 4 each. members, 13 floats each: frame, centre 3, half 3,
+//   mass, sigma, crush, give, 1 when anchored, span. ties: two members each. options:
+//   chunk, safety, friction, restitution
+int32_t bro_dynamics_addStructure(int32_t world, const float* frames, uint32_t framesLen, const float* members,
+                                  uint32_t membersLen, const int32_t* ties, uint32_t tiesLen, const float* options,
+                                  uint32_t optionsLen, int32_t layers, int32_t mask);
+
+// Structure.destroy
+//   registered at __bro_native.dynamics.removeStructure
+void bro_dynamics_removeStructure(int32_t world, int32_t structure);
+
+// Structure.cells
+//   registered at __bro_native.dynamics.structureCells
+//   the cells as built, 12 floats each: member, position 3, rotation 4, half 3, mass
+void bro_dynamics_structureCells(int32_t world, int32_t structure, bronze_native_buffer* out);
+
+// Structure.state
+//   registered at __bro_native.dynamics.structureState; per cell -1 standing, -2 gone, else its body
+void bro_dynamics_structureState(int32_t world, int32_t structure, bronze_native_buffer* out);
+
+// Structure.moved
+//   registered at __bro_native.dynamics.structureMoved
+//   the loose cells the last step moved or made, 8 floats each: cell, position 3, rotation 4
+void bro_dynamics_structureMoved(int32_t world, int32_t structure, bronze_native_buffer* out);
+
+// Structure.raycast
+//   registered at __bro_native.dynamics.structureRaycast
+//   ray: origin 3, direction 3. Empty for a miss, else cell, point 3, normal 3, distance
+void bro_dynamics_structureRaycast(int32_t world, int32_t structure, const float* ray, uint32_t rayLen, double maxDistance,
+                                   bronze_native_buffer* out);
+
+// Structure.crushed
+//   registered at __bro_native.dynamics.structureCrushed; the cells the last step crushed
+void bro_dynamics_structureCrushed(int32_t world, int32_t structure, bronze_native_buffer* out);
+
+// Structure.pieces
+//   registered at __bro_native.dynamics.structurePieces; per loose body: body, cells, mass
+void bro_dynamics_structurePieces(int32_t world, int32_t structure, bronze_native_buffer* out);
+
+// Structure.pieceCells
+//   registered at __bro_native.dynamics.structurePieceCells
+void bro_dynamics_structurePieceCells(int32_t world, int32_t structure, int32_t body, bronze_native_buffer* out);
+
+// Structure.drop
+//   registered at __bro_native.dynamics.structureDrop
+void bro_dynamics_structureDrop(int32_t world, int32_t structure, int32_t body);
+
+// Structure.counts
+//   registered at __bro_native.dynamics.structureCounts; cells, standing, pieces, held, joints, solveMs
+void bro_dynamics_structureCounts(int32_t world, int32_t structure, bronze_native_buffer* out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

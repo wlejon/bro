@@ -1,5 +1,7 @@
 #include "dynamics/world.h"
 
+#include "dynamics/structure.h"
+
 #include "box3d/box3d.h"
 #include "box3d/math_functions.h"
 
@@ -42,6 +44,7 @@ struct BodyRec {
     std::vector<std::uint32_t> joints;
     b3MeshData* mesh = nullptr;  // a mesh body's triangles, which its shape reads in place
     std::uint32_t layers = 1;
+    std::uint32_t structure = kWorld;  // the structure it is a body of
     bool fixed = false;
     bool alive = false;
 };
@@ -66,12 +69,34 @@ struct World::Impl {
     std::vector<BodyRec> bodies;
     std::vector<JointRec> joints;
     std::vector<std::uint32_t> freeBodies, freeJoints;
+    std::vector<std::uint32_t> fresh;  // the moving bodies made since the last step
+    std::vector<std::unique_ptr<Structure>> structures;
     std::vector<Moved> moved;
     std::vector<std::uint32_t> broken;
     std::vector<Touch> touched;
     std::vector<Hit> hits;
+    std::vector<Awake> awake;
     int bodyCount = 0, jointCount = 0;
     double stepMs = 0;
+
+    // A contact of a structure's body, before it is solved: the structure says whether
+    // the other is stopped by it.
+    static bool preSolve(b3ShapeId shapeA, b3ShapeId shapeB, b3Pos point, b3Vec3 normal, void* context) {
+        Impl& self = *static_cast<Impl*>(context);
+        std::uint32_t a, b;
+        if (!self.bodyOf(shapeA, a) || !self.bodyOf(shapeB, b)) return true;
+        const float p[3] = {static_cast<float>(point.x), static_cast<float>(point.y), static_cast<float>(point.z)};
+        const float n[3] = {normal.x, normal.y, normal.z};
+        bool stops = true;
+        for (int side = 0; side < 2; side++) {
+            const std::uint32_t mine = side ? b : a, other = side ? a : b;
+            const std::uint32_t s = self.bodies[mine].structure;
+            if (s < self.structures.size() && self.structures[s]) {
+                stops = self.structures[s]->meet(mine, other, p, n) && stops;
+            }
+        }
+        return stops;
+    }
 
     // The body a shape is on, by its number; false for one that is not ours.
     bool bodyOf(b3ShapeId shape, std::uint32_t& out) const {
@@ -107,9 +132,11 @@ struct World::Impl {
         bodies[slot].alive = true;
         bodies[slot].fixed = fixed;
         bodies[slot].layers = d.layers;
+        bodies[slot].structure = d.structure;
         bodies[slot].mesh = nullptr;
         bodies[slot].joints.clear();
         bodyCount++;
+        if (!fixed) fresh.push_back(slot);
         if (d.planar && !fixed && !d.kinematic) {
             b3MotionLockJointDef jd = b3DefaultMotionLockJointDef();
             jd.base.bodyIdA = ground;
@@ -134,6 +161,7 @@ struct World::Impl {
         sd.filter.maskBits = d.mask;
         sd.enableContactEvents = true;
         sd.enableHitEvents = true;
+        sd.enablePreSolveEvents = d.structure != kWorld;
         return sd;
     }
 
@@ -161,9 +189,11 @@ World::World() : impl_(std::make_unique<Impl>()) {
     impl_->world = b3CreateWorld(&wd);
     b3BodyDef gd = b3DefaultBodyDef();
     impl_->ground = b3CreateBody(impl_->world, &gd);
+    b3World_SetPreSolveCallback(impl_->world, &Impl::preSolve, impl_.get());
 }
 
 World::~World() {
+    impl_->structures.clear();
     if (b3World_IsValid(impl_->world)) b3DestroyWorld(impl_->world);
     for (BodyRec& r : impl_->bodies) {
         if (r.mesh) b3DestroyMesh(r.mesh);
@@ -230,6 +260,126 @@ std::uint32_t World::addBox(const BodyDesc& d, const float half[3]) {
     const b3BoxHull hull = b3MakeBoxHull(half[0], half[1], half[2]);
     b3CreateHullShape(id, &sd, &hull.base);
     return slot;
+}
+
+std::uint32_t World::addBoxes(const BodyDesc& d, const Part* parts, int count) {
+    if (count < 1) return kWorld;
+    bool massless = true;
+    for (int i = 0; i < count; i++) massless = massless && !(parts[i].mass > 0.0f);
+    BodyDesc whole = d;
+    whole.mass = massless ? 0.0f : 1.0f;
+    b3BodyId id;
+    const std::uint32_t slot = impl_->add(whole, id);
+    b3ShapeDef sd = impl_->shape(d, 0.0f);
+    sd.updateBodyMass = false;
+    for (int i = 0; i < count; i++) {
+        const Part& p = parts[i];
+        const float volume = 8.0f * p.h[0] * p.h[1] * p.h[2];
+        sd.density = p.mass > 0.0f && volume > 0.0f ? p.mass / volume : 0.0f;
+        b3Transform at;
+        at.p = v3(p.c);
+        at.q = quat(p.q);
+        const b3BoxHull hull = b3MakeTransformedBoxHull(p.h[0], p.h[1], p.h[2], at);
+        b3CreateHullShape(id, &sd, &hull.base);
+    }
+    b3Body_ApplyMassFromShapes(id);
+    return slot;
+}
+
+void World::bounds(std::uint32_t body, float min[3], float max[3]) const {
+    min[0] = min[1] = min[2] = max[0] = max[1] = max[2] = 0.0f;
+    if (!hasBody(body)) return;
+    const b3AABB box = b3Body_ComputeAABB(impl_->bodies[body].id);
+    put(min, box.lowerBound);
+    put(max, box.upperBound);
+}
+
+void World::pressing(std::uint32_t body, std::vector<Press>& out) const {
+    out.clear();
+    if (!hasBody(body)) return;
+    const b3BodyId id = impl_->bodies[body].id;
+    const int capacity = b3Body_GetContactCapacity(id);
+    if (capacity < 1) return;
+    std::vector<b3ContactData> data(static_cast<std::size_t>(capacity));
+    const int count = b3Body_GetContactData(id, data.data(), capacity);
+    for (int i = 0; i < count; i++) {
+        const b3ContactData& c = data[static_cast<std::size_t>(i)];
+        std::uint32_t a, b;
+        if (!impl_->bodyOf(c.shapeIdA, a) || !impl_->bodyOf(c.shapeIdB, b)) continue;
+        const bool first = a == body;
+        const b3Pos origin = b3Body_GetWorldCenter(b3Shape_GetBody(c.shapeIdA));
+        for (int m = 0; m < c.manifoldCount; m++) {
+            const b3Manifold& mf = c.manifolds[m];
+            for (int k = 0; k < mf.pointCount; k++) {
+                const float imp = mf.points[k].totalNormalImpulse;
+                if (!(imp > 0.0f)) continue;
+                Press p;
+                p.other = first ? b : a;
+                putPos(p.point, b3OffsetPos(origin, mf.points[k].anchorA));
+                // The normal runs from the first to the second, which is how the second is pushed.
+                const float s = first ? -imp : imp;
+                p.impulse[0] = mf.normal.x * s;
+                p.impulse[1] = mf.normal.y * s;
+                p.impulse[2] = mf.normal.z * s;
+                out.push_back(p);
+            }
+        }
+    }
+}
+
+void World::gravity(float out[3]) const { put(out, b3World_GetGravity(impl_->world)); }
+
+void World::center(std::uint32_t body, float out[3]) const {
+    out[0] = out[1] = out[2] = 0.0f;
+    if (hasBody(body)) putPos(out, b3Body_GetWorldCenter(impl_->bodies[body].id));
+}
+
+void World::velocityAt(std::uint32_t body, const float at[3], float out[3]) const {
+    out[0] = out[1] = out[2] = 0.0f;
+    if (hasBody(body)) put(out, b3Body_GetWorldPointVelocity(impl_->bodies[body].id, b3Pos{at[0], at[1], at[2]}));
+}
+
+int World::touching(std::uint32_t body) const {
+    return hasBody(body) ? b3Body_GetContactCapacity(impl_->bodies[body].id) : 0;
+}
+
+void World::awake(std::vector<Awake>& out) const {
+    out.clear();
+    const auto take = [&](std::uint32_t body) {
+        if (!hasBody(body) || impl_->bodies[body].fixed) return;
+        const b3BodyId id = impl_->bodies[body].id;
+        if (b3Body_GetType(id) == b3_staticBody || !b3Body_IsAwake(id)) return;
+        Awake a;
+        a.body = body;
+        const b3AABB box = b3Body_ComputeAABB(id);
+        put(a.min, box.lowerBound);
+        put(a.max, box.upperBound);
+        put(a.velocity, b3Body_GetLinearVelocity(id));
+        a.mass = b3Body_GetMass(id);
+        out.push_back(a);
+    };
+    for (const Moved& m : impl_->moved) {
+        if (!m.asleep) take(m.body);
+    }
+    for (std::uint32_t body : impl_->fresh) take(body);
+}
+
+std::uint32_t World::addStructure(const StructureDesc& d) {
+    std::uint32_t slot = 0;
+    while (slot < impl_->structures.size() && impl_->structures[slot]) slot++;
+    if (slot == impl_->structures.size()) impl_->structures.emplace_back();
+    impl_->structures[slot] = std::make_unique<Structure>(*this, slot, d);
+    return slot;
+}
+
+void World::removeStructure(std::uint32_t structure) {
+    if (structure >= impl_->structures.size() || !impl_->structures[structure]) return;
+    impl_->structures[structure]->clear();
+    impl_->structures[structure].reset();
+}
+
+Structure* World::structure(std::uint32_t structure) const {
+    return structure < impl_->structures.size() ? impl_->structures[structure].get() : nullptr;
 }
 
 std::uint32_t World::addSphere(const BodyDesc& d, float radius) {
@@ -345,6 +495,13 @@ void World::jointLoad(std::uint32_t joint, float force[3], float torque[3]) cons
 
 void World::step(float dt, int substeps) {
     const auto t0 = std::chrono::steady_clock::now();
+    if (!impl_->structures.empty()) {
+        awake(impl_->awake);
+        for (auto& s : impl_->structures) {
+            if (s) s->before(dt, impl_->awake);
+        }
+    }
+    impl_->fresh.clear();
     b3World_Step(impl_->world, dt, substeps < 1 ? 1 : substeps);
     impl_->moved.clear();
     const b3BodyEvents be = b3World_GetBodyEvents(impl_->world);
@@ -383,6 +540,9 @@ void World::step(float dt, int substeps) {
         put(h.normal, e.normal);
         h.speed = e.approachSpeed;
         impl_->hits.push_back(h);
+    }
+    for (auto& s : impl_->structures) {
+        if (s) s->after(dt);
     }
     impl_->stepMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }

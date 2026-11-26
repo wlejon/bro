@@ -192,6 +192,90 @@
             const c = __bro_native.dynamics.counts(this._id);
             return { bodies: c[0], joints: c[1], awake: c[2], contacts: c[3], stepMs: c[4] };
         }
+
+        addStructure(o) {
+            if (o === null || typeof o !== 'object' || !o.members) throw new TypeError('bro.dynamics: addStructure takes { members, ties }');
+            const fr = o.frames && o.frames.length ? o.frames : [[0, 0, 0, 0, 0, 0, 1]];
+            const frames = new Float32Array(fr.length * 7);
+            for (let i = 0; i < fr.length; i++) {
+                const f = fr[i];
+                const p = f.position || f, r = f.rotation || (f.position ? null : [f[3], f[4], f[5], f[6]]);
+                put3(frames, i * 7, p, ZERO);
+                frames[i * 7 + 3] = r ? +r[0] : 0; frames[i * 7 + 4] = r ? +r[1] : 0;
+                frames[i * 7 + 5] = r ? +r[2] : 0; frames[i * 7 + 6] = r ? +r[3] : 1;
+            }
+            const n = o.members.length;
+            const members = new Float32Array(n * 13);
+            for (let i = 0; i < n; i++) {
+                const m = o.members[i], at = i * 13, h = m.half;
+                if (!h || !(h[0] > 0 && h[1] > 0 && h[2] > 0)) throw new RangeError(`bro.dynamics: addStructure: member ${i}: half must be three lengths over 0`);
+                const frame = m.frame === undefined ? 0 : m.frame | 0;
+                if (frame < 0 || frame >= fr.length) throw new RangeError(`bro.dynamics: addStructure: member ${i}: no frame ${frame}`);
+                members[at] = frame;
+                put3(members, at + 1, m.center, ZERO);
+                members[at + 4] = +h[0]; members[at + 5] = +h[1]; members[at + 6] = +h[2];
+                // Concrete, unless it says.
+                members[at + 7] = m.mass === undefined ? 2400 * 8 * h[0] * h[1] * h[2] : +m.mass;
+                members[at + 8] = m.sigma === undefined ? 3e6 : +m.sigma;
+                members[at + 9] = m.crush === undefined ? 3e7 : +m.crush;
+                members[at + 10] = m.give === undefined ? 0.02 : +m.give;
+                members[at + 11] = m.anchored ? 1 : 0;
+                members[at + 12] = m.span === undefined ? 5 : +m.span;
+                for (let k = 0; k < 13; k++) {
+                    if (!Number.isFinite(members[at + k])) throw new TypeError(`bro.dynamics: addStructure: member ${i}: every number must be finite`);
+                }
+                if (!(members[at + 7] > 0)) throw new RangeError(`bro.dynamics: addStructure: member ${i}: mass must be over 0`);
+            }
+            const tl = o.ties || [];
+            const ties = new Int32Array(tl.length * 2);
+            for (let i = 0; i < tl.length; i++) {
+                const a = tl[i][0] | 0, b = tl[i][1] | 0;
+                if (a < 0 || a >= n || b < 0 || b >= n) throw new RangeError(`bro.dynamics: addStructure: tie ${i} names a member that is not there`);
+                ties[i * 2] = a; ties[i * 2 + 1] = b;
+            }
+            const options = Float32Array.of(o.chunk === undefined ? 1.2 : +o.chunk, o.safety === undefined ? 2 : +o.safety,
+                o.friction === undefined ? 0.7 : +o.friction, o.restitution === undefined ? 0 : +o.restitution);
+            if (!(options[0] > 0)) throw new RangeError('bro.dynamics: addStructure: chunk must be over 0');
+            const id = __bro_native.dynamics.addStructure(this._id, frames, members, ties, options, layersOf(o), maskOf(o));
+            return new Structure(this._id, id);
+        }
+    }
+
+    class Structure {
+        constructor(world, id) {
+            this._world = world;
+            this._id = id;
+            this._cells = null;
+        }
+
+        destroy() {
+            if (this._id < 0) return;
+            __bro_native.dynamics.removeStructure(this._world, this._id);
+            this._id = -1;
+        }
+
+        get cells() {
+            if (!this._cells) this._cells = __bro_native.dynamics.structureCells(this._world, this._id);
+            return this._cells;
+        }
+        state() { return __bro_native.dynamics.structureState(this._world, this._id); }
+        moved() { return __bro_native.dynamics.structureMoved(this._world, this._id); }
+        crushed() { return __bro_native.dynamics.structureCrushed(this._world, this._id); }
+        raycast(origin, direction, maxDistance) {
+            const v = __bro_native.dynamics.structureRaycast(this._world, this._id,
+                Float32Array.of(+origin[0], +origin[1], +origin[2], +direction[0], +direction[1], +direction[2]),
+                maxDistance === undefined ? 1000 : +maxDistance);
+            if (!v.length) return null;
+            return { cell: v[0], point: [v[1], v[2], v[3]], normal: [v[4], v[5], v[6]], distance: v[7] };
+        }
+        pieces() { return __bro_native.dynamics.structurePieces(this._world, this._id); }
+        pieceCells(body) { return __bro_native.dynamics.structurePieceCells(this._world, this._id, body | 0); }
+        drop(body) { __bro_native.dynamics.structureDrop(this._world, this._id, body | 0); }
+
+        get counts() {
+            const c = __bro_native.dynamics.structureCounts(this._world, this._id);
+            return { cells: c[0], standing: c[1], pieces: c[2], held: c[3], joints: c[4], solveMs: c[5] };
+        }
     }
 
     fn(ns, 'World', World);

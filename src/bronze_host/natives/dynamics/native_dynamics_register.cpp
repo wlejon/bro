@@ -43,7 +43,18 @@ bool registerNatives_dynamics(std::string* error) {
            fn("__bro_native.dynamics.mass", BRO_NATIVE_FN(bro_dynamics_mass), "f64", {"i32", "i32"}, error) &&
            fn("__bro_native.dynamics.moved", BRO_NATIVE_FN(bro_dynamics_moved), "f32[]", {"i32"}, error) &&
            fn("__bro_native.dynamics.broken", BRO_NATIVE_FN(bro_dynamics_broken), "i32[]", {"i32"}, error) &&
-           fn("__bro_native.dynamics.counts", BRO_NATIVE_FN(bro_dynamics_counts), "f64[]", {"i32"}, error);
+           fn("__bro_native.dynamics.counts", BRO_NATIVE_FN(bro_dynamics_counts), "f64[]", {"i32"}, error) &&
+           fn("__bro_native.dynamics.addStructure", BRO_NATIVE_FN(bro_dynamics_addStructure), "i32", {"i32", "f32[]", "f32[]", "i32[]", "f32[]", "i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.removeStructure", BRO_NATIVE_FN(bro_dynamics_removeStructure), "void", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structureCells", BRO_NATIVE_FN(bro_dynamics_structureCells), "f32[]", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structureState", BRO_NATIVE_FN(bro_dynamics_structureState), "i32[]", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structureMoved", BRO_NATIVE_FN(bro_dynamics_structureMoved), "f32[]", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structureRaycast", BRO_NATIVE_FN(bro_dynamics_structureRaycast), "f32[]", {"i32", "i32", "f32[]", "f64"}, error) &&
+           fn("__bro_native.dynamics.structureCrushed", BRO_NATIVE_FN(bro_dynamics_structureCrushed), "i32[]", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structurePieces", BRO_NATIVE_FN(bro_dynamics_structurePieces), "f32[]", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structurePieceCells", BRO_NATIVE_FN(bro_dynamics_structurePieceCells), "i32[]", {"i32", "i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structureDrop", BRO_NATIVE_FN(bro_dynamics_structureDrop), "void", {"i32", "i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structureCounts", BRO_NATIVE_FN(bro_dynamics_structureCounts), "f64[]", {"i32", "i32"}, error);
 }
 
 bool registerDynamicsNatives(std::string* error) {

@@ -213,4 +213,109 @@ class World {
 
     /** @type {{bodies: number, joints: number, awake: number, contacts: number, stepMs: number}} */
     get counts() {}
+
+    /**
+     * Something built (a tower, a wall, a bridge) that stands in the world and
+     * that anything with enough behind it breaks (src/dynamics/structure.h).
+     *
+     * It is given as `members`, boxes, and `ties`, pairs of members that touch.
+     * Each member is cut into cells about `chunk` metres across, joined to
+     * their neighbours across the faces they share. While it stands it has no
+     * bodies and costs a step nothing: a member is given a fixed body only
+     * while something moving is near it.
+     *
+     * What strikes a standing cell with more energy than its joints take goes
+     * through: the cell comes loose as a body of its own, then the others in
+     * the striker's way while the blow has more to give, and the striker is
+     * slowed by what that cost and by the weight it now pushes. With less, it
+     * is stopped, and the cell keeps the damage. After damage the weight of
+     * what stands (and of whatever rests on it) is sent to the ground again: a
+     * cell asked to bear more than it holds is crushed (gone), a joint asked
+     * to hang more lets go, cells further sideways from what holds them up
+     * than their member's `span` let go, and cells left with no way to the
+     * ground fall, each group as one body. Loose bodies break the same way
+     * where they land or are struck.
+     *
+     * A member: { center, half, frame = 0, anchored = false,
+     *   mass     kg (default: concrete, 2400 kg/m3)
+     *   sigma    Pa its material holds pulled or sheared (3e6)
+     *   crush    Pa it bears pressed (3e7)
+     *   give     m a joint of it stretches before it lets go (0.02): the
+     *            energy to part a joint is sigma x shared area x give
+     *   span     m it reaches sideways from what holds it up (5) }
+     * `center` and `half` are in the member's frame; `frames` are poses
+     * ({position, rotation} or [x, y, z, qx, qy, qz, qw]), one at the origin
+     * when left out. An `anchored` member is held by the ground and never
+     * breaks.
+     *
+     * @param {{members: Object[], ties?: number[][], frames?: Object[], chunk?: number,
+     *          safety?: number, friction?: number, restitution?: number,
+     *          layers?: number, mask?: number}} o
+     *   `safety` (2): a joint holds this many times what it carried as built,
+     *   if that is more than its material does.
+     * @returns {Structure}
+     *
+     * @example
+     * const wall = w.addStructure({
+     *     members: [
+     *         { center: [0, -0.4, 0], half: [7, 0.4, 0.6], anchored: true },   // footing
+     *         { center: [0, 4.8, 0], half: [6, 4.8, 0.15] },                   // 12 x 9.6 m of wall
+     *     ],
+     *     ties: [[0, 1]],
+     * });
+     * w.addSphere({ radius: 0.5, position: [2, 5, 10], mass: 5000, velocity: [0, 0, -40] });
+     * for (let i = 0; i < 60; i++) { w.step(1 / 60); draw(wall.moved()); }
+     */
+    addStructure(o) {}
+}
+
+class Structure {
+    /** Takes it, and every body of it, out of the world. */
+    destroy() {}
+
+    /**
+     * The cells as built, twelve numbers each: member, position (3), rotation
+     * (4), half extents (3), mass. A cell is named by its index here.
+     * @type {Float32Array}
+     */
+    get cells() {}
+
+    /** Per cell: -1 standing, -2 gone (crushed or dropped), else the body it is part of. @returns {Int32Array} */
+    state() {}
+
+    /**
+     * The loose cells the last step moved or made, eight numbers each: cell,
+     * position (3), rotation (4). A renderer that keeps one box per cell and
+     * applies these rows after every step is always current
+     * (broworkshop lib/kit/dynamics3d.js structureView).
+     * @returns {Float32Array}
+     */
+    moved() {}
+
+    /** The cells the last step crushed. @returns {Int32Array} */
+    crushed() {}
+
+    /**
+     * The nearest standing cell along a ray, or null. A standing structure has
+     * no bodies, so World.raycast passes through it; loose cells are bodies,
+     * which World.raycast finds.
+     * @returns {{cell: number, point: number[], normal: number[], distance: number}|null}
+     */
+    raycast(origin, direction, maxDistance) {}
+
+    /** The loose bodies, three numbers each: body, cells, mass. @returns {Float32Array} */
+    pieces() {}
+
+    /** The cells of a loose body. @returns {Int32Array} */
+    pieceCells(body) {}
+
+    /** Takes a loose body out of the world; its cells are gone (rubble handed to something cheaper to draw). */
+    drop(body) {}
+
+    /**
+     * `held` is the members with a fixed body now, `joints` the joints that
+     * still hold, `solveMs` the last sending of the weight.
+     * @type {{cells: number, standing: number, pieces: number, held: number, joints: number, solveMs: number}}
+     */
+    get counts() {}
 }

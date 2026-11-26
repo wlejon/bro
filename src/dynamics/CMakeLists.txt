@@ -1,5 +1,6 @@
 add_library(bro_dynamics STATIC
     world.cpp
+    structure.cpp
 )
 
 target_include_directories(bro_dynamics PUBLIC ${bro_SOURCE_DIR}/src)

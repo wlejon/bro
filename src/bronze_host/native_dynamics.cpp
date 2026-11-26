@@ -5,6 +5,7 @@
 // A world belongs to the thread that made it: the table is per thread, and a Worker's
 // worlds are its own.
 
+#include "dynamics/structure.h"
 #include "dynamics/world.h"
 #include "bronze_host/host_natives.h"
 #include "natives/dynamics/native_dynamics_decl.h"
@@ -31,6 +32,13 @@ World* worldOf(int32_t id) {
 }
 
 std::uint32_t idOf(int32_t v) { return v < 0 ? bro::dynamics::kWorld : static_cast<std::uint32_t>(v); }
+
+using bro::dynamics::Structure;
+
+Structure* structureOf(int32_t world, int32_t structure) {
+    World* w = worldOf(world);
+    return w ? w->structure(idOf(structure)) : nullptr;
+}
 
 template <typename T>
 void give(std::vector<T>&& v, bronze_native_buffer* out) {
@@ -319,6 +327,149 @@ void bro_dynamics_counts(int32_t world, bronze_native_buffer* out) {
         v[2] = c.awake;
         v[3] = c.contacts;
         v[4] = c.stepMs;
+    }
+    give(std::move(v), out);
+}
+
+int32_t bro_dynamics_addStructure(int32_t world, const float* frames, uint32_t framesLen, const float* members,
+                                  uint32_t membersLen, const int32_t* ties, uint32_t tiesLen, const float* options,
+                                  uint32_t optionsLen, int32_t layers, int32_t mask) {
+    World* w = worldOf(world);
+    if (!w || optionsLen < 4) return -1;
+    bro::dynamics::StructureDesc d;
+    d.frames.resize(framesLen / 7);
+    for (std::size_t i = 0; i < d.frames.size(); i++) {
+        for (int k = 0; k < 3; k++) d.frames[i].p[k] = frames[i * 7 + k];
+        for (int k = 0; k < 4; k++) d.frames[i].q[k] = frames[i * 7 + 3 + k];
+    }
+    d.members.resize(membersLen / 13);
+    for (std::size_t i = 0; i < d.members.size(); i++) {
+        const float* r = members + i * 13;
+        bro::dynamics::MemberDesc& m = d.members[i];
+        m.frame = static_cast<std::uint32_t>(r[0]);
+        for (int k = 0; k < 3; k++) m.c[k] = r[1 + k];
+        for (int k = 0; k < 3; k++) m.h[k] = r[4 + k];
+        m.mass = r[7];
+        m.sigma = r[8];
+        m.crush = r[9];
+        m.give = r[10];
+        m.anchored = r[11] != 0.0f;
+        m.span = r[12];
+    }
+    d.ties.resize(tiesLen / 2);
+    for (std::size_t i = 0; i < d.ties.size(); i++) {
+        d.ties[i].a = idOf(ties[i * 2]);
+        d.ties[i].b = idOf(ties[i * 2 + 1]);
+    }
+    d.chunk = options[0];
+    d.safety = options[1];
+    d.friction = options[2];
+    d.restitution = options[3];
+    d.layers = static_cast<std::uint32_t>(layers);
+    d.mask = static_cast<std::uint32_t>(mask);
+    return static_cast<int32_t>(w->addStructure(d));
+}
+
+void bro_dynamics_removeStructure(int32_t world, int32_t structure) {
+    if (World* w = worldOf(world)) w->removeStructure(idOf(structure));
+}
+
+void bro_dynamics_structureCells(int32_t world, int32_t structure, bronze_native_buffer* out) {
+    std::vector<float> v;
+    if (Structure* s = structureOf(world, structure)) {
+        const auto& cells = s->cells();
+        v.resize(cells.size() * 12);
+        for (std::size_t i = 0; i < cells.size(); i++) {
+            float* r = v.data() + i * 12;
+            r[0] = static_cast<float>(cells[i].member);
+            for (int k = 0; k < 3; k++) r[1 + k] = cells[i].pose.p[k];
+            for (int k = 0; k < 4; k++) r[4 + k] = cells[i].pose.q[k];
+            for (int k = 0; k < 3; k++) r[8 + k] = cells[i].h[k];
+            r[11] = cells[i].mass;
+        }
+    }
+    give(std::move(v), out);
+}
+
+void bro_dynamics_structureState(int32_t world, int32_t structure, bronze_native_buffer* out) {
+    std::vector<int32_t> v;
+    if (Structure* s = structureOf(world, structure)) s->state(v);
+    give(std::move(v), out);
+}
+
+void bro_dynamics_structureMoved(int32_t world, int32_t structure, bronze_native_buffer* out) {
+    std::vector<float> v;
+    if (Structure* s = structureOf(world, structure)) {
+        const auto& m = s->moved();
+        v.resize(m.size() * 8);
+        for (std::size_t i = 0; i < m.size(); i++) {
+            float* r = v.data() + i * 8;
+            r[0] = static_cast<float>(m[i].cell);
+            for (int k = 0; k < 3; k++) r[1 + k] = m[i].pose.p[k];
+            for (int k = 0; k < 4; k++) r[4 + k] = m[i].pose.q[k];
+        }
+    }
+    give(std::move(v), out);
+}
+
+void bro_dynamics_structureRaycast(int32_t world, int32_t structure, const float* ray, uint32_t rayLen, double maxDistance,
+                                   bronze_native_buffer* out) {
+    std::vector<float> v;
+    Structure* s = structureOf(world, structure);
+    if (s && rayLen >= 6) {
+        const bro::dynamics::RayHit h = s->raycast(ray, ray + 3, static_cast<float>(maxDistance));
+        if (h.hit) {
+            v = {static_cast<float>(h.body), h.point[0], h.point[1], h.point[2], h.normal[0], h.normal[1], h.normal[2], h.distance};
+        }
+    }
+    give(std::move(v), out);
+}
+
+void bro_dynamics_structureCrushed(int32_t world, int32_t structure, bronze_native_buffer* out) {
+    std::vector<int32_t> v;
+    if (Structure* s = structureOf(world, structure)) {
+        for (std::uint32_t c : s->crushed()) v.push_back(static_cast<int32_t>(c));
+    }
+    give(std::move(v), out);
+}
+
+void bro_dynamics_structurePieces(int32_t world, int32_t structure, bronze_native_buffer* out) {
+    std::vector<float> v;
+    if (Structure* s = structureOf(world, structure)) {
+        std::vector<bro::dynamics::PieceInfo> pieces;
+        s->pieces(pieces);
+        v.reserve(pieces.size() * 3);
+        for (const auto& p : pieces) {
+            v.push_back(static_cast<float>(p.body));
+            v.push_back(static_cast<float>(p.cells));
+            v.push_back(p.mass);
+        }
+    }
+    give(std::move(v), out);
+}
+
+void bro_dynamics_structurePieceCells(int32_t world, int32_t structure, int32_t body, bronze_native_buffer* out) {
+    std::vector<int32_t> v;
+    if (Structure* s = structureOf(world, structure)) {
+        for (std::uint32_t c : s->pieceCells(idOf(body))) v.push_back(static_cast<int32_t>(c));
+    }
+    give(std::move(v), out);
+}
+
+void bro_dynamics_structureDrop(int32_t world, int32_t structure, int32_t body) {
+    if (Structure* s = structureOf(world, structure)) s->drop(idOf(body));
+}
+
+void bro_dynamics_structureCounts(int32_t world, int32_t structure, bronze_native_buffer* out) {
+    std::vector<double> v(6, 0.0);
+    if (Structure* s = structureOf(world, structure)) {
+        const bro::dynamics::StructureCounts c = s->counts();
+        v[0] = c.cells;
+        v[1] = c.standing;
+        v[2] = c.pieces;
+        v[3] = c.held;
+        v[4] = c.joints;
+        v[5] = c.solveMs;
     }
     give(std::move(v), out);
 }
