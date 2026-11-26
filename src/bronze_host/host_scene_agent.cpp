@@ -7,6 +7,8 @@
 #include "scene/scene_node.h"
 #include "scene/agent_binding.h"
 #include "physics/physics_world.h"
+#include "dynamics/world.h"
+#include "bronze_host/host_natives.h"
 
 #include <brogameagent/api.h>
 #include <brogameagent/brogameagent.h>
@@ -475,6 +477,22 @@ void installSceneNodeAgent(ObjectBuilder& b) {
                     binding->addKeepAlive(std::make_shared<ev::Persistent>(tv));
                     binding->setGroundFollow([tc, rayStart, rayLength](float x, float z, float& outY) {
                         return terrainSampleHeight(tc, x, z, rayStart, rayLength, outY);
+                    });
+                } else if (mode == "raycast" && dynamicsWorldId(ev::getProperty(gf.get(), "world")) >= 0) {
+                    // Down a ray through a bro.dynamics world, onto the layers of `mask`.
+                    const int32_t worldId = dynamicsWorldId(ev::getProperty(gf.get(), "world"));
+                    uint32_t mask = 0xffffffffu;
+                    Value mv = ev::getProperty(gf.get(), "mask");
+                    if (ev::isNumber(mv)) mask = static_cast<uint32_t>(static_cast<int64_t>(ev::toDouble(mv)));
+                    binding->setGroundFollow([worldId, mask, rayStart, rayLength](float x, float z, float& outY) {
+                        dynamics::World* world = dynamicsWorld(worldId);
+                        if (!world) return false;
+                        const float origin[3] = {x, rayStart, z};
+                        const float down[3] = {0, -1, 0};
+                        const dynamics::RayHit hit = world->raycast(origin, down, rayLength, mask);
+                        if (!hit.hit) return false;
+                        outY = hit.point[1];
+                        return true;
                     });
                 } else if (mode == "raycast") {
 #if BRO_WITH_PHYSICS

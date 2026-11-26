@@ -38,24 +38,66 @@ class World {
     /** @param {number[]} g */
     setGravity(g) {}
 
+    /** The fastest a body moves (m/s, 400 unless set). @type {number} write only */
+    maxSpeed;
+
+    /** The closing speed past which two bodies meeting is a hit (m/s, 1 unless set). @type {number} write only */
+    hitSpeed;
+
     /**
      * A box. `mass` 0 fixes it in place; otherwise it is the body's mass in kg
-     * (default 1), spread evenly through the box.
+     * (default 1), spread evenly through the shape. Every add* takes these:
+     *
+     *   position, rotation     where it is
+     *   mass, friction, restitution
+     *   velocity, angular      what it starts with
+     *   linearDamping, angularDamping, gravityScale
+     *   kinematic   moved by its velocity or by moveTo, pushed by nothing
+     *   bullet      swept against what moves, for the small and fast
+     *   planar      held to the plane z = its z, turning about z only
+     *   layers      bit set of the layers it is on (default 1)
+     *   mask        bit set of the layers it touches (default all): two bodies
+     *               touch when each one's mask holds a layer of the other
      *
      * @param {{half: number[], position?: number[], rotation?: number[], mass?: number,
-     *          friction?: number, restitution?: number, velocity?: number[], angular?: number[]}} o
+     *          friction?: number, restitution?: number, velocity?: number[], angular?: number[],
+     *          linearDamping?: number, angularDamping?: number, gravityScale?: number,
+     *          kinematic?: boolean, bullet?: boolean, planar?: boolean,
+     *          layers?: number, mask?: number}} o
      * @returns {number} the body
      */
     addBox(o) {}
 
-    /**
-     * A sphere; as addBox, with `radius` for `half`.
-     * @returns {number} the body
-     */
+    /** A sphere of `radius`. @returns {number} the body */
     addSphere(o) {}
+
+    /** A capsule along the body's y: `radius`, and `halfHeight` of its straight part. */
+    addCapsule(o) {}
+
+    /** A cylinder along the body's y: `radius`, `halfHeight`, `segments` (16) round it. */
+    addCylinder(o) {}
+
+    /**
+     * The convex hull of `points` ([x, y, z, x, y, z, ...], body space, four or
+     * more). Throws when they make none (all in one plane).
+     */
+    addHull(o) {}
+
+    /**
+     * Triangles, fixed in place: `positions` (x y z per vertex, body space) and
+     * `indices` (three per triangle, counter-clockwise seen from outside). Only
+     * bodies that move touch it.
+     *
+     * @example
+     * const floor = w.addMesh({ positions: [-9, 0, -9, 9, 0, -9, 9, 0, 9, -9, 0, 9], indices: [0, 2, 1, 0, 3, 2] });
+     */
+    addMesh(o) {}
 
     /** Removes a body and the joints on it. */
     removeBody(body) {}
+
+    /** @returns {boolean} */
+    hasBody(body) {}
 
     /**
      * A joint between two bodies, or between one body and the world itself
@@ -125,8 +167,50 @@ class World {
      */
     moved() {}
 
+    /**
+     * Sends a kinematic body toward a pose ([x, y, z, qx, qy, qz, qw]): it is
+     * given the velocity that has it there after a step of `dt`, so what rests
+     * on it or stands in its way is carried and pushed.
+     * @param {number} [dt=1/60]
+     */
+    moveTo(body, pose, dt) {}
+
+    /** Wakes a body at rest. */
+    wake(body) {}
+
     /** The joints the last step broke. @returns {Int32Array} */
     broken() {}
+
+    /**
+     * The pairs of bodies that began to touch in the last step, two numbers a
+     * pair.
+     * @returns {Int32Array}
+     *
+     * @example
+     * w.step(dt);
+     * const t = w.touched();
+     * for (let i = 0; i < t.length; i += 2) onTouch(t[i], t[i + 1]);
+     */
+    touched() {}
+
+    /**
+     * The pairs that met faster than hitSpeed in the last step, nine numbers
+     * each: the two bodies, the point (3), the normal from the first to the
+     * second (3), and the closing speed.
+     * @returns {Float32Array}
+     */
+    hits() {}
+
+    /**
+     * The nearest body along a ray, or null. `direction` need not be unit;
+     * `mask` is the layers to hit (default all).
+     * @param {number[]} origin
+     * @param {number[]} direction
+     * @param {number} [maxDistance=1000]
+     * @param {number} [mask]
+     * @returns {{body: number, point: number[], normal: number[], distance: number}|null}
+     */
+    raycast(origin, direction, maxDistance, mask) {}
 
     /** @type {{bodies: number, joints: number, awake: number, contacts: number, stepMs: number}} */
     get counts() {}

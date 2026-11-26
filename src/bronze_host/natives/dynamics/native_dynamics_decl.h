@@ -35,11 +35,56 @@ void bro_dynamics_destroy(int32_t world);
 //   registered at __bro_native.dynamics.setGravity
 void bro_dynamics_setGravity(int32_t world, double x, double y, double z);
 
-// World.addBox / World.addSphere
+// World.addBox / World.addSphere / World.addCapsule
 //   registered at __bro_native.dynamics.addBody
+//   shape: 0 box, 1 sphere, 2 capsule
 //   desc: position 3, rotation 4 (x y z w), size 3 (a box's half extents; a sphere's
-//   radius first), mass, friction, restitution, velocity 3, angular 3: 19 floats
-int32_t bro_dynamics_addBody(int32_t world, bool sphere, const float* desc, uint32_t descLen);
+//   radius first; a capsule's radius and half height), mass, friction, restitution,
+//   velocity 3, angular 3, linear damping, angular damping, gravity scale: 22 floats
+//   flags: 1 kinematic, 2 bullet, 4 planar. layers, mask: bit sets
+int32_t bro_dynamics_addBody(int32_t world, int32_t shape, const float* desc, uint32_t descLen, int32_t flags,
+                             int32_t layers, int32_t mask);
+
+// World.addHull / World.addCylinder
+//   registered at __bro_native.dynamics.addHull
+//   xyz: the points, body space; -1 when they make no hull
+int32_t bro_dynamics_addHull(int32_t world, const float* desc, uint32_t descLen, int32_t flags, int32_t layers,
+                             int32_t mask, const float* xyz, uint32_t xyzLen);
+
+// World.addMesh
+//   registered at __bro_native.dynamics.addMesh
+//   xyz, indices: triangles, body space; -1 when they make no mesh
+int32_t bro_dynamics_addMesh(int32_t world, const float* desc, uint32_t descLen, int32_t layers, int32_t mask,
+                             const float* xyz, uint32_t xyzLen, const int32_t* indices, uint32_t indexLen);
+
+// World.maxSpeed / World.hitSpeed writes
+//   registered at __bro_native.dynamics.setMaxSpeed / setHitSpeed
+void bro_dynamics_setMaxSpeed(int32_t world, double speed);
+void bro_dynamics_setHitSpeed(int32_t world, double speed);
+
+// World.moveTo
+//   registered at __bro_native.dynamics.moveTo; pose: position 3, rotation 4
+void bro_dynamics_moveTo(int32_t world, int32_t body, const float* pose, uint32_t poseLen, double dt);
+
+// World.wake / World.hasBody
+//   registered at __bro_native.dynamics.wake / hasBody
+void bro_dynamics_wake(int32_t world, int32_t body);
+bool bro_dynamics_hasBody(int32_t world, int32_t body);
+
+// World.touched
+//   registered at __bro_native.dynamics.touched; two bodies per pair
+void bro_dynamics_touched(int32_t world, bronze_native_buffer* out);
+
+// World.hits
+//   registered at __bro_native.dynamics.hits; per hit: a, b, point 3, normal 3, speed
+void bro_dynamics_hits(int32_t world, bronze_native_buffer* out);
+
+// World.raycast
+//   registered at __bro_native.dynamics.raycast
+//   ray: origin 3, direction 3. Empty when nothing is hit, else body, point 3, normal 3,
+//   distance
+void bro_dynamics_raycast(int32_t world, const float* ray, uint32_t rayLen, double maxDistance, int32_t mask,
+                          bronze_native_buffer* out);
 
 // World.removeBody
 //   registered at __bro_native.dynamics.removeBody

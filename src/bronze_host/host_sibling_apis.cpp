@@ -56,6 +56,7 @@
 #include "bronze_host/native_scene_internal.h"
 #endif
 #if BRO_WITH_PHYSICS
+#include "dynamics/world.h"
 #include "physics/physics_world.h"
 #endif
 #if BRO_WITH_CONF
@@ -172,8 +173,27 @@ uint32_t physicsLayerMask(bronze::Value rootVal, physics::PhysicsWorld* world) {
 }
 #endif
 
+#if BRO_WITH_PHYSICS
+// A bake's `fromDynamics` (a bro.dynamics World) and `dynamicsMask` (the layers of its
+// fixed bodies to read, all when absent).
+dynamics::World* bakeWorld(bronze::Value rootVal, uint32_t& mask) {
+    bronze::embed::Persistent root(rootVal);
+    dynamics::World* world = dynamicsWorld(dynamicsWorldId(bronze::embed::getProperty(root.get(), "fromDynamics")));
+    mask = 0xffffffffu;
+    bronze::Value mv = bronze::embed::getProperty(root.get(), "dynamicsMask");
+    if (bronze::embed::isNumber(mv)) mask = static_cast<uint32_t>(static_cast<int64_t>(bronze::embed::toDouble(mv)));
+    return world;
+}
+#endif
+
 bool collectNavGeometry(bronze::Value rootVal, std::vector<float>& xyz,
                         std::vector<uint32_t>& indices, std::string& err) {
+#if BRO_WITH_PHYSICS
+    {
+        uint32_t mask = 0;
+        if (dynamics::World* world = bakeWorld(rootVal, mask)) world->fixedTriangles(mask, xyz, indices);
+    }
+#endif
     bronze::Value fromPhys = bronze::embed::getProperty(rootVal, "fromPhysics");
     if (!bronze::embed::isUndefined(fromPhys) && !bronze::embed::isNull(fromPhys) &&
         !(bronze::embed::isBool(fromPhys) && !bronze::embed::toBool(fromPhys))) {
@@ -262,7 +282,27 @@ bool collectNavGeometry(bronze::Value rootVal, std::vector<float>& xyz,
 bool collectNavObstacles(bronze::Value rootVal, float minX, float maxX, float minZ, float maxZ,
                          std::vector<brogameagent::AABB>& outBoxes, std::string&) {
 #if BRO_WITH_PHYSICS
+    {
+        uint32_t mask = 0;
+        if (dynamics::World* dyn = bakeWorld(rootVal, mask)) {
+            float lo = -1e9f, hi = 1e9f;
+            bronze::Value v = bronze::embed::getProperty(rootVal, "dynamicsMinY");
+            if (bronze::embed::isNumber(v)) lo = static_cast<float>(bronze::embed::toDouble(v));
+            v = bronze::embed::getProperty(rootVal, "dynamicsMaxY");
+            if (bronze::embed::isNumber(v)) hi = static_cast<float>(bronze::embed::toDouble(v));
+            for (const dynamics::Bounds& b : dyn->fixedBounds(mask)) {
+                if (b.max[1] < lo || b.min[1] > hi) continue;
+                // A floor under the whole grid blocks nothing.
+                if (b.min[0] <= minX && b.max[0] >= maxX && b.min[2] <= minZ && b.max[2] >= maxZ) continue;
+                outBoxes.push_back(brogameagent::AABB{0.5f * (b.min[0] + b.max[0]), 0.5f * (b.min[2] + b.max[2]),
+                                                      0.5f * (b.max[0] - b.min[0]), 0.5f * (b.max[2] - b.min[2])});
+            }
+            return true;
+        }
+    }
     bronze::Value fromPhys = bronze::embed::getProperty(rootVal, "fromPhysics");
+    if (bronze::embed::isUndefined(fromPhys) || bronze::embed::isNull(fromPhys) ||
+        (bronze::embed::isBool(fromPhys) && !bronze::embed::toBool(fromPhys))) return true;
     physics::PhysicsWorld* world = unwrapPhysicsWorld(fromPhys);
     if (!world) return true;
     uint32_t layerMask = physicsLayerMask(rootVal, world);

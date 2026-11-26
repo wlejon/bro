@@ -40,8 +40,23 @@ struct JointRec {
 struct BodyRec {
     b3BodyId id = b3_nullBodyId;
     std::vector<std::uint32_t> joints;
+    b3MeshData* mesh = nullptr;  // a mesh body's triangles, which its shape reads in place
+    std::uint32_t layers = 1;
+    bool fixed = false;
     bool alive = false;
 };
+
+void put(float* out, b3Vec3 v) {
+    out[0] = v.x;
+    out[1] = v.y;
+    out[2] = v.z;
+}
+
+void putPos(float* out, const b3Pos& p) {
+    out[0] = static_cast<float>(p.x);
+    out[1] = static_cast<float>(p.y);
+    out[2] = static_cast<float>(p.z);
+}
 
 }  // namespace
 
@@ -53,16 +68,31 @@ struct World::Impl {
     std::vector<std::uint32_t> freeBodies, freeJoints;
     std::vector<Moved> moved;
     std::vector<std::uint32_t> broken;
+    std::vector<Touch> touched;
+    std::vector<Hit> hits;
     int bodyCount = 0, jointCount = 0;
     double stepMs = 0;
 
-    std::uint32_t add(const BodyDesc& d, b3BodyId& out) {
+    // The body a shape is on, by its number; false for one that is not ours.
+    bool bodyOf(b3ShapeId shape, std::uint32_t& out) const {
+        void* u = b3Body_GetUserData(b3Shape_GetBody(shape));
+        if (!u) return false;
+        out = slotOf(u);
+        return true;
+    }
+
+    std::uint32_t add(const BodyDesc& d, b3BodyId& out, bool fixed = false) {
         b3BodyDef bd = b3DefaultBodyDef();
-        bd.type = d.mass > 0.0f ? b3_dynamicBody : b3_staticBody;
+        fixed = fixed || (!d.kinematic && !(d.mass > 0.0f));
+        bd.type = fixed ? b3_staticBody : d.kinematic ? b3_kinematicBody : b3_dynamicBody;
         bd.position = b3Pos{d.pose.p[0], d.pose.p[1], d.pose.p[2]};
         bd.rotation = quat(d.pose.q);
         bd.linearVelocity = v3(d.velocity);
         bd.angularVelocity = v3(d.angular);
+        bd.linearDamping = d.linearDamping;
+        bd.angularDamping = d.angularDamping;
+        bd.gravityScale = d.gravityScale;
+        bd.isBullet = d.bullet;
         std::uint32_t slot;
         if (!freeBodies.empty()) {
             slot = freeBodies.back();
@@ -75,8 +105,23 @@ struct World::Impl {
         out = b3CreateBody(world, &bd);
         bodies[slot].id = out;
         bodies[slot].alive = true;
+        bodies[slot].fixed = fixed;
+        bodies[slot].layers = d.layers;
+        bodies[slot].mesh = nullptr;
         bodies[slot].joints.clear();
         bodyCount++;
+        if (d.planar && !fixed && !d.kinematic) {
+            b3MotionLockJointDef jd = b3DefaultMotionLockJointDef();
+            jd.base.bodyIdA = ground;
+            jd.base.bodyIdB = out;
+            jd.base.localFrameA.p = v3(d.pose.p);
+            jd.base.localFrameA.q = b3Quat_identity;
+            jd.base.localFrameB.p = b3Vec3{0, 0, 0};
+            jd.base.localFrameB.q = b3InvMulQuat(bd.rotation, b3Quat_identity);
+            jd.lockLinearZ = true;
+            jd.lockAngularXY = true;
+            b3CreateMotionLockJoint(world, &jd);
+        }
         return slot;
     }
 
@@ -85,6 +130,10 @@ struct World::Impl {
         sd.density = d.mass > 0.0f && volume > 0.0f ? d.mass / volume : 0.0f;
         sd.baseMaterial.friction = d.friction;
         sd.baseMaterial.restitution = d.restitution;
+        sd.filter.categoryBits = d.layers;
+        sd.filter.maskBits = d.mask;
+        sd.enableContactEvents = true;
+        sd.enableHitEvents = true;
         return sd;
     }
 
@@ -116,9 +165,63 @@ World::World() : impl_(std::make_unique<Impl>()) {
 
 World::~World() {
     if (b3World_IsValid(impl_->world)) b3DestroyWorld(impl_->world);
+    for (BodyRec& r : impl_->bodies) {
+        if (r.mesh) b3DestroyMesh(r.mesh);
+    }
 }
 
 void World::setGravity(float x, float y, float z) { b3World_SetGravity(impl_->world, b3Vec3{x, y, z}); }
+void World::setMaxSpeed(float speed) { b3World_SetMaximumLinearSpeed(impl_->world, speed); }
+void World::setHitSpeed(float speed) { b3World_SetHitEventThreshold(impl_->world, speed); }
+
+std::uint32_t World::addCapsule(const BodyDesc& d, float radius, float halfHeight) {
+    b3BodyId id;
+    const std::uint32_t slot = impl_->add(d, id);
+    const float volume = 3.14159265f * radius * radius * (2.0f * halfHeight + 1.33333333f * radius);
+    const b3ShapeDef sd = impl_->shape(d, volume);
+    const b3Capsule c{b3Vec3{0, -halfHeight, 0}, b3Vec3{0, halfHeight, 0}, radius};
+    b3CreateCapsuleShape(id, &sd, &c);
+    return slot;
+}
+
+std::uint32_t World::addHull(const BodyDesc& d, const float* xyz, int points) {
+    if (points < 4) return kWorld;
+    std::vector<b3Vec3> pts(static_cast<std::size_t>(points));
+    for (int i = 0; i < points; i++) pts[static_cast<std::size_t>(i)] = v3(xyz + 3 * i);
+    b3HullData* hull = b3CreateHull(pts.data(), points, points);
+    if (!hull) return kWorld;
+    b3BodyId id;
+    const std::uint32_t slot = impl_->add(d, id);
+    const b3ShapeDef sd = impl_->shape(d, hull->volume);
+    b3CreateHullShape(id, &sd, hull);
+    b3DestroyHull(hull);
+    return slot;
+}
+
+std::uint32_t World::addMesh(const BodyDesc& d, const float* xyz, int vertices, const std::int32_t* indices,
+                             int triangles) {
+    if (vertices < 3 || triangles < 1) return kWorld;
+    std::vector<b3Vec3> verts(static_cast<std::size_t>(vertices));
+    for (int i = 0; i < vertices; i++) verts[static_cast<std::size_t>(i)] = v3(xyz + 3 * i);
+    std::vector<std::int32_t> idx(indices, indices + 3 * static_cast<std::size_t>(triangles));
+    for (std::int32_t i : idx) {
+        if (i < 0 || i >= vertices) return kWorld;
+    }
+    b3MeshDef md = {};
+    md.vertices = verts.data();
+    md.indices = idx.data();
+    md.vertexCount = vertices;
+    md.triangleCount = triangles;
+    md.identifyEdges = true;
+    b3MeshData* mesh = b3CreateMesh(&md, nullptr, 0);
+    if (!mesh) return kWorld;
+    b3BodyId id;
+    const std::uint32_t slot = impl_->add(d, id, true);
+    const b3ShapeDef sd = impl_->shape(d, 0.0f);
+    b3CreateMeshShape(id, &sd, mesh, b3Vec3{1, 1, 1});
+    impl_->bodies[slot].mesh = mesh;
+    return slot;
+}
 
 std::uint32_t World::addBox(const BodyDesc& d, const float half[3]) {
     b3BodyId id;
@@ -147,6 +250,8 @@ void World::removeBody(std::uint32_t body) {
     const std::vector<std::uint32_t> on = r.joints;
     for (std::uint32_t j : on) impl_->dropJoint(j, false);
     b3DestroyBody(r.id);
+    if (r.mesh) b3DestroyMesh(r.mesh);
+    r.mesh = nullptr;
     r.alive = false;
     r.id = b3_nullBodyId;
     r.joints.clear();
@@ -261,6 +366,24 @@ void World::step(float dt, int substeps) {
         impl_->broken.push_back(slotOf(je.jointEvents[i].userData));
     }
     for (std::uint32_t j : impl_->broken) impl_->dropJoint(j, true);
+    impl_->touched.clear();
+    impl_->hits.clear();
+    const b3ContactEvents ce = b3World_GetContactEvents(impl_->world);
+    for (int i = 0; i < ce.beginCount; i++) {
+        Touch t;
+        if (impl_->bodyOf(ce.beginEvents[i].shapeIdA, t.a) && impl_->bodyOf(ce.beginEvents[i].shapeIdB, t.b)) {
+            impl_->touched.push_back(t);
+        }
+    }
+    for (int i = 0; i < ce.hitCount; i++) {
+        const b3ContactHitEvent& e = ce.hitEvents[i];
+        Hit h;
+        if (!impl_->bodyOf(e.shapeIdA, h.a) || !impl_->bodyOf(e.shapeIdB, h.b)) continue;
+        putPos(h.point, e.point);
+        put(h.normal, e.normal);
+        h.speed = e.approachSpeed;
+        impl_->hits.push_back(h);
+    }
     impl_->stepMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
@@ -297,8 +420,101 @@ void World::applyImpulse(std::uint32_t body, const float impulse[3], const float
 
 float World::mass(std::uint32_t body) const { return hasBody(body) ? b3Body_GetMass(impl_->bodies[body].id) : 0.0f; }
 
+void World::moveTo(std::uint32_t body, const Pose& pose, float dt) {
+    if (!hasBody(body) || !(dt > 0.0f)) return;
+    b3WorldTransform t;
+    t.p = b3Pos{pose.p[0], pose.p[1], pose.p[2]};
+    t.q = quat(pose.q);
+    b3Body_SetTargetTransform(impl_->bodies[body].id, t, dt, true);
+}
+
+void World::wake(std::uint32_t body) {
+    if (hasBody(body)) b3Body_SetAwake(impl_->bodies[body].id, true);
+}
+
 const std::vector<Moved>& World::moved() const { return impl_->moved; }
 const std::vector<std::uint32_t>& World::broken() const { return impl_->broken; }
+const std::vector<Touch>& World::touched() const { return impl_->touched; }
+const std::vector<Hit>& World::hits() const { return impl_->hits; }
+
+RayHit World::raycast(const float origin[3], const float dir[3], float maxDistance, std::uint32_t mask) const {
+    RayHit out;
+    const float len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    if (!(len > 1e-9f) || !(maxDistance > 0.0f)) return out;
+    const float k = maxDistance / len;
+    b3QueryFilter f = b3DefaultQueryFilter();
+    f.maskBits = mask;
+    const b3RayResult r = b3World_CastRayClosest(impl_->world, b3Pos{origin[0], origin[1], origin[2]},
+                                                 b3Vec3{dir[0] * k, dir[1] * k, dir[2] * k}, f);
+    if (!r.hit || !impl_->bodyOf(r.shapeId, out.body)) return out;
+    out.hit = true;
+    putPos(out.point, r.point);
+    put(out.normal, r.normal);
+    out.distance = r.fraction * maxDistance;
+    return out;
+}
+
+void World::fixedTriangles(std::uint32_t mask, std::vector<float>& xyz, std::vector<std::uint32_t>& indices) const {
+    std::vector<b3ShapeId> shapes;
+    for (const BodyRec& r : impl_->bodies) {
+        if (!r.alive || !r.fixed || !(r.layers & mask)) continue;
+        const b3WorldTransform t = b3Body_GetTransform(r.id);
+        shapes.resize(static_cast<std::size_t>(b3Body_GetShapeCount(r.id)));
+        const int n = b3Body_GetShapes(r.id, shapes.data(), static_cast<int>(shapes.size()));
+        for (int s = 0; s < n; s++) {
+            const std::uint32_t base = static_cast<std::uint32_t>(xyz.size() / 3);
+            const auto vertex = [&](b3Vec3 local) {
+                float p[3];
+                putPos(p, b3TransformWorldPoint(t, local));
+                xyz.insert(xyz.end(), p, p + 3);
+            };
+            const b3ShapeType type = b3Shape_GetType(shapes[static_cast<std::size_t>(s)]);
+            if (type == b3_hullShape) {
+                const b3HullData* h = b3Shape_GetHull(shapes[static_cast<std::size_t>(s)]);
+                const b3Vec3* pts = b3GetHullPoints(h);
+                const b3HullHalfEdge* edges = b3GetHullEdges(h);
+                const b3HullFace* faces = b3GetHullFaces(h);
+                for (int i = 0; i < h->vertexCount; i++) vertex(pts[i]);
+                for (int fi = 0; fi < h->faceCount; fi++) {
+                    const std::uint8_t first = faces[fi].edge;
+                    const std::uint32_t v0 = edges[first].origin;
+                    for (std::uint8_t e = edges[first].next; edges[e].next != first; e = edges[e].next) {
+                        indices.push_back(base + v0);
+                        indices.push_back(base + edges[e].origin);
+                        indices.push_back(base + edges[edges[e].next].origin);
+                    }
+                }
+            } else if (type == b3_meshShape) {
+                const b3Mesh m = b3Shape_GetMesh(shapes[static_cast<std::size_t>(s)]);
+                const b3Vec3* verts = b3GetMeshVertices(m.data);
+                const b3MeshTriangle* tris = b3GetMeshTriangles(m.data);
+                for (int i = 0; i < m.data->vertexCount; i++) {
+                    vertex(b3Vec3{verts[i].x * m.scale.x, verts[i].y * m.scale.y, verts[i].z * m.scale.z});
+                }
+                for (int i = 0; i < m.data->triangleCount; i++) {
+                    indices.push_back(base + static_cast<std::uint32_t>(tris[i].index1));
+                    indices.push_back(base + static_cast<std::uint32_t>(tris[i].index2));
+                    indices.push_back(base + static_cast<std::uint32_t>(tris[i].index3));
+                }
+            }
+        }
+    }
+}
+
+std::vector<Bounds> World::fixedBounds(std::uint32_t mask) const {
+    std::vector<Bounds> out;
+    for (std::size_t i = 0; i < impl_->bodies.size(); i++) {
+        const BodyRec& r = impl_->bodies[i];
+        if (!r.alive || !r.fixed || !(r.layers & mask)) continue;
+        const b3AABB box = b3Body_ComputeAABB(r.id);
+        Bounds b;
+        b.body = static_cast<std::uint32_t>(i);
+        put(b.min, box.lowerBound);
+        put(b.max, box.upperBound);
+        out.push_back(b);
+    }
+    return out;
+}
 
 Counts World::counts() const {
     Counts c;

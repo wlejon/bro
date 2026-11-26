@@ -75,6 +75,7 @@
 
 namespace bro::engine { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
+namespace bro::dynamics { class World; }
 
 namespace bro::bronze_host {
 
@@ -129,6 +130,12 @@ inline bool registerRiggingNatives(std::string*) { return true; }
 // bro.dynamics (native_dynamics.cpp, natives/dynamics/): worlds of
 // dynamics::World, each the thread's that made it.
 bool registerDynamicsNatives(std::string* error);
+// The world a script's bro.dynamics World names on this thread (its `_id`), null once
+// destroyed: for the host's own readers of a world (nav bakes, an agent's ground follow).
+dynamics::World* dynamicsWorld(int32_t id);
+// The world of an option holding a bro.dynamics World (`fromDynamics`, a ground follow's
+// `world`); -1 when it holds none.
+int32_t dynamicsWorldId(bronze::Value world);
 bool registerPhysicsNatives(std::string* error);
 // The PhysicsWorld behind a `Physics` value, else the engine's own
 // (native_physics_core.cpp).

@@ -18,7 +18,17 @@ bool registerNatives_dynamics(std::string* error) {
     return fn("__bro_native.dynamics.create", BRO_NATIVE_FN(bro_dynamics_create), "i32", {}, error) &&
            fn("__bro_native.dynamics.destroy", BRO_NATIVE_FN(bro_dynamics_destroy), "void", {"i32"}, error) &&
            fn("__bro_native.dynamics.setGravity", BRO_NATIVE_FN(bro_dynamics_setGravity), "void", {"i32", "f64", "f64", "f64"}, error) &&
-           fn("__bro_native.dynamics.addBody", BRO_NATIVE_FN(bro_dynamics_addBody), "i32", {"i32", "bool", "f32[]"}, error) &&
+           fn("__bro_native.dynamics.addBody", BRO_NATIVE_FN(bro_dynamics_addBody), "i32", {"i32", "i32", "f32[]", "i32", "i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.addHull", BRO_NATIVE_FN(bro_dynamics_addHull), "i32", {"i32", "f32[]", "i32", "i32", "i32", "f32[]"}, error) &&
+           fn("__bro_native.dynamics.addMesh", BRO_NATIVE_FN(bro_dynamics_addMesh), "i32", {"i32", "f32[]", "i32", "i32", "f32[]", "i32[]"}, error) &&
+           fn("__bro_native.dynamics.setMaxSpeed", BRO_NATIVE_FN(bro_dynamics_setMaxSpeed), "void", {"i32", "f64"}, error) &&
+           fn("__bro_native.dynamics.setHitSpeed", BRO_NATIVE_FN(bro_dynamics_setHitSpeed), "void", {"i32", "f64"}, error) &&
+           fn("__bro_native.dynamics.moveTo", BRO_NATIVE_FN(bro_dynamics_moveTo), "void", {"i32", "i32", "f32[]", "f64"}, error) &&
+           fn("__bro_native.dynamics.wake", BRO_NATIVE_FN(bro_dynamics_wake), "void", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.hasBody", BRO_NATIVE_FN(bro_dynamics_hasBody), "bool", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.touched", BRO_NATIVE_FN(bro_dynamics_touched), "i32[]", {"i32"}, error) &&
+           fn("__bro_native.dynamics.hits", BRO_NATIVE_FN(bro_dynamics_hits), "f32[]", {"i32"}, error) &&
+           fn("__bro_native.dynamics.raycast", BRO_NATIVE_FN(bro_dynamics_raycast), "f32[]", {"i32", "f32[]", "f64", "i32"}, error) &&
            fn("__bro_native.dynamics.removeBody", BRO_NATIVE_FN(bro_dynamics_removeBody), "void", {"i32", "i32"}, error) &&
            fn("__bro_native.dynamics.addJoint", BRO_NATIVE_FN(bro_dynamics_addJoint), "i32", {"i32", "i32", "i32", "i32", "f32[]", "bool"}, error) &&
            fn("__bro_native.dynamics.removeJoint", BRO_NATIVE_FN(bro_dynamics_removeJoint), "void", {"i32", "i32"}, error) &&
