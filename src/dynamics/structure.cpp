@@ -53,7 +53,10 @@ constexpr float kEven = 0.05f;
 constexpr float kMeetSpeed = 1.0f;  // m/s: slower than this is leaning, not a blow
 constexpr float kReach = 3.0f;    // m: the furthest one blow breaks from where it lands
 constexpr float kSettle = 0.12f;  // s between one sending of the weight and the next
-constexpr int kHold = 30;         // steps a member keeps its body after the last thing near it
+constexpr int kPasses = 8;        // times a loose body's push is sent again after something in it gave
+constexpr std::size_t kBeam = 48; // cells: a loose body of fewer is too small to bend as a beam
+constexpr float kLanding = 0.05f; // of what a loose body loses where it lands, the part that breaks it
+constexpr int kHold = 30;      // steps a member keeps its body after the last thing near it
 constexpr float kGridCell = 8.0f;
 
 struct Cell {
@@ -156,6 +159,8 @@ struct Structure::Impl {
 
     // Scratch.
     std::vector<float> dist, load;
+    std::vector<std::uint64_t> block;
+    std::vector<V3> push;  // N s on each loose cell, in the space it was built in, since squeeze
     std::vector<std::uint32_t> order, found, mark;
     std::vector<std::pair<float, std::uint32_t>> near;
 
@@ -614,6 +619,10 @@ struct Structure::Impl {
         groups(list, adrift, [&](std::vector<std::uint32_t>&& group) { loose(std::move(group), nullptr, V3{}, kWorld); });
     }
 
+    // What a joint bears pressed: it was made for `safety` times what it carried as built,
+    // and for no less than its material holds pulled.
+    float bears(const Joint& e) const { return std::max(e.sigma * e.area, safety * e.p0); }
+
     // How far sideways from the ground a cell may be.
     float limit(const Cell& c) const { return std::max(c.span, 1.25f * c.far0 + 0.5f); }
 
@@ -711,8 +720,9 @@ struct Structure::Impl {
                     continue;
                 }
                 const bool under = e.upright && (to == 0) == e.aUnder;  // what bears it is beneath
-                float cap = (under ? e.crush : e.sigma) * e.area;
+                float cap = e.sigma * e.area;
                 if (to == e.to0) cap = std::max(cap, safety * e.p0);
+                if (under) cap = bears(e);
                 if (p <= cap) continue;
                 if (under && !cells[o].anchored) {
                     crushed.push_back(o);
@@ -771,6 +781,7 @@ struct Structure::Impl {
         }
         if (any) unsettled = true;
         // And on the loose bodies, whichever way it pushes.
+        if (push.size() != cells.size()) push.assign(cells.size(), V3{});
         for (const Piece& p : pieces) {
             if (!p.alive || world.touching(p.body) == 0) continue;
             world.pressing(p.body, list);
@@ -789,6 +800,7 @@ struct Structure::Impl {
                     }
                 }
                 cells[nearest].pressed += length(from(pr.impulse));
+                push[nearest] = push[nearest] + rot(back, from(pr.impulse));
             }
         }
     }
@@ -885,8 +897,10 @@ struct Structure::Impl {
         unsettled = true;
     }
 
-    // A loose body of several cells, struck: cells about the point come away while the
-    // blow has it to spend, and what is left goes on as the bodies it is now.
+    // A loose body of several cells, struck: cells about the point come away one by one
+    // while the blow has it to spend, and with more to spend the body cracks further out,
+    // into blocks twice as far across for each doubling of how far they are from the point.
+    // What is left goes on as the bodies it is now.
     void shatter(std::uint32_t pi, V3 point, float budget, float reach) {
         Piece& p = pieces[pi];
         const Pose pose = world.pose(p.body);
@@ -895,17 +909,54 @@ struct Structure::Impl {
         for (std::uint32_t c : p.cells) near.push_back({length(cells[c].p - at), c});
         std::sort(near.begin(), near.end());
         std::vector<std::uint32_t> freed;
-        for (const auto& [d, c] : near) {
-            if (d > reach && !freed.empty()) break;
+        const std::uint32_t tag = ++stamp;
+        std::size_t rest = 0;
+        for (; rest < near.size(); rest++) {
+            const std::uint32_t c = near[rest].second;
+            if (near[rest].first > reach && !freed.empty()) break;
             const float need = cost(c);
             if (budget < need) {
                 cells[c].damage += budget;
+                budget = 0;
                 break;
             }
             budget -= need;
             part(c);
             freed.push_back(c);
-            if (freed.size() + 1 >= p.cells.size()) break;
+            mark[c] = tag;
+            if (freed.size() + 1 >= p.cells.size()) {
+                rest++;
+                break;
+            }
+        }
+        if (budget > 0 && reach > 0) {
+            if (block.size() < cells.size()) block.resize(cells.size());
+            for (std::size_t i = rest; i < near.size(); i++) {
+                const std::uint32_t c = near[i].second;
+                const int band = std::min(static_cast<int>(std::log2(std::max(near[i].first, reach) / reach)), 8);
+                const float across = 2.0f * chunk * static_cast<float>(1 << band);
+                const V3 r = (cells[c].p - at) * (1.0f / across);
+                block[c] = gridKey(static_cast<int>(std::floor(r.x)), static_cast<int>(std::floor(r.y)), static_cast<int>(std::floor(r.z))) ^
+                           (static_cast<std::uint64_t>(band) * 0x9E3779B97F4A7C15ull);
+            }
+            const std::int32_t own = cells[p.cells[0]].piece;
+            for (std::size_t i = rest; i < near.size() && budget > 0; i++) {
+                const std::uint32_t c = near[i].second;
+                const Cell& cell = cells[c];
+                for (std::uint32_t k = 0; k < cell.adjN; k++) {
+                    Joint& e = joints[adj[cell.adj0 + k]];
+                    if (!e.held) continue;
+                    const std::uint32_t o = this->across(e, c);
+                    if (cells[o].piece != own || mark[o] == tag || block[o] == block[c]) continue;
+                    if (budget < e.energy) {
+                        budget = 0;
+                        break;
+                    }
+                    budget -= e.energy;
+                    e.held = false;
+                    jointsHeld--;
+                }
+            }
         }
         split(pi, freed, false);
     }
@@ -913,7 +964,6 @@ struct Structure::Impl {
     // Takes cells (already parted from their neighbours) out of a loose body, each as a body
     // of its own or, crushed, as nothing; what is left of it goes on as the bodies it is now.
     void split(std::uint32_t pi, std::vector<std::uint32_t>& out, bool crushed) {
-        if (out.empty()) return;
         Piece& p = pieces[pi];
         const Pose pose = world.pose(p.body);
         const std::uint32_t tag = ++stamp;
@@ -934,6 +984,10 @@ struct Structure::Impl {
             }
         }
         groups(rest, tag, [&](std::vector<std::uint32_t>&& group) { made.push_back(std::move(group)); });
+        if (out.empty() && made.size() == 1) {  // still one body
+            p.cells = rest;
+            return;
+        }
         p.cells.clear();
         note(bodyPiece, body, -1);
         p.alive = false;
@@ -944,14 +998,218 @@ struct Structure::Impl {
         freePieces.push_back(pi);
     }
 
-    // The cells of loose bodies pressed harder than their material bears are crushed.
+    // A loose body is pushed where it touches, and every cell of it has to be moved by that
+    // push: it goes from the cells touched out through the joints, as the weight of what
+    // stands goes to the ground. A cell asked to push more than it bears is crushed, and a
+    // joint asked to pull or shear more than it holds lets go. `force` is the push on the
+    // whole body, in the space it was built in. Returns whether a joint let go.
+    bool strain(std::uint32_t pi, V3 force, std::vector<std::uint32_t>& out) {
+        const Piece& p = pieces[pi];
+        if (p.cells.size() < 4) return false;
+        const float f = length(force);
+        if (!(f > 0.5f * p.mass * g)) return false;
+        const V3 dir = force * (1.0f / f);
+        const float a = f / p.mass;
+        if (dist.size() < cells.size()) dist.resize(cells.size());
+        if (load.size() < cells.size()) load.resize(cells.size());
+        using Entry = std::pair<float, std::uint32_t>;
+        std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> heap;
+        for (std::uint32_t c : p.cells) {
+            load[c] = cells[c].mass * a;
+            dist[c] = kInf;
+            if (dot(push[c], push[c]) > 0) {
+                dist[c] = 0.0f;
+                heap.push({0.0f, c});
+            }
+        }
+        const std::int32_t own = cells[p.cells[0]].piece;
+        order.clear();
+        while (!heap.empty()) {
+            const Entry top = heap.top();
+            heap.pop();
+            const std::uint32_t c = top.second;
+            if (top.first > dist[c]) continue;
+            order.push_back(c);
+            const Cell& cell = cells[c];
+            for (std::uint32_t k = 0; k < cell.adjN; k++) {
+                const Joint& e = joints[adj[cell.adj0 + k]];
+                if (!e.held) continue;
+                const std::uint32_t o = across(e, c);
+                if (cells[o].piece != own) continue;
+                const float d = top.first + length(cells[o].p - cell.p);
+                if (d < dist[o]) {
+                    dist[o] = d;
+                    heap.push({d, o});
+                }
+            }
+        }
+        std::vector<std::uint32_t> cut;
+        const auto way = [&](const Joint& e, std::uint32_t c, std::uint32_t o) {
+            return e.held && cells[o].piece == own && dist[o] < dist[c] &&
+                   dist[o] + length(cells[o].p - cells[c].p) <= dist[c] + kEven;
+        };
+        for (std::size_t at = order.size(); at-- > 0;) {
+            const std::uint32_t c = order[at];
+            const Cell& cell = cells[c];
+            if (!(dist[c] > 0)) continue;
+            int ways = 0;
+            for (std::uint32_t k = 0; k < cell.adjN; k++) {
+                const Joint& e = joints[adj[cell.adj0 + k]];
+                if (way(e, c, across(e, c))) ways++;
+            }
+            if (ways < 1) continue;
+            const float share = load[c] / static_cast<float>(ways);
+            for (std::uint32_t k = 0; k < cell.adjN; k++) {
+                const std::uint32_t ji = adj[cell.adj0 + k];
+                const Joint& e = joints[ji];
+                const std::uint32_t o = across(e, c);
+                if (!way(e, c, o)) continue;
+                load[o] += share;
+                const V3 d = cell.p - cells[o].p;
+                const bool pushes = dot(d, dir) > 0.7f * length(d);  // o is behind c, the way the push goes
+                if (share <= (pushes ? bears(e) : e.sigma * e.area)) continue;
+                if (pushes) {
+                    out.push_back(o);
+                } else {
+                    cut.push_back(ji);
+                }
+            }
+        }
+        for (std::uint32_t ji : cut) {
+            if (!joints[ji].held) continue;
+            joints[ji].held = false;
+            jointsHeld--;
+        }
+        return !cut.empty();
+    }
+
+    // A loose body pushed where it touches is bent by it: across each plane of its grid the
+    // part to one side is held to the rest by the joints through that plane, which share
+    // the pull, the shear and the turning between them as a beam's section does. A joint
+    // asked for more than its material holds lets go, and the others take what it carried.
+    // `force` is the push on the whole body, in the space it was built in.
+    bool bend(std::uint32_t pi, V3 force, float window) {
+        const Piece& p = pieces[pi];
+        if (p.cells.size() < kBeam) return false;
+        if (!(length(force) > 0.5f * p.mass * g)) return false;
+        const V3 acc = force * (1.0f / p.mass);
+        const std::int32_t own = cells[p.cells[0]].piece;
+        const float over = 1.0f / window;
+        struct Side {
+            float m = 0;
+            V3 mp, f, t;
+        };
+        std::vector<Side> sides;
+        std::vector<std::vector<std::uint32_t>> crossing;
+        bool any = false;
+        for (int k = 0; k < 3; k++) {
+            const int u = (k + 1) % 3, v = (k + 2) % 3;
+            float lo = kInf, hi = -kInf;
+            for (std::uint32_t c : p.cells) {
+                lo = std::min(lo, axisOf(cells[c].p, k));
+                hi = std::max(hi, axisOf(cells[c].p, k));
+            }
+            const int layers = static_cast<int>(std::floor((hi - lo) / chunk + 0.5f)) + 1;
+            if (layers < 2) continue;
+            const auto layerOf = [&](std::uint32_t c) {
+                return std::clamp(static_cast<int>(std::floor((axisOf(cells[c].p, k) - lo) / chunk + 0.5f)), 0, layers - 1);
+            };
+            sides.assign(static_cast<std::size_t>(layers), Side{});
+            crossing.assign(static_cast<std::size_t>(layers), {});
+            for (std::uint32_t c : p.cells) {
+                const Cell& cell = cells[c];
+                const int l = layerOf(c);
+                Side& s = sides[static_cast<std::size_t>(l)];
+                const V3 f = push[c] * over;
+                s.m += cell.mass;
+                s.mp = s.mp + cell.p * cell.mass;
+                s.f = s.f + f;
+                s.t = s.t + cross(cell.p, f);
+                for (std::uint32_t j = 0; j < cell.adjN; j++) {
+                    const std::uint32_t ji = adj[cell.adj0 + j];
+                    const Joint& e = joints[ji];
+                    const std::uint32_t o = across(e, c);
+                    if (!e.held || o < c || cells[o].piece != own) continue;
+                    const int lo2 = layerOf(o);
+                    if (lo2 != l) crossing[static_cast<std::size_t>(std::min(l, lo2))].push_back(ji);
+                }
+            }
+            Side sum;
+            for (int l = 0; l + 1 < layers; l++) {
+                const Side& s = sides[static_cast<std::size_t>(l)];
+                sum.m += s.m;
+                sum.mp = sum.mp + s.mp;
+                sum.f = sum.f + s.f;
+                sum.t = sum.t + s.t;
+                const std::vector<std::uint32_t>& through = crossing[static_cast<std::size_t>(l)];
+                if (through.empty() || !(sum.m > 0)) continue;
+                for (int pass = 0; pass < 3; pass++) {
+                    float area = 0;
+                    V3 r0{};
+                    for (std::uint32_t ji : through) {
+                        const Joint& e = joints[ji];
+                        if (!e.held) continue;
+                        area += e.area;
+                        r0 = r0 + (cells[e.a].p + cells[e.b].p) * (0.5f * e.area);
+                    }
+                    if (!(area > 0)) break;
+                    r0 = r0 * (1.0f / area);
+                    // What has to come through the plane for the near side to move as the body does.
+                    const V3 need = acc * sum.m - sum.f;
+                    const V3 turn = cross(sum.mp * (1.0f / sum.m) - r0, acc * sum.m) - (sum.t - cross(r0, sum.f));
+                    float iu = 0, iv = 0;
+                    for (std::uint32_t ji : through) {
+                        const Joint& e = joints[ji];
+                        if (!e.held) continue;
+                        const V3 d = (cells[e.a].p + cells[e.b].p) * 0.5f - r0;
+                        iu += e.area * (axisOf(d, u) * axisOf(d, u) + e.area / 12.0f);
+                        iv += e.area * (axisOf(d, v) * axisOf(d, v) + e.area / 12.0f);
+                    }
+                    const float pull = axisOf(need, k) / area;
+                    const float shear = std::sqrt(axisOf(need, u) * axisOf(need, u) + axisOf(need, v) * axisOf(need, v)) / area;
+                    const float bv = axisOf(turn, u) / iv, bu = -axisOf(turn, v) / iu;
+                    bool let = false;
+                    for (std::uint32_t ji : through) {
+                        Joint& e = joints[ji];
+                        if (!e.held) continue;
+                        const V3 d = (cells[e.a].p + cells[e.b].p) * 0.5f - r0;
+                        const float edge = 0.5f * std::sqrt(e.area) * (std::fabs(bv) + std::fabs(bu));
+                        const float stress = std::max(pull + bv * axisOf(d, v) + bu * axisOf(d, u) + edge, 0.0f) + shear;
+                        if (stress <= e.sigma) continue;
+                        e.held = false;
+                        jointsHeld--;
+                        let = true;
+                    }
+                    if (!let) break;
+                    any = true;
+                }
+            }
+        }
+        return any;
+    }
+
+    // The cells of loose bodies pressed harder than their material bears are crushed, and
+    // the bodies come apart where the push through them is more than they hold.
     void squeeze(float window) {
         if (!(window > 0)) return;
+        if (push.size() != cells.size()) push.assign(cells.size(), V3{});
         std::vector<std::uint32_t> out;
         for (std::uint32_t pi = 0; pi < pieces.size(); pi++) {
             if (!pieces[pi].alive) continue;
             out.clear();
+            V3 sum{};
+            for (std::uint32_t c : pieces[pi].cells) sum = sum + push[c];
+            // What gives sends what it carried another way, and that may give in turn.
+            bool cut = bend(pi, sum * (1.0f / window), window);
+            for (int pass = 0; pass < kPasses; pass++) {
+                const std::size_t had = out.size();
+                const bool let = strain(pi, sum * (1.0f / window), out);
+                cut = cut || let;
+                for (std::size_t i = had; i < out.size(); i++) part(out[i]);
+                if (!let && out.size() == had) break;
+            }
             for (std::uint32_t c : pieces[pi].cells) {
+                push[c] = V3{};
                 Cell& cell = cells[c];
                 if (cell.pressed > 0) {
                     // What goes in one side comes out the other: half of what touched it.
@@ -964,7 +1222,9 @@ struct Structure::Impl {
                 }
                 cell.pressed = 0;
             }
-            if (out.empty()) continue;
+            if (out.empty() && !cut) continue;
+            std::sort(out.begin(), out.end());
+            out.erase(std::unique(out.begin(), out.end()), out.end());
             for (std::uint32_t c : out) part(c);
             split(pi, out, true);
         }
@@ -985,8 +1245,9 @@ struct Structure::Impl {
                 const float m1 = pieces[static_cast<std::size_t>(pi)].mass;
                 const float m2 = world.hasBody(other) ? world.mass(other) : 0.0f;
                 const float mu = m2 > 0 ? m1 * m2 / (m1 + m2) : m1;
-                // Half of what the meeting loses goes into each of the two.
-                const float energy = 0.25f * mu * h.speed * h.speed;
+                // Half of what the meeting loses goes into each of the two, and most of that
+                // into heat and dust, not into parting joints.
+                const float energy = kLanding * 0.25f * mu * h.speed * h.speed;
                 auto it = std::find_if(list.begin(), list.end(), [&](const Landing& l) { return l.piece == static_cast<std::uint32_t>(pi); });
                 if (it == list.end()) {
                     list.push_back({static_cast<std::uint32_t>(pi), from(h.point), energy, reachOf(other)});

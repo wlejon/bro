@@ -12,8 +12,12 @@
 // loose (a body of its own from then on), its neighbours after it while the blow has more
 // to give, and the thing is slowed by what that cost it. With less, the cell keeps the
 // damage and the thing stops against it. What comes loose in one piece is one body of many
-// boxes, which breaks the same way where it lands or is struck. A cell pressed harder than
-// its material bears, standing or loose, is crushed: it is gone, and named in crushed().
+// boxes, which breaks the same way where it is struck. Where it lands it comes apart by
+// what the landing has to spend: cell by cell at the place, and further out in blocks that
+// are larger the further they are. While it is pushed where it touches, the push has to
+// reach every cell of it: a section asked to pull, shear or bend more than its joints hold
+// parts, so a tower does not tip over whole. A cell pressed harder than it bears, standing
+// or loose, is crushed: it is gone, and named in crushed().
 //
 // After damage, and while anything rests on it, the weight of what still stands and of what
 // rests there is sent down the joints again to the ground. A joint holds what its section

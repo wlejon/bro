@@ -233,8 +233,12 @@ class World {
      * cell asked to bear more than it holds is crushed (gone), a joint asked
      * to hang more lets go, cells further sideways from what holds them up
      * than their member's `span` let go, and cells left with no way to the
-     * ground fall, each group as one body. Loose bodies break the same way
-     * where they land or are struck.
+     * ground fall, each group as one body. A loose body breaks the same way
+     * where it is struck; where it lands it comes apart cell by cell at the
+     * place and in larger blocks further out, as far as the landing has energy
+     * for; and while it is pushed where it touches, a section of it asked to
+     * pull, shear or bend more than its joints hold parts, so a tower that
+     * loses its footing comes down in pieces, not over in one.
      *
      * A member: { center, half, frame = 0, anchored = false,
      *   mass     kg (default: concrete, 2400 kg/m3)
