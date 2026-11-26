@@ -7,7 +7,9 @@
  * engine; src/dynamics/world.h). A world is stepped by the code that made it:
  * nothing steps it for you, and it is not tied to the scene or to bro.time.
  * It runs on the CPU, the same in bro, bro-headless and bro-server, and in a
- * Worker (a world belongs to the thread that made it).
+ * Worker (a world belongs to the thread that made it). The same calls give
+ * the same bodies bit for bit on Windows, Linux and macOS, x64 and arm64, so
+ * peers can send inputs and step alike (tests/dynamics/test_same_everywhere.js).
  *
  * Bodies and joints are small integers, reused once removed. Vectors are
  * arrays ([x, y, z]); a rotation is a quaternion [x, y, z, w]. Units are SI.

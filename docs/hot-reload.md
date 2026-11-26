@@ -3,7 +3,7 @@
 A windowed folder app reloads when its source changes.
 
 ```
-bro ../broworkshop/games/torque     # boots, then watches the folder
+bro ../broworkshop/games/tumble     # boots, then watches the folder
 ```
 
 ## Triggers
