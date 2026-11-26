@@ -59,6 +59,7 @@ extern "C" void bro_vision_wildlife_bursts_main();
 extern "C" void bro_core_main();
 extern "C" void bro_net_main();
 extern "C" void bro_physics_main();
+extern "C" void bro_dynamics_main();
 extern "C" void bro_terrain_main();
 extern "C" void bro_tile_world_main();
 extern "C" void bro_lighting_main();
@@ -229,6 +230,14 @@ void installNetModule() {
     installNetRollbackExtensions();
 #endif
 }
+
+#if BRO_WITH_PHYSICS
+// js/dynamics.js mounts bro.dynamics over __bro_native.dynamics, in the main
+// realm and in a Worker's.
+void installDynamicsModule() {
+    bronze::embed::runEntry(bro_dynamics_main);
+}
+#endif
 
 void installPhysicsModule() {
     bronze::embed::runEntry(bro_physics_main);

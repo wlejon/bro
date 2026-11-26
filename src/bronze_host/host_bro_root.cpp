@@ -122,7 +122,7 @@ void installBroRoots(engine::Engine& engine) {
                                              "scene", "terrain", "tile_world", "lighting", "animation", "lm",
                                              "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                                             "flora", "tensor", "profiler", "apps", "vfs", "models"}));
+                                             "flora", "tensor", "profiler", "apps", "vfs", "models", "dynamics"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
@@ -131,7 +131,7 @@ void installBroRoots(engine::Engine& engine) {
                    "animation", "terrain", "tile_world", "lighting", "gizmo", "scene", "lm",
                    "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                    "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                   "flora", "tensor", "profiler", "models"}));
+                   "flora", "tensor", "profiler", "models", "dynamics"}));
 #if !BRO_WITH_3D
     // With the 3D family, js/physics.js makes `Physics` when a program first
     // reads it (installDeferredModules).
@@ -253,6 +253,7 @@ void installBroRoots(engine::Engine& engine) {
     setUnavailable("gizmo", "BRO_WITH_3D");
 #endif
 #if !BRO_WITH_PHYSICS
+    setUnavailable("dynamics", "BRO_WITH_PHYSICS");
     // The `Physics` global js/physics.js would have filled: the same stub
     // shape, so Physics.available === false and any call names the flag.
     {
@@ -379,6 +380,9 @@ void installBroRoots(engine::Engine& engine) {
     installSettingsObserver(engine);
     installBroCoreModule();
     installModelsModule();
+#if BRO_WITH_PHYSICS
+    installDynamicsModule();
+#endif
     installProfilerModule();
     registerProfilerMainThread();
 }
@@ -443,8 +447,8 @@ void markAvailableNamespaces() {
 // shows. The engine-bound namespaces (time, window, settings, the scene,
 // audio) are not here at all.
 void installWorkerBroRoot() {
-    auto* bro = new ev::Persistent(makeRoot({"net", "server", "motion"}));
-    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion", "vision", "physics"}));
+    auto* bro = new ev::Persistent(makeRoot({"net", "server", "motion", "dynamics"}));
+    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion", "vision", "physics", "dynamics"}));
     publish("bro", *bro);
     publish("__bro_native", *native);
 
@@ -452,7 +456,7 @@ void installWorkerBroRoot() {
     // (A worker's Physics is the worlds it makes: Physics.createWorldHandle.)
     physicsWithoutEngineWorld();
     bool ok = registerServerNatives(&err) && registerMotionNatives(&err) && registerVisionNatives(&err) &&
-              registerPhysicsNatives(&err);
+              registerPhysicsNatives(&err) && registerDynamicsNatives(&err);
 #if BRO_WITH_NET
     ok = ok && registerNetNatives(&err);
 #endif
@@ -505,6 +509,11 @@ void installWorkerBroRoot() {
     setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
 #endif
     installServerModule();
+#if BRO_WITH_PHYSICS
+    installDynamicsModule();
+#else
+    setUnavailable("dynamics", "BRO_WITH_PHYSICS");
+#endif
 #if BRO_WITH_PHYSICS
     installPhysicsModule();
 #else

@@ -212,6 +212,8 @@ if(BRO_WITH_PHYSICS)
         native_physics_vehicle.cpp
         native_physics_ragdoll.cpp
         natives/physics/native_physics_register.cpp
+        native_dynamics.cpp
+        natives/dynamics/native_dynamics_register.cpp
     )
 endif()
 
@@ -274,6 +276,7 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/dunder_bro
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/net
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/physics
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/dynamics
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/scene
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/terrain
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/tile_world
@@ -694,6 +697,7 @@ else()
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(net        bro_net_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(physics    bro_physics_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(dynamics   bro_dynamics_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(terrain    bro_terrain_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(tile_world bro_tile_world_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(lighting   bro_lighting_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")

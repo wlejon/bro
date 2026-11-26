@@ -45,7 +45,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots and native Vulkan p
 | Flag | Pulls in | `minimal` | `desktop` | `app` | `full` | Notes |
 |---|:--|:--:|:--:|:--:|:--:|---|
 | `BRO_WITH_3D` | bromesh + scene graph + mesh/rigging/terrain/tile/gizmo subsystems | off | on | on | on | 3D node types embed `bromesh` by value |
-| `BRO_WITH_PHYSICS` | Jolt | off | on | on | on | header-isolated behind `physics::PhysicsWorld` |
+| `BRO_WITH_PHYSICS` | Jolt (`Physics`) and Box3D (`bro.dynamics`) | off | on | on | on | header-isolated behind `physics::PhysicsWorld` and `dynamics::World` |
 | `BRO_WITH_AUDIO` | broaudio + audio_inference | **on** | on | on | on | self-contained, no vcpkg; on in every profile because `<audio>`/Web Audio is core HTML |
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | on | brotensor-free |
 | `BRO_WITH_FLORA` | broflora | off | on | on | on | needs `3D` (bromesh) |

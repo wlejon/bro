@@ -83,7 +83,8 @@ Every repo in the ecosystem (these, the desktop substrate libraries, the apps) i
 | brass | `brass` | JIT / AOT native code generator backend for bronze |
 | brokernel | `brokernel` / `brokernel_api` | the kernel language for world code: one source through brass to SPIR-V and native code (`bro.kernel`, `BRO_WITH_KERNEL`) |
 | bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
-| Jolt Physics | `Jolt::Jolt` | rigid-body physics |
+| Jolt Physics | `Jolt::Jolt` | rigid-body physics (`Physics`) |
+| Box3D | `box3d` | wlejon's fork of Erin Catto's rigid-body engine, tracked like a sibling: the bodies and joints under `src/dynamics` (`bro.dynamics`) |
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
 | Skia | `skia` (imported) | pre-built 2D rasterization |
 | Vulkan SDK | `Vulkan::Vulkan` | Vulkan 1.3 Core graphics & compute loader |
@@ -177,6 +178,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `triposplat-api.js` | `bro.triposplat`: single image to a 3D Gaussian splat for `createGaussianSplat` |
 | `motion-api.js` | `bro.motion` text-to-motion (G1 skeleton, 25 fps); sync/blocking, so run it in a Worker |
 | `brokit-api.js` | brokit runtime: Node modules (fs, path, os, child_process) + web globals |
+| `dynamics-api.js` | `bro.dynamics`: worlds of rigid bodies over Box3D stepped by the caller (CPU; main realm, Workers, bro-server): boxes and spheres, weld/hinge/ball joints, the force and torque through a joint, joints that break past what they take, the bodies a step moved |
 | `physics-api.js` | `Physics`: Jolt bodies, shapes, raycasts, contacts, characters, vehicles (wheeled/tracked/motorcycle) |
 | `terrain-api.js` | `scene.createTerrain`: chunked height-field terrain (one height per column, not voxels): noise, chunk streaming, edits, raycast |
 | `tile-api.js` | `scene.createTileWorld`: tile-grid meshing, square + hex, elevation/cliffs/AO |

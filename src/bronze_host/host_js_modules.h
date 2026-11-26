@@ -86,6 +86,8 @@ void installBroCoreModule();
 void installNetModule();
 void installServerModule();
 void installPhysicsModule();
+// js/dynamics.js: bro.dynamics over __bro_native.dynamics (BRO_WITH_PHYSICS).
+void installDynamicsModule();
 void installTerrainModule();
 void installTileWorldModule();
 void installLightingModule();

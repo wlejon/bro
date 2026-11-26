@@ -126,6 +126,9 @@ inline bool registerRiggingNatives(std::string*) { return true; }
 // library only with BRO_WITH_PHYSICS (CMakeLists.txt); without it there is
 // nothing to register and js/physics.js is not entered.
 #if BRO_WITH_PHYSICS
+// bro.dynamics (native_dynamics.cpp, natives/dynamics/): worlds of
+// dynamics::World, each the thread's that made it.
+bool registerDynamicsNatives(std::string* error);
 bool registerPhysicsNatives(std::string* error);
 // The PhysicsWorld behind a `Physics` value, else the engine's own
 // (native_physics_core.cpp).
@@ -137,6 +140,7 @@ physics::PhysicsWorld* enginePhysicsWorld();
 void physicsWithoutEngineWorld();
 #else
 inline bool registerPhysicsNatives(std::string*) { return true; }
+inline bool registerDynamicsNatives(std::string*) { return true; }
 inline void physicsWithoutEngineWorld() {}
 #endif
 bool registerAnimationNatives(std::string* error);

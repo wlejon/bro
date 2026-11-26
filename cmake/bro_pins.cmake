@@ -22,6 +22,8 @@ bro_dependencies(
     # from the origin exact).
     bromath htmlayout brokit broimage broaudio bromesh broflora brotensor
     brogameagent brolm brovisionml brodiffusion brosoundml FastNoise2
+    # The fork of Erin Catto's Box3D, the rigid bodies under src/dynamics.
+    box3d
     # The <terminal> element and remote sessions.
     brosearch brothemes bropty brolink bromux brovideo broremote
     # Desktop substrate.

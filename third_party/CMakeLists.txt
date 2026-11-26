@@ -357,6 +357,13 @@ if(BRO_WITH_PHYSICS AND NOT TARGET Jolt)
     add_subdirectory("${jolt_SOURCE_DIR}/Build" "${CMAKE_BINARY_DIR}/_deps/jolt-build" EXCLUDE_FROM_ALL)
 endif()
 
+# --- Box3D ---
+# The fork (wlejon/box3d) of Erin Catto's rigid-body engine, under src/dynamics.
+# Added as a subproject it builds its library alone: no samples, tests or docs.
+if(BRO_WITH_PHYSICS AND NOT TARGET box3d)
+    bro_dependency(box3d TARGET box3d)
+endif()
+
 # --- GameNetworkingSockets (via vcpkg) ---
 # Gated: this is one of only two vcpkg dependencies, so a minimal (net-off)
 # build needs no vcpkg for it.
