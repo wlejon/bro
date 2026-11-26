@@ -217,7 +217,6 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
     if (!canvas) return nullptr;
 
     auto graph = std::make_unique<scene::SceneGraph>();
-    graph->setPhysicsWorld(physicsWorld_.get());
     graph->setCanvasSize(viewportWidth_, viewportHeight_);
     graph->setDeviceScale(deviceScale_.render);
     auto* graphPtr = graph.get();

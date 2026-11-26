@@ -33,14 +33,14 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
 | Profile | Contents | Needs vcpkg? | Needs CUDA? |
 |---|---|:--:|:--:|
 | `minimal` | HTML/CSS/JS + Canvas2D + WebGL + audio. 2D renderer only. | no | no |
-| `desktop` | Full renderer (3D scene graph, Jolt physics, audio, core game-AI), terminal, desktop libraries, remote. No vcpkg services (net/video/AVIF/Steam) and no AI tower. | no | no |
-| **`app`** (default) | Full renderer (3D scene graph, Jolt physics, audio, core game-AI), terminal, desktop libraries, remote + networking, video, Steam. No AI tower. | yes | no |
+| `desktop` | Full renderer (3D scene graph, rigid-body dynamics, audio, core game-AI), terminal, desktop libraries, remote. No vcpkg services (net/video/AVIF/Steam) and no AI tower. | no | no |
+| **`app`** (default) | Full renderer (3D scene graph, rigid-body dynamics, audio, core game-AI), terminal, desktop libraries, remote + networking, video, Steam. No AI tower. | yes | no |
 | `full` | Everything, adding the on-device AI tower (tensor, LM, diffusion, vision, audio-ML). | yes | opt-in |
 
 - **`minimal`** builds, links, and runs with no vcpkg, no CUDA, and no
   `brotensor`. It's the HTML/CSS/JS + Canvas2D + WebGL floor, plus audio (broaudio
   is self-contained and `<audio>`/Web Audio is core to HTML). `bro.scene`,
-  `Physics`, `bro.net`, `VideoEncoder`, and the whole `bro.lm`/`bro.diffusion`/…
+  `bro.dynamics`, `bro.net`, `VideoEncoder`, and the whole `bro.lm`/`bro.diffusion`/…
   tower report unavailable. CI builds this profile on all three platforms and
   runs `tests/_smoke_app/minimal_smoke.js` against it — the floor above, plus a
   check that every compiled-out namespace is still present and says which flag
@@ -79,7 +79,7 @@ cmake -B build -DBRO_PROFILE=desktop                  # full renderer + desktop 
 cmake -B build -DBRO_PROFILE=full                     # + AI tower (CPU)
 cmake -B build -DBRO_PROFILE=full -DBRO_WITH_TENSOR_CUDA=ON   # + AI tower on CUDA
 cmake -B build -DBRO_PROFILE=full -DBRO_WITH_TENSOR_VULKAN=ON # + AI tower on Vulkan (any Vulkan 1.2+ GPU)
-cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + the 3D scene graph (forces PHYSICS + GAMEAI on)
+cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + the 3D scene graph (forces GAMEAI on)
 ```
 
 > Note: `-DBRO_PROFILE` seeds flag defaults on the **first** configure of a build
@@ -186,7 +186,7 @@ class of problem.
 
 There are no git submodules; a plain `git clone` is the whole checkout.
 `cmake/bro_pins.cmake` declares every dependency: each ecosystem sibling with
-no commit, so it tracks its main (FastNoise2, wlejon's fork, among them), and SDL, Jolt and libjpeg-turbo pinned to exact
+no commit, so it tracks its main (FastNoise2 and Box3D, wlejon's forks, among them), and SDL and libjpeg-turbo pinned to exact
 commits. `cmake/bro_deps.cmake`'s `bro_dependency()` resolves each one at
 configure time, in order:
 

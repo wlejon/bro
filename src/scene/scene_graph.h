@@ -13,7 +13,6 @@
 #include <vector>
 
 namespace bro::canvas { class CanvasScene; }
-namespace bro::physics { class PhysicsWorld; }
 namespace bro::render { class SkiaRenderer; }
 namespace brogameagent { class World; }
 
@@ -25,7 +24,6 @@ namespace bro::scene {
 class CameraNode;
 class ShapeNode;
 class SpriteNode;
-class PhysicsNode;
 class MeshNode;
 class SkinnedMeshNode;
 class InstancedMeshNode;
@@ -58,7 +56,6 @@ public:
     SceneNode* createNode(const std::string& name = "");
     ShapeNode* createShape(const std::string& name = "");
     SpriteNode* createSprite(const std::string& name = "");
-    PhysicsNode* createPhysicsNode(const std::string& name = "");
     MeshNode* createMesh(const std::string& name = "");
     SkinnedMeshNode* createSkinnedMesh(const std::string& name = "");
     InstancedMeshNode* createInstancedMesh(const std::string& name = "");
@@ -141,15 +138,6 @@ public:
     /// Destroy a clip player. Deferred-safe like destroyTween: callable from
     /// the player's own event/finished callbacks.
     void destroyClipPlayer(uint32_t id);
-
-    // --- Physics integration ---
-
-    void setPhysicsWorld(physics::PhysicsWorld* world) { physicsWorld_ = world; }
-    physics::PhysicsWorld* physicsWorld() const { return physicsWorld_; }
-
-    /// Sync physics body transforms → scene node transforms.
-    /// Call after physics step completes (when physics thread is idle).
-    void syncPhysics();
 
     // --- AI integration ---
 
@@ -678,7 +666,6 @@ private:
     CanvasRebinder rebinder_;
     bool parked_ = false;
     bool keepAlive_ = false;
-    physics::PhysicsWorld* physicsWorld_ = nullptr;
 
     // 3D camera matrices
     bromath::Mat4 viewMatrix_;

@@ -15,9 +15,6 @@
 #include "engine/layout_pipeline.h"
 
 #include "audio_inference/audio_inference.h"
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #include "platform/event_loop.h"
 #include "platform/window.h"
 #include "platform/window_system.h"
@@ -43,15 +40,12 @@ Engine::PipelineRun Engine::runPipelineFrames(int frames, double stepMs) {
     if (!headlessPipelineStarted_) {
         headlessPipelineStarted_ = true;
         // What a window brings up beside its frames: the event loop (over the
-        // hidden window), the physics and audio-inference workers, the source
+        // hidden window), the audio-inference worker, the source
         // watcher, the layout and raster threads, the main-loop waker.
         if (!eventLoop_ && window_) {
             eventLoop_ = platform::windowSystem().createEventLoop();
             if (eventLoop_) installWindowEventHandlers();
         }
-#if BRO_WITH_PHYSICS
-        if (physicsWorld_) physicsWorld_->startThread();
-#endif
         if (audioInference_) audioInference_->startThread();
         initAppWatcher();
         startFramePipeline();
@@ -95,12 +89,6 @@ Engine::PipelineRun Engine::runPipelineFrames(int frames, double stepMs) {
         while (framePresenter_->isRasterBusyOrRequested()) framePresenter_->waitForRaster(100.0);
         if (framePresenter_->consumeIfReady()) traceRasterConsumed();
     }
-#if BRO_WITH_PHYSICS
-    if (physicsWorld_) {
-        while (!physicsWorld_->isIdle())
-            if (!physicsWorld_->consumeStep()) std::this_thread::yield();
-    }
-#endif
 
     headlessPipeline_ = false;
     running_ = false;

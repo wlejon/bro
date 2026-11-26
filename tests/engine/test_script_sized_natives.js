@@ -1,11 +1,9 @@
 // Natives that size something from a script's number — src/bronze_host's
-// physics, tile-world, math, video and headless bindings, with their engine
-// halves (physics_world.cpp, tile_world.cpp, webm/gif_encoder.cpp,
-// engine_lifecycle.cpp).
+// tile-world, math, video and headless bindings, with their engine
+// halves (tile_world.cpp, webm/gif_encoder.cpp, engine_lifecycle.cpp).
 //
 // Each case used to hand the number to a plain C++ cast or an unbounded loop:
-// maxBodies 1e12 wrapped negative and sized Jolt's tables from the wrap, a
-// cloth of 1e5 x 1e5 was a 10^10-vertex allocation, fillTile to INT_MAX spun
+// fillTile to INT_MAX spun
 // forever (`x <= INT_MAX; ++x` never ends), a tile config with `length: -1`
 // resized a vector to ~2^64, gridIndex2D overflowed int, a stride shorter than
 // a row read past the frame, and resize(1e9, 1e9) sized every surface to it.
@@ -13,25 +11,6 @@
 function throwsNamed(fn, name) {
     try { fn(); } catch (e) { return e && e.name === name; }
     return false;
-}
-
-// ---- physics ------------------------------------------------------------------
-if (typeof Physics === 'object' && Physics.available !== false) {
-    const t0 = Date.now();
-    const w = Physics.createWorldHandle({ maxBodies: 1e12, contactBufferSize: 1e12 });
-    assert(w, 'a world asked for 1e12 bodies is created (clamped), not wrapped');
-    const w2 = Physics.createWorldHandle({ maxBodies: -5 });
-    assert(w2, 'a negative maxBodies is clamped to 1, not wrapped to 4e9');
-    assert(Date.now() - t0 < 20000, 'the clamped worlds were cheap to make');
-
-    Physics.destroyAll();
-    Physics.createWorld({ gravity: { x: 0, y: -9.8, z: 0 } });
-    assert(throwsNamed(() => Physics.createSoftBody({ cloth: { gridX: 100000, gridZ: 100000 } }),
-                       'RangeError'),
-           'a cloth past 2^20 vertices is a RangeError');
-    const cloth = Physics.createSoftBody({ cloth: { gridX: 4, gridZ: 4 } });
-    assert(cloth, 'a small cloth is still made');
-    Physics.destroyAll();
 }
 
 // ---- bro.math grid ----------------------------------------------------------------

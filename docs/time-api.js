@@ -17,9 +17,6 @@
  *       so it freezes exactly while paused); in headless it is the virtual
  *       clock and holds still between advanceTime() calls
  *     - CSS transitions and animations
- *     - physics stepping (fixed timestep preserved: pause/timescale change
- *       how much sim time accumulates per wall second, so scale 2 runs the
- *       sim at double speed with identical determinism)
  *     - scene-graph animations and AI agents (syncAgents/tickAnimations dt)
  *     - <iframe> sub-documents (timers + rAF; frozen entirely while paused).
  *       NOTE: the sub-document is governed by bro.time but cannot see it,
@@ -65,7 +62,7 @@
  * @example
  *   // Headless testing
  *   bro.time.scale = 0.5;
- *   advanceTime(100);        // scaled clock advances 50ms; timers/rAF/physics see 50ms
+ *   advanceTime(100);        // scaled clock advances 50ms; timers/rAF see 50ms
  *   bro.time.paused = true;
  *   advanceTime(1000);       // gameplay time does not move at all
  */
@@ -92,7 +89,7 @@ bro.time.paused;
 
 /**
  * Current scaled engine time in milliseconds (read-only).
- * This is the clock timers, rAF, transitions, and physics run on.
+ * This is the clock timers, rAF and transitions run on.
  * @readonly
  * @type {number}
  */

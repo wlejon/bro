@@ -192,26 +192,17 @@ set(BRO_BRONZE_HOST_SOURCES
     host_table_io_ext.cpp
 )
 
-# The physics and scene natives are bodies over src/physics and src/scene,
-# which a build without BRO_WITH_PHYSICS / BRO_WITH_3D does not configure at
-# all (src/CMakeLists.txt), so their headers — Jolt's, bromesh's — are not on
+# The dynamics and scene natives are bodies over src/dynamics and src/scene,
+# which a build without BRO_WITH_DYNAMICS / BRO_WITH_3D does not configure at
+# all (src/CMakeLists.txt), so their headers — Box3D's, bromesh's — are not on
 # the include path. The natives/*/native_*_register.cpp files carry no #if
-# of their own, so the list is conditioned here, the way host_physics_stub.cpp and
-# host_net_stub.cpp were before the natives moved. Without the flag nothing
-# registers (host_natives.h answers registerPhysicsNatives inline;
-# registerBroNatives skips the 3D families under #if BRO_WITH_3D), js/physics.js
-# and the 3D modules are not entered (dom_globals.cpp), and the namespaces are
-# the unavailable stubs host_bro_root.cpp installs.
-if(BRO_WITH_PHYSICS)
+# of their own, so the list is conditioned here. Without the flag nothing
+# registers (host_natives.h answers registerDynamicsNatives inline;
+# registerBroNatives skips the 3D families under #if BRO_WITH_3D), js/dynamics.js
+# and the 3D modules are not entered, and the namespaces are the unavailable
+# stubs host_bro_root.cpp installs.
+if(BRO_WITH_DYNAMICS)
     list(APPEND BRO_BRONZE_HOST_SOURCES
-        native_physics_core.cpp
-        native_physics_queries.cpp
-        native_physics_character.cpp
-        native_physics_softbody.cpp
-        native_physics_constraints.cpp
-        native_physics_vehicle.cpp
-        native_physics_ragdoll.cpp
-        natives/physics/native_physics_register.cpp
         native_dynamics.cpp
         natives/dynamics/native_dynamics_register.cpp
     )
@@ -275,7 +266,6 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/settings
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/dunder_bro
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/net
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/physics
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/dynamics
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/scene
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/terrain
@@ -696,7 +686,6 @@ else()
     bro_compile_js(vision_wildlife_bursts bro_vision_wildlife_bursts_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(net        bro_net_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(physics    bro_physics_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(dynamics   bro_dynamics_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(terrain    bro_terrain_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(tile_world bro_tile_world_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")

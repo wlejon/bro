@@ -87,7 +87,6 @@ add_library(bro_scene STATIC
     ai_world_ticker.cpp
     nodes/shape_node.cpp
     nodes/sprite_node.cpp
-    nodes/physics_node.cpp
     nodes/mesh_node.cpp
     nodes/shared_geometry.cpp
     nodes/skinned_mesh_node.cpp
@@ -165,10 +164,10 @@ add_library(bro_scene STATIC
 
 target_include_directories(bro_scene PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_scene PRIVATE ${VK_GEN_DIR})
-# bro_scene is only built when BRO_WITH_3D is on, and 3D forces PHYSICS + GAMEAI
-# on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
-# brogameagent are always present here, as is brokernel (3D forces KERNEL on).
-target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
+# bro_scene is only built when BRO_WITH_3D is on, and 3D forces GAMEAI
+# on (see the _bro_require chain in the top-level CMakeLists), so
+# brogameagent is always present here, as is brokernel (3D forces KERNEL on).
+target_link_libraries(bro_scene PUBLIC bro_canvas bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
 target_link_libraries(bro_scene PRIVATE brokernel bro_tilecache)
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)

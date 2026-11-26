@@ -439,8 +439,6 @@ public:
     AudioInference* existingAudioInference() const { return audioInference_.get(); }
     steam::SteamService* steamService();
     const steam::SteamService* steamService() const { return steamService_.get(); }
-    physics::PhysicsWorld* physicsWorld();
-    const physics::PhysicsWorld* physicsWorld() const;
     /// What this process costs and who holds it (engine_memory.cpp, `bro-ctl
     /// mem`): private/shared memory by kind of mapping, threads by name, the C
     /// heap, GPU memory, the JS heap, Skia's caches, the subsystems running.

@@ -1,6 +1,6 @@
 // The hand-registered SceneNode members (js/scene_extras.js
 // over native_scene_extras.cpp): the per-type accessors, the instanced-mesh
-// operations, syncToPhysics, and the scalar lookAt(x, y, z) form.
+// operations, and the scalar lookAt(x, y, z) form.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '128');
@@ -121,17 +121,6 @@ if (!scene) {
     assert(scatterNode.isScatter === true, 'setScatterSegments enters scatter mode');
     const tubeNode = scene.createInstancedMesh({ tube: { segments: [0, 0, 0, 0.2, 0, 2, 0, 0.1], sides: 8 } });
     assert(tubeNode.isTube === true, 'createInstancedMesh({tube}) enters tube mode');
-
-    // --- Physics node: autoSync / pixelsPerUnit / syncToPhysics --------------------
-    const pn = scene.createPhysicsNode({});
-    if (pn) {
-        pn.autoSync = false;
-        assert(pn.autoSync === false, 'autoSync round-trips');
-        pn.pixelsPerUnit = 50;
-        assert(near(pn.pixelsPerUnit, 50), 'pixelsPerUnit round-trips');
-        pn.syncToPhysics();   // no world attached: a no-op, must not throw
-    }
-    assert(typeof mesh.syncToPhysics === 'function', 'syncToPhysics is on every node');
 
     // A frame with every node kind above in it must still render.
     const shot = scene.captureFrame();

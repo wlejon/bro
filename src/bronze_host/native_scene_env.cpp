@@ -371,10 +371,6 @@ void bro_scene_SceneGraph_clear(void* self) {
     }
 }
 
-void bro_scene_SceneGraph_syncPhysics(void* self) {
-    auto* g = graphOf(self);
-    if (g) g->syncPhysics();
-}
 
 bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t origin_len,
                                   const double* direction, uint32_t direction_len) {

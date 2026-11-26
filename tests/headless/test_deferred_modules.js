@@ -39,9 +39,6 @@ assert(deferred('3d'), 'listing does not enter the 3D family');
 assert(typeof SceneGraph === 'function', 'SceneGraph is a class: ' + typeof SceneGraph);
 assert(!deferred('3d'), 'the read entered the 3D family: ' + modulesLine());
 assert(typeof SceneNode === 'function', 'SceneNode came with it');
-assert(typeof Physics === 'object' && typeof Physics.createWorld === 'function',
-       'Physics is the wrapper js/physics.js builds');
-assert(Physics.available === true, 'Physics is stamped available');
 assert(typeof Terrain === 'function' && typeof Tween === 'function', 'the rest of the family is there');
 assert(bro.scene && bro.scene.available === true, 'bro.scene is mounted and available');
 assert(typeof bro.lighting.LightNode === 'function', 'bro.lighting is mounted');

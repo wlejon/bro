@@ -74,7 +74,6 @@
 #include "runtime/value.h"
 
 namespace bro::engine { class Engine; }
-namespace bro::physics { class PhysicsWorld; }
 namespace bro::dynamics { class World; }
 
 namespace bro::bronze_host {
@@ -123,10 +122,10 @@ bool registerDunderBroNatives(std::string* error);
 inline bool registerMeshNatives(std::string*) { return true; }
 bool registerNetNatives(std::string* error);
 inline bool registerRiggingNatives(std::string*) { return true; }
-// The physics natives (native_physics_*.cpp, natives/physics/) are in the
-// library only with BRO_WITH_PHYSICS (CMakeLists.txt); without it there is
-// nothing to register and js/physics.js is not entered.
-#if BRO_WITH_PHYSICS
+// The dynamics natives are in the library only with BRO_WITH_DYNAMICS
+// (CMakeLists.txt); without it there is nothing to register and
+// js/dynamics.js is not entered.
+#if BRO_WITH_DYNAMICS
 // bro.dynamics (native_dynamics.cpp, natives/dynamics/): worlds of
 // dynamics::World, each the thread's that made it.
 bool registerDynamicsNatives(std::string* error);
@@ -136,19 +135,8 @@ dynamics::World* dynamicsWorld(int32_t id);
 // The world of an option holding a bro.dynamics World (`fromDynamics`, a ground follow's
 // `world`); -1 when it holds none.
 int32_t dynamicsWorldId(bronze::Value world);
-bool registerPhysicsNatives(std::string* error);
-// The PhysicsWorld behind a `Physics` value, else the engine's own
-// (native_physics_core.cpp).
-physics::PhysicsWorld* unwrapPhysicsWorld(bronze::Value v);
-// The engine's own world, the one a call reaches with no world of its own;
-// none on a thread that called physicsWithoutEngineWorld (a Worker's: the
-// engine's world steps on the engine thread).
-physics::PhysicsWorld* enginePhysicsWorld();
-void physicsWithoutEngineWorld();
 #else
-inline bool registerPhysicsNatives(std::string*) { return true; }
 inline bool registerDynamicsNatives(std::string*) { return true; }
-inline void physicsWithoutEngineWorld() {}
 #endif
 bool registerAnimationNatives(std::string* error);
 bool registerTerrainNatives(std::string* error);
@@ -217,8 +205,7 @@ void installBroRoots(engine::Engine& engine);
 // script runs.
 void installWorkerBroRoot();
 
-// `available: true` on every compiled-in feature namespace under `bro` (and
-// on `Physics`), after all wrapper modules have mounted; the compiled-out
+// `available: true` on every compiled-in feature namespace under `bro`, after all wrapper modules have mounted; the compiled-out
 // stubs already answer false. Called last from installWebHostGlobals and
 // installWorkerBroRoot.
 void markAvailableNamespaces();

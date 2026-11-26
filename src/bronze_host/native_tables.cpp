@@ -64,7 +64,6 @@ bool registerBroNativeTables(std::string* error) {
               registerMeshNatives(error) &&
               registerNetNatives(error) &&
               registerRiggingNatives(error) &&
-              registerPhysicsNatives(error) &&
               registerDynamicsNatives(error) &&
               registerLmNatives(error) &&
               registerRaveNatives(error) &&

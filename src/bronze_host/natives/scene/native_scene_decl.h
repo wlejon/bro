@@ -675,10 +675,6 @@ int32_t bro_scene_SceneGraph_cullStats_culledNodes(void);
 //   registered at __bro_native.scene.SceneGraph_clear
 void bro_scene_SceneGraph_clear(void* self);
 
-// bro.scene.SceneGraph.prototype.syncPhysics
-//   registered at __bro_native.scene.SceneGraph_syncPhysics
-void bro_scene_SceneGraph_syncPhysics(void* self);
-
 // bro.scene.SceneGraph.prototype.raycast: runs the operation and keeps its SceneRaycastResult result in a per-thread slot the SceneGraph_raycast_<member> reads answer from until the next call; false = null
 //   registered at __bro_native.scene.SceneGraph_raycast
 bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t origin_len, const double* direction, uint32_t direction_len);
@@ -784,11 +780,6 @@ const char* bro_scene_SceneNode_strokeColor_get(void* self);
 void bro_scene_SceneNode_strokeColor_set(void* self, const char* css);
 double bro_scene_SceneNode_strokeWidth_get(void* self);
 void bro_scene_SceneNode_strokeWidth_set(void* self, double v);
-bool bro_scene_SceneNode_autoSync_get(void* self);
-void bro_scene_SceneNode_autoSync_set(void* self, bool v);
-double bro_scene_SceneNode_pixelsPerUnit_get(void* self);
-void bro_scene_SceneNode_pixelsPerUnit_set(void* self, double v);
-void bro_scene_SceneNode_syncToPhysics(void* self);
 const char* bro_scene_SceneNode_billboard_get(void* self);
 void bro_scene_SceneNode_billboard_set(void* self, const char* mode);
 int32_t bro_scene_SceneNode_frameIndex_get(void* self);
@@ -808,7 +799,6 @@ double bro_scene_SceneNode_cornerRadius_get(void* self);
 void bro_scene_SceneNode_cornerRadius_set(void* self, double v);
 double bro_scene_SceneNode_pxPerUnit_get(void* self);
 void bro_scene_SceneNode_pxPerUnit_set(void* self, double v);
-double bro_scene_SceneNode_bodyId_get(void* self);
 int32_t bro_scene_SceneNode_atlasCols_get(void* self);
 int32_t bro_scene_SceneNode_atlasRows_get(void* self);
 bool bro_scene_SceneNode_staticBatch_get(void* self);
@@ -837,7 +827,6 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
 void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createPhysicsNode(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createParticles3D(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createGaussianSplat(void* self, const char* jsonOpts);
 const char* bro_scene_SceneNode_type_get(void* self);

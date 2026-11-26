@@ -162,6 +162,5 @@ for (const ns of GATED) {
         assert(Object.keys(o).length > 1, 'bro.' + ns + ' with available:true carries members');
     }
 }
-assert(Physics.available === true || Physics.available === false, 'Physics.available is a boolean');
 
 console.log('web globals extras OK');

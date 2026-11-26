@@ -10,7 +10,6 @@
 #include "scene/nodes/instanced_mesh_node.h"
 #include "scene/nodes/light_node.h"
 #include "scene/nodes/camera_node.h"
-#include "scene/nodes/physics_node.h"
 #include "scene/nodes/shape_node.h"
 #include "scene/nodes/sprite_node.h"
 #include "scene/nodes/html_node.h"

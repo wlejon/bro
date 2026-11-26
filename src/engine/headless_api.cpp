@@ -8,9 +8,6 @@
 #include "engine/navmesh_subsystem.h"
 #include "engine/scene_audio_sync.h"
 #include "engine/terminal_layers.h"
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #include "bronze_host/eval.h"
 #include "bronze_host/host_window_open.h"
 #include "audio_inference/audio_inference.h"
@@ -333,26 +330,6 @@ void Engine::advanceTime(double ms) {
 
         if (!timePaused_) tickIframes(engineNowMs_);
         if (!timePaused_) tickWindowHosts(engineNowMs_);
-
-#if BRO_WITH_PHYSICS
-        if (physicsWorld_) {
-            double stepMs = physicsWorld_->timeStep() * 1000.0;
-            physicsAccumMs_ += scaledStep;
-            int safety = 16;
-            while (physicsAccumMs_ + 0.5 >= stepMs && safety-- > 0) {
-                physicsAccumMs_ -= stepMs;
-                physicsWorld_->stepInline();
-            }
-            physicsWorld_->setRenderAlpha(
-                stepMs > 0.0 ? static_cast<float>(physicsAccumMs_ / stepMs) : 1.0f);
-        }
-#endif
-
-#if BRO_WITH_3D
-#if BRO_WITH_PHYSICS
-        for (auto& sg : sceneGraphs_) sg.graph->syncPhysics();
-#endif
-#endif
 
         bro::engine::pumpNavMeshObstacles(static_cast<float>(scaledStep * 0.001));
 

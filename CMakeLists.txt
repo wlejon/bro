@@ -182,10 +182,10 @@ endif()
 # seed the per-feature defaults; individual -DBRO_WITH_* flags always override.
 # See docs/build-options.md for the full rationale and the tier layout.
 #
-# The default is "app": full renderer (3D + physics + audio + core game-AI) plus
+# The default is "app": full renderer (3D + dynamics + audio + core game-AI) plus
 # net/video/steam, but no AI tower (no brotensor/CUDA). "full" adds the AI tower;
 # "minimal" is the 2D/canvas/WebGL + audio floor — it links, runs, and renders
-# with no vcpkg, no Jolt/bromesh/brogameagent, and no AI tower (the renderer and
+# with no vcpkg, no Box3D/bromesh/brogameagent, and no AI tower (the renderer and
 # service subsystems are gated behind their BRO_WITH_* flags at the engine seam).
 set(BRO_PROFILE "app" CACHE STRING "Feature profile: minimal | app | desktop | full")
 set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app desktop full)
@@ -222,7 +222,7 @@ set(_d_audio ON)
 
 # Tier 1 — renderer feature groups (all brotensor-free, all vcpkg-free).
 option(BRO_WITH_3D       "3D scene graph (bromesh, terrain, tile, gizmo)"     ${_d_render})
-option(BRO_WITH_PHYSICS  "Jolt rigid-body physics"                           ${_d_render})
+option(BRO_WITH_DYNAMICS "bro.dynamics: rigid bodies over Box3D"             ${_d_render})
 option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_d_audio})
 option(BRO_WITH_GAMEAI   "brogameagent core (navmesh/pathfinding/MCTS)"      ${_d_render})
 option(BRO_WITH_FLORA    "broflora ecosystem simulation"                     ${_d_render})
@@ -397,12 +397,11 @@ _bro_require(BRO_WITH_VISION       BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_GAMEAI_NN    BRO_WITH_GAMEAI)
 _bro_require(BRO_WITH_GAMEAI_NN    BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_FLORA        BRO_WITH_3D)
-# The 3D scene graph embeds physics + game-AI by value: scene_graph.h includes
-# physics_node.h / agent_binding.h / ai_world_ticker.h and bro_scene hard-links
-# bro_physics + brogameagent. So enabling 3D forces both on (rather than
-# threading #if guards through the whole scene graph). Runs after FLORA→3D so
-# the FLORA→3D→{PHYSICS,GAMEAI} chain fully resolves in one pass.
-_bro_require(BRO_WITH_3D           BRO_WITH_PHYSICS)
+# The 3D scene graph embeds game-AI by value: scene_graph.h includes
+# agent_binding.h / ai_world_ticker.h and bro_scene hard-links brogameagent.
+# So enabling 3D forces it on (rather than threading #if guards through the
+# whole scene graph). Runs after FLORA→3D so the FLORA→3D→GAMEAI chain fully
+# resolves in one pass.
 _bro_require(BRO_WITH_3D           BRO_WITH_GAMEAI)
 # The scene's shader hooks are brokernel modules (scene_vk_kernel_hook.cpp).
 _bro_require(BRO_WITH_3D           BRO_WITH_KERNEL)
@@ -493,7 +492,7 @@ set(BROIMAGE_WITH_BROKERNEL  ${BRO_WITH_KERNEL} CACHE BOOL "Enable brokernel fil
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
-    3D PHYSICS AUDIO GAMEAI FLORA KERNEL
+    3D DYNAMICS AUDIO GAMEAI FLORA KERNEL
     NET VIDEO AVIF WEBP STEAM TERMINAL CONF THEMES KEYS SEARCH APPS VFS THUMB SEAT CRED SYS DISPLAYS PORTAL COMPOSITOR WL A11Y
     DMABUF DECOR CLIP MPRIS PULSE IME REMOTE
     TENSOR TENSOR_CUDA TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN

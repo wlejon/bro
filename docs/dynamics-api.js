@@ -12,10 +12,7 @@
  * Bodies and joints are small integers, reused once removed. Vectors are
  * arrays ([x, y, z]); a rotation is a quaternion [x, y, z, w]. Units are SI.
  *
- * `bro.dynamics.available` is false in a build without BRO_WITH_PHYSICS.
- *
- * This is not `Physics` (docs/physics-api.js, Jolt): the two do not see each
- * other's bodies.
+ * `bro.dynamics.available` is false in a build without BRO_WITH_DYNAMICS.
  */
 
 /**

@@ -20,9 +20,6 @@
 #if BRO_WITH_NET
 #include "net/net_service.h"
 #endif
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #include "audio_inference/audio_inference.h"
 #include "platform/desktop_platform.h"
 #include "platform/event_loop.h"
@@ -168,37 +165,10 @@ void Engine::run() {
 
             for (auto& pump : framePumps_) pump();
 
-#if BRO_WITH_PHYSICS
-            if (physicsWorld_) {
-                physicsWorld_->consumeStep();
-                if (physicsWorld_->isIdle()) {
-                    if (!physicsWorld_->hasActiveBodies()) {
-                        lastPhysicsTimeMs_ = util::currentTimeMs();
-                        physicsAccumMs_ = 0.0;
-                    } else {
-                        double stepMs = physicsWorld_->timeStep() * 1000.0;
-                        double nowPhys = util::currentTimeMs();
-                        if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-                        physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) *
-                                           effectiveTimeScale();
-                        lastPhysicsTimeMs_ = nowPhys;
-                        if (physicsAccumMs_ >= stepMs) {
-                            physicsAccumMs_ -= stepMs;
-                            if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
-                            physicsWorld_->signalStep();
-                        }
-                    }
-                }
-            }
-#endif
-
             if (!running_ || serverStopRequested_ || bro::util::interrupted()) break;
 
             double elapsed = util::currentTimeMs() - tickStart;
             bool fixedTick = serverTickRateExplicit_;
-#if BRO_WITH_PHYSICS
-            if (physicsWorld_ && physicsWorld_->hasActiveBodies()) fixedTick = true;
-#endif
             if (fixedTick) {
                 double tickIntervalMs = 1000.0 / serverTickRate_;
                 double sleepMs = tickIntervalMs - elapsed;
@@ -543,31 +513,10 @@ void Engine::windowedFrame(bool modal) {
             tPhase = t;
         }
 
-#if BRO_WITH_PHYSICS
-        if (physicsWorld_) {
-            physicsWorld_->consumeStep();
-        }
-#endif
-
 #if BRO_WITH_3D
         pruneDetachedSceneGraphs();
 #endif
         pruneDeadWebGLContexts();
-
-#if BRO_WITH_3D
-#if BRO_WITH_PHYSICS
-        if (physicsWorld_ && physicsWorld_->interpolation()) {
-            double stepMs = physicsWorld_->timeStep() * 1000.0;
-            double pendingMs = physicsAccumMs_;
-            if (lastPhysicsTimeMs_ > 0.0)
-                pendingMs += (util::currentTimeMs() - lastPhysicsTimeMs_) *
-                             effectiveTimeScale();
-            physicsWorld_->setRenderAlpha(
-                stepMs > 0.0 ? static_cast<float>(pendingMs / stepMs) : 1.0f);
-        }
-#endif
-        for (auto& sg : sceneGraphs_) sg.graph->syncPhysics();
-#endif
 
         {
             double nowMs = engineNowMs_;
@@ -627,26 +576,6 @@ void Engine::windowedFrame(bool modal) {
             }
             sg.graph->setDeviceScale(deviceScale_.render);
             sg.graph->render();
-        }
-#endif
-
-#if BRO_WITH_PHYSICS
-        if (physicsWorld_ && physicsWorld_->isIdle()) {
-            if (!physicsWorld_->hasActiveBodies()) {
-                lastPhysicsTimeMs_ = util::currentTimeMs();
-                physicsAccumMs_ = 0.0;
-            } else {
-                double stepMs = physicsWorld_->timeStep() * 1000.0;
-                double nowPhys = util::currentTimeMs();
-                if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-                physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) * effectiveTimeScale();
-                lastPhysicsTimeMs_ = nowPhys;
-                if (physicsAccumMs_ >= stepMs) {
-                    physicsAccumMs_ -= stepMs;
-                    if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
-                    physicsWorld_->signalStep();
-                }
-            }
         }
 #endif
 

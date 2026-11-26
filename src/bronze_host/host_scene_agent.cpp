@@ -6,8 +6,9 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/agent_binding.h"
-#include "physics/physics_world.h"
+#if BRO_WITH_DYNAMICS
 #include "dynamics/world.h"
+#endif
 #include "bronze_host/host_natives.h"
 
 #include <brogameagent/api.h>
@@ -478,9 +479,13 @@ void installSceneNodeAgent(ObjectBuilder& b) {
                     binding->setGroundFollow([tc, rayStart, rayLength](float x, float z, float& outY) {
                         return terrainSampleHeight(tc, x, z, rayStart, rayLength, outY);
                     });
-                } else if (mode == "raycast" && dynamicsWorldId(ev::getProperty(gf.get(), "world")) >= 0) {
+                } else if (mode == "raycast") {
+#if BRO_WITH_DYNAMICS
                     // Down a ray through a bro.dynamics world, onto the layers of `mask`.
                     const int32_t worldId = dynamicsWorldId(ev::getProperty(gf.get(), "world"));
+                    if (worldId < 0) {
+                        return ev::throwTypeError("attachAgent: groundFollow mode 'raycast' requires `world`, a bro.dynamics World");
+                    }
                     uint32_t mask = 0xffffffffu;
                     Value mv = ev::getProperty(gf.get(), "mask");
                     if (ev::isNumber(mv)) mask = static_cast<uint32_t>(static_cast<int64_t>(ev::toDouble(mv)));
@@ -494,48 +499,8 @@ void installSceneNodeAgent(ObjectBuilder& b) {
                         outY = hit.point[1];
                         return true;
                     });
-                } else if (mode == "raycast") {
-#if BRO_WITH_PHYSICS
-                    auto* pw = g->physicsWorld();
-                    if (!pw) {
-                        return ev::throwTypeError("attachAgent: groundFollow mode 'raycast' requires an active physics world");
-                    }
-                    physics::QueryFilter filter;
-                    Value lv = ev::getProperty(gf.get(), "layers");
-                    if (ev::isObject(lv)) {
-                        ev::Persistent lvr(lv);
-                        Value lenV = ev::getProperty(lvr.get(), "length");
-                        if (ev::isNumber(lenV)) {
-                            uint32_t mask = 0;
-                            uint32_t n = satCast<uint32_t>(ev::toDouble(lenV));
-                            for (uint32_t i = 0; i < n; ++i) {
-                                Value el = ev::getElement(lvr.get(), i);
-                                int32_t idx = -1;
-                                if (ev::isString(el)) {
-                                    idx = pw->layerIndex(ev::toUtf8(el));
-                                } else if (ev::isNumber(el)) {
-                                    idx = satCast<int32_t>(ev::toDouble(el));
-                                }
-                                if (idx >= 0 && idx < 32) mask |= (1u << idx);
-                            }
-                            filter.layerMask = mask;
-                        }
-                    }
-                    scene::SceneGraph* graph = g;
-                    binding->setGroundFollow([graph, filter, rayStart, rayLength](float x, float z, float& outY) {
-                        auto* world = graph->physicsWorld();
-                        if (!world || !world->isIdle()) return false;
-                        physics::RayHit hit;
-                        if (!world->raycastClosest(JPH::RVec3(x, rayStart, z),
-                                                   JPH::Vec3(0, -1, 0),
-                                                   hit, rayLength, filter)) {
-                            return false;
-                        }
-                        outY = hit.position.GetY();
-                        return true;
-                    });
 #else
-                    return ev::throwTypeError("attachAgent: groundFollow mode 'raycast' requires a physics-enabled build");
+                    return ev::throwTypeError("attachAgent: groundFollow mode 'raycast' requires a build with BRO_WITH_DYNAMICS");
 #endif
                 } else {
                     return ev::throwTypeError("attachAgent: groundFollow.mode must be 'terrain' or 'raycast'");

@@ -11,7 +11,6 @@
 #include "scene/nodes/mesh_node.h"
 #include "scene/nodes/particle_node.h"
 #include "scene/nodes/particles3d_node.h"
-#include "scene/nodes/physics_node.h"
 #include "scene/nodes/reflection_probe_node.h"
 #include "scene/nodes/interior_volume_node.h"
 #include "scene/nodes/voxel_world_node.h"
@@ -19,7 +18,6 @@
 #include "scene/nodes/skinned_mesh_node.h"
 #include "scene/nodes/sprite_node.h"
 #include "canvas/canvas_scene.h"
-#include "physics/physics_world.h"
 #include "render/skia_backend.h"
 #include "dom/document.h"
 #include "util/log.h"
@@ -95,13 +93,6 @@ ShapeNode* SceneGraph::createShape(const std::string& name) {
 
 SpriteNode* SceneGraph::createSprite(const std::string& name) {
     auto node = std::make_unique<SpriteNode>(name);
-    auto* ptr = node.get();
-    nodes_[ptr->id()] = std::move(node);
-    return ptr;
-}
-
-PhysicsNode* SceneGraph::createPhysicsNode(const std::string& name) {
-    auto node = std::make_unique<PhysicsNode>(name);
     auto* ptr = node.get();
     nodes_[ptr->id()] = std::move(node);
     return ptr;
@@ -532,18 +523,6 @@ void SceneGraph::setCameraPosition(float x, float y) {
 
 void SceneGraph::setCameraZoom(float z) {
     cameraZoom_ = z;
-}
-
-void SceneGraph::syncPhysics() {
-    if (!physicsWorld_) return;
-    for (auto& [id, node] : nodes_) {
-        if (node->type() == SceneNode::Type::Physics) {
-            auto* pn = static_cast<PhysicsNode*>(node.get());
-            if (pn->autoSync()) {
-                pn->syncFromPhysics(physicsWorld_);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

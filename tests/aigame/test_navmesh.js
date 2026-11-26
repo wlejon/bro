@@ -1,11 +1,11 @@
 // Polygon navmesh — bro.ai.game.bakeNavMesh / loadNavMesh (Recast/Detour via
 // brogameagent::NavMesh) plus node.navigateTo agent routing. Exercises raw
-// triangle-soup bakes, fromPhysics static-geometry collection
-// (PhysicsWorld::collectStaticTriangles), fromTerrain height sampling,
+// triangle-soup bakes, fromDynamics fixed-geometry collection
+// (dynamics::World::fixedTriangles), fromTerrain height sampling,
 // multi-level paths (the NavGrid-impossible case), save/load round-trips,
 // query methods, and AgentBinding navmesh route-following composed with ORCA
 // avoidance. (AI game API, AI agent integration,
-// src/scene/agent_binding.cpp, src/physics/physics_world.cpp)
+// src/scene/agent_binding.cpp, src/dynamics/world.cpp)
 
 const G = bro.ai.game;
 if (G.navMeshAvailable !== true) {
@@ -171,35 +171,23 @@ function runNavMeshTests() {
     }
 
     // =========================================================================
-    // fromPhysics — static mesh-shape + primitive box block; sensors don't
+    // fromDynamics — a fixed mesh and a fixed box block; a masked-out layer doesn't
     // =========================================================================
     {
-        Physics.destroyAll();
-        // Floor slab (primitive box → Jolt 12-tri tessellation, top face walkable).
-        Physics.createBody({
-            shape: 'box', halfExtents: { x: 12, y: 0.5, z: 12 },
-            position: { x: 0, y: -0.5, z: 0 }, static: true,
-        });
-        // Mesh-shape obstacle: a real triangle box astride the route.
+        const dyn = bro.dynamics.createWorld();
+        // Floor slab (a box's 12 triangles, top face walkable).
+        dyn.addBox({ half: [12, 0.5, 12], position: [0, -0.5, 0], mass: 0 });
+        // Mesh obstacle: a real triangle box astride the route.
         const mv = [], mi = [];
         pushBox(mv, mi, [0, 1, 0], [1.5, 1, 1.5]);
-        Physics.createBody({
-            shape: 'mesh', positions: mv, indices: mi,
-            position: { x: 0, y: 0, z: 0 }, static: true,
-        });
-        // Primitive box obstacle offset in z.
-        Physics.createBody({
-            shape: 'box', halfExtents: { x: 1.5, y: 1, z: 1.5 },
-            position: { x: 0, y: 1, z: 6 }, static: true,
-        });
-        // Static sensor — must NOT block.
-        Physics.createBody({
-            shape: 'box', halfExtents: { x: 1.5, y: 1, z: 1.5 },
-            position: { x: 0, y: 1, z: -6 }, static: true, sensor: true,
-        });
+        dyn.addMesh({ positions: mv, indices: mi });
+        // Box obstacle offset in z.
+        dyn.addBox({ half: [1.5, 1, 1.5], position: [0, 1, 6], mass: 0 });
+        // A fixed box on a layer the bake does not read: must NOT block.
+        dyn.addBox({ half: [1.5, 1, 1.5], position: [0, 1, -6], mass: 0, layers: 2 });
 
-        const mesh = G.bakeNavMesh({ fromPhysics: Physics, agentRadius: 0.4 });
-        assert(mesh.valid, 'fromPhysics bake valid');
+        const mesh = G.bakeNavMesh({ fromDynamics: dyn, dynamicsMask: 1, agentRadius: 0.4 });
+        assert(mesh.valid, 'fromDynamics bake valid');
 
         // Route past the mesh-shape obstacle detours.
         const p1 = mesh.findPath({ x: -9, y: 0, z: 0 }, { x: 9, y: 0, z: 0 });
@@ -215,11 +203,11 @@ function runNavMeshTests() {
         for (let i = 0; i < p2.length; i += 3) if (Math.abs(p2[i + 2] - 6) > 1.6) detoured = true;
         assert(detoured, 'primitive box forces a detour');
 
-        // Sensor does not block: straight walkability ray across its footprint.
+        // The other layer does not block: straight walkability ray across its footprint.
         const ray = mesh.raycast({ x: -9, y: 0, z: -6 }, { x: 9, y: 0, z: -6 });
-        assert(!ray.hit, 'static sensor is not baked as an obstacle');
+        assert(!ray.hit, 'a body off the mask is not baked as an obstacle');
 
-        Physics.destroyAll();
+        dyn.destroy();
     }
 
     // =========================================================================

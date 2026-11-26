@@ -208,7 +208,6 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_cullStats_renderedNodes", BRO_NATIVE_FN(bro_scene_SceneGraph_cullStats_renderedNodes), "i32", {}, error) &&
         fn("__bro_native.scene.SceneGraph_cullStats_culledNodes", BRO_NATIVE_FN(bro_scene_SceneGraph_cullStats_culledNodes), "i32", {}, error) &&
         fn("__bro_native.scene.SceneGraph_clear", BRO_NATIVE_FN(bro_scene_SceneGraph_clear), "void", {"__bro_native.scene.SceneGraph"}, error) &&
-        fn("__bro_native.scene.SceneGraph_syncPhysics", BRO_NATIVE_FN(bro_scene_SceneGraph_syncPhysics), "void", {"__bro_native.scene.SceneGraph"}, error) &&
         fn("__bro_native.scene.SceneGraph_raycast", BRO_NATIVE_FN(bro_scene_SceneGraph_raycast), "bool", {"__bro_native.scene.SceneGraph", "f64[]", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneGraph_raycast_node", BRO_NATIVE_FN(bro_scene_SceneGraph_raycast_node), "__bro_native.scene.SceneNode", {}, error) &&
         fn("__bro_native.scene.SceneGraph_raycast_point", BRO_NATIVE_FN(bro_scene_SceneGraph_raycast_point), "f64[]", {}, error) &&
@@ -323,11 +322,6 @@ bool registerSceneExtraNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_strokeColor_set", BRO_NATIVE_FN(bro_scene_SceneNode_strokeColor_set), "void", {N, "str"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_strokeWidth_get", BRO_NATIVE_FN(bro_scene_SceneNode_strokeWidth_get), "f64", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_strokeWidth_set", BRO_NATIVE_FN(bro_scene_SceneNode_strokeWidth_set), "void", {N, "f64"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_autoSync_get", BRO_NATIVE_FN(bro_scene_SceneNode_autoSync_get), "bool", {N}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_autoSync_set", BRO_NATIVE_FN(bro_scene_SceneNode_autoSync_set), "void", {N, "bool"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_pixelsPerUnit_get", BRO_NATIVE_FN(bro_scene_SceneNode_pixelsPerUnit_get), "f64", {N}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_pixelsPerUnit_set", BRO_NATIVE_FN(bro_scene_SceneNode_pixelsPerUnit_set), "void", {N, "f64"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_syncToPhysics", BRO_NATIVE_FN(bro_scene_SceneNode_syncToPhysics), "void", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_billboard_get", BRO_NATIVE_FN(bro_scene_SceneNode_billboard_get), "str", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_billboard_set", BRO_NATIVE_FN(bro_scene_SceneNode_billboard_set), "void", {N, "str"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_frameIndex_get", BRO_NATIVE_FN(bro_scene_SceneNode_frameIndex_get), "i32", {N}, error) &&
@@ -347,7 +341,6 @@ bool registerSceneExtraNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneNode_cornerRadius_set", BRO_NATIVE_FN(bro_scene_SceneNode_cornerRadius_set), "void", {N, "f64"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_pxPerUnit_get", BRO_NATIVE_FN(bro_scene_SceneNode_pxPerUnit_get), "f64", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_pxPerUnit_set", BRO_NATIVE_FN(bro_scene_SceneNode_pxPerUnit_set), "void", {N, "f64"}, error) &&
-           natives::fn("__bro_native.scene.SceneNode_bodyId_get", BRO_NATIVE_FN(bro_scene_SceneNode_bodyId_get), "f64", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_atlasCols_get", BRO_NATIVE_FN(bro_scene_SceneNode_atlasCols_get), "i32", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_atlasRows_get", BRO_NATIVE_FN(bro_scene_SceneNode_atlasRows_get), "i32", {N}, error) &&
            natives::fn("__bro_native.scene.SceneNode_staticBatch_get", BRO_NATIVE_FN(bro_scene_SceneNode_staticBatch_get), "bool", {N}, error) &&
@@ -380,7 +373,6 @@ bool registerSceneNatives(std::string* error) {
            natives::fn("__bro_native.scene.SceneGraph_createInstancedMesh", BRO_NATIVE_FN(bro_scene_SceneGraph_createInstancedMesh), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createShape", BRO_NATIVE_FN(bro_scene_SceneGraph_createShape), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createSprite", BRO_NATIVE_FN(bro_scene_SceneGraph_createSprite), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
-           natives::fn("__bro_native.scene.SceneGraph_createPhysicsNode", BRO_NATIVE_FN(bro_scene_SceneGraph_createPhysicsNode), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createParticles3D", BRO_NATIVE_FN(bro_scene_SceneGraph_createParticles3D), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
            natives::fn("__bro_native.scene.SceneGraph_createGaussianSplat", BRO_NATIVE_FN(bro_scene_SceneGraph_createGaussianSplat), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
            natives::fn("__bro_native.scene.SceneNode_type_get", BRO_NATIVE_FN(bro_scene_SceneNode_type_get), "str", {"__bro_native.scene.SceneNode"}, error) &&

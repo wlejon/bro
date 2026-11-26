@@ -531,9 +531,6 @@ private:
     uint64_t nextPendingWorkSource_ = 1;
     std::vector<std::function<void(double)>> frameCallbacks_;
     void fireFrameCallbacks(double dtMs);
-#if BRO_WITH_PHYSICS
-    std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
-#endif
 #if BRO_WITH_NET
     std::unique_ptr<net::NetService> netService_;
 #endif
@@ -545,8 +542,6 @@ private:
     void pruneDetachedSceneGraphs();
     void clearSceneGraphs();
 #endif
-    double physicsAccumMs_ = 0.0;
-    double lastPhysicsTimeMs_ = 0.0;
     double lastFrameTimeMs_ = 0.0;
 
     double timeScale_ = 1.0;

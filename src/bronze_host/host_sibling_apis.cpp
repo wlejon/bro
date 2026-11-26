@@ -55,9 +55,8 @@
 #include <bromesh/api.h>
 #include "bronze_host/native_scene_internal.h"
 #endif
-#if BRO_WITH_PHYSICS
+#if BRO_WITH_DYNAMICS
 #include "dynamics/world.h"
-#include "physics/physics_world.h"
 #endif
 #if BRO_WITH_CONF
 #include <broconf/api.h>
@@ -146,34 +145,7 @@ namespace {
 
 #if BRO_WITH_GAMEAI
 
-#if BRO_WITH_PHYSICS
-// The `physicsLayers` option of bakeNavMesh: names or indices into a bit
-// mask, everything when absent.
-uint32_t physicsLayerMask(bronze::Value rootVal, physics::PhysicsWorld* world) {
-    uint32_t layerMask = 0xffffffffu;
-    bronze::Value lv = bronze::embed::getProperty(rootVal, "physicsLayers");
-    if (!bronze::embed::isObject(lv)) return layerMask;
-    bronze::embed::Persistent lvRoot(lv);
-    bronze::Value lenV = bronze::embed::getProperty(lvRoot.get(), "length");
-    if (!bronze::embed::isNumber(lenV)) return layerMask;
-    uint32_t mask = 0;
-    uint32_t n = static_cast<uint32_t>(bronze::embed::toDouble(lenV));
-    for (uint32_t i = 0; i < n; i++) {
-        bronze::Value el = bronze::embed::getElement(lvRoot.get(), i);
-        int32_t idx = -1;
-        if (bronze::embed::isString(el)) {
-            std::string s = bronze::embed::toUtf8(el);
-            idx = world->layerIndex(s);
-        } else if (bronze::embed::isNumber(el)) {
-            idx = static_cast<int32_t>(bronze::embed::toDouble(el));
-        }
-        if (idx >= 0 && idx < 32) mask |= (1u << idx);
-    }
-    return mask;
-}
-#endif
-
-#if BRO_WITH_PHYSICS
+#if BRO_WITH_DYNAMICS
 // A bake's `fromDynamics` (a bro.dynamics World) and `dynamicsMask` (the layers of its
 // fixed bodies to read, all when absent).
 dynamics::World* bakeWorld(bronze::Value rootVal, uint32_t& mask) {
@@ -188,20 +160,12 @@ dynamics::World* bakeWorld(bronze::Value rootVal, uint32_t& mask) {
 
 bool collectNavGeometry(bronze::Value rootVal, std::vector<float>& xyz,
                         std::vector<uint32_t>& indices, std::string& err) {
-#if BRO_WITH_PHYSICS
+#if BRO_WITH_DYNAMICS
     {
         uint32_t mask = 0;
         if (dynamics::World* world = bakeWorld(rootVal, mask)) world->fixedTriangles(mask, xyz, indices);
     }
 #endif
-    bronze::Value fromPhys = bronze::embed::getProperty(rootVal, "fromPhysics");
-    if (!bronze::embed::isUndefined(fromPhys) && !bronze::embed::isNull(fromPhys) &&
-        !(bronze::embed::isBool(fromPhys) && !bronze::embed::toBool(fromPhys))) {
-#if BRO_WITH_PHYSICS
-        physics::PhysicsWorld* world = unwrapPhysicsWorld(fromPhys);
-        if (world) world->collectStaticTriangles(xyz, indices, physicsLayerMask(rootVal, world));
-#endif
-    }
 
     bronze::Value fromTerrainV = bronze::embed::getProperty(rootVal, "fromTerrain");
     if (bronze::embed::isUndefined(fromTerrainV) || bronze::embed::isNull(fromTerrainV)) return true;
@@ -281,7 +245,7 @@ bool collectNavGeometry(bronze::Value rootVal, std::vector<float>& xyz,
 
 bool collectNavObstacles(bronze::Value rootVal, float minX, float maxX, float minZ, float maxZ,
                          std::vector<brogameagent::AABB>& outBoxes, std::string&) {
-#if BRO_WITH_PHYSICS
+#if BRO_WITH_DYNAMICS
     {
         uint32_t mask = 0;
         if (dynamics::World* dyn = bakeWorld(rootVal, mask)) {
@@ -297,35 +261,7 @@ bool collectNavObstacles(bronze::Value rootVal, float minX, float maxX, float mi
                 outBoxes.push_back(brogameagent::AABB{0.5f * (b.min[0] + b.max[0]), 0.5f * (b.min[2] + b.max[2]),
                                                       0.5f * (b.max[0] - b.min[0]), 0.5f * (b.max[2] - b.min[2])});
             }
-            return true;
         }
-    }
-    bronze::Value fromPhys = bronze::embed::getProperty(rootVal, "fromPhysics");
-    if (bronze::embed::isUndefined(fromPhys) || bronze::embed::isNull(fromPhys) ||
-        (bronze::embed::isBool(fromPhys) && !bronze::embed::toBool(fromPhys))) return true;
-    physics::PhysicsWorld* world = unwrapPhysicsWorld(fromPhys);
-    if (!world) return true;
-    uint32_t layerMask = physicsLayerMask(rootVal, world);
-    float bandMinY = -1e9f;
-    float bandMaxY = 1e9f;
-    bronze::Value minyV = bronze::embed::getProperty(rootVal, "physicsMinY");
-    if (bronze::embed::isNumber(minyV)) bandMinY = static_cast<float>(bronze::embed::toDouble(minyV));
-    bronze::Value maxyV = bronze::embed::getProperty(rootVal, "physicsMaxY");
-    if (bronze::embed::isNumber(maxyV)) bandMaxY = static_cast<float>(bronze::embed::toDouble(maxyV));
-
-    for (const auto& b : world->collectStaticBodies()) {
-        if (b.isSensor) continue;
-        if (b.layer >= 0 && b.layer < 32 && !(layerMask & (1u << b.layer))) continue;
-        if (b.max.GetY() < bandMinY || b.min.GetY() > bandMaxY) continue;
-        if (b.min.GetX() <= minX && b.max.GetX() >= maxX &&
-            b.min.GetZ() <= minZ && b.max.GetZ() >= maxZ) continue;
-        brogameagent::AABB box{
-            0.5f * (b.min.GetX() + b.max.GetX()),
-            0.5f * (b.min.GetZ() + b.max.GetZ()),
-            0.5f * (b.max.GetX() - b.min.GetX()),
-            0.5f * (b.max.GetZ() - b.min.GetZ()),
-        };
-        outBoxes.push_back(box);
     }
 #else
     (void)rootVal; (void)minX; (void)maxX; (void)minZ; (void)maxZ; (void)outBoxes;

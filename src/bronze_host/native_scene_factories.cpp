@@ -3,10 +3,9 @@
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_access.h"
 #include "bronze_host/host_natives.h"
-#include "bronze_host/native_physics_internal.h"
+#include "bronze_host/host_values.h"
 #include "natives/scene/native_scene_decl.h"
 #include "scene/nodes/particles3d_node.h"
-#include "scene/nodes/physics_node.h"
 #include "scene/animation_player.h"
 #include "util/log.h"
 
@@ -656,43 +655,6 @@ void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts) {
             LOG_WARN("SceneGraph.createSprite: failed to parse jsonOpts: %s", e.what());
         } catch (...) {
             LOG_WARN("SceneGraph.createSprite: unknown exception while parsing jsonOpts");
-        }
-    }
-    g->root()->addChild(node);
-    return wrapNode(node, g);
-}
-
-void* bro_scene_SceneGraph_createPhysicsNode(void* self, const char* jsonOpts) {
-    auto* g = graphOf(self);
-    if (!g) return nullptr;
-    auto* node = g->createPhysicsNode();
-    if (!node) return nullptr;
-    if (jsonOpts && jsonOpts[0]) {
-        try {
-            auto j = nlohmann::json::parse(jsonOpts);
-            if (j.contains("name") && j["name"].is_string()) {
-                node->setName(j["name"].get<std::string>());
-            }
-            if (j.contains("autoSync") && j["autoSync"].is_boolean()) {
-                node->setAutoSync(j["autoSync"].get<bool>());
-            }
-            if (j.contains("pixelsPerUnit") && j["pixelsPerUnit"].is_number()) {
-                node->setPixelsPerUnit(j["pixelsPerUnit"].get<float>());
-            } else if (j.contains("pixelsPerMeter") && j["pixelsPerMeter"].is_number()) {
-                node->setPixelsPerUnit(j["pixelsPerMeter"].get<float>());
-            }
-            // `body` is the JS body tag Physics.createBody returns; `bodyId`
-            // is the raw Jolt id, kept for callers that already hold one.
-            if (j.contains("body") && j["body"].is_number_integer()) {
-                JPH::BodyID id = getActiveWorld()->bodyIdForTag(j["body"].get<int32_t>());
-                if (!id.IsInvalid()) node->setBody(id);
-            } else if (j.contains("bodyId") && j["bodyId"].is_number_unsigned()) {
-                node->setBody(JPH::BodyID(j["bodyId"].get<uint32_t>()));
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("SceneGraph.createPhysicsNode: failed to parse jsonOpts: %s", e.what());
-        } catch (...) {
-            LOG_WARN("SceneGraph.createPhysicsNode: unknown exception while parsing jsonOpts");
         }
     }
     g->root()->addChild(node);

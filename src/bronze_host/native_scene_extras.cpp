@@ -1,12 +1,11 @@
 // The SceneNode members outside the generated scene natives: per-type accessors
 // (alphaCutoff, doubleSided, interior, priority, emissiveColor, radius,
-// fillColor / strokeColor / strokeWidth, autoSync, pixelsPerUnit, billboard,
+// fillColor / strokeColor / strokeWidth, billboard,
 // nearClipDist, frameIndex) and the instanced-mesh operations (updateInstance,
-// setInstancedMesh, setAtlasGrid, setScatterSegments, setTubeSegments) plus
-// PhysicsNode.syncToPhysics. Hand-registered beside the generated scene
-// natives (registerSceneExtraNatives, chained from registerSceneNatives), the
-// same way registerPhysicsNatives adds setMotionType; js/scene_extras.js is
-// the wrapper over them, entered after js/scene.js and js/scene_graph.js.
+// setInstancedMesh, setAtlasGrid, setScatterSegments, setTubeSegments).
+// Hand-registered beside the generated scene
+// natives (registerSceneExtraNatives, chained from registerSceneNatives);
+// js/scene_extras.js is the wrapper over them, entered after js/scene.js and js/scene_graph.js.
 //
 // Every accessor answers for the node types it applies to and is a no-op /
 // undefined elsewhere, which is what an app that reads `node.radius` off a mesh expects (undefined,
@@ -58,11 +57,6 @@ scene::InteriorVolumeNode* interiorVolumeOf(void* self) {
 scene::ShapeNode* shapeOf(void* self) {
     auto* n = nodeOf(self);
     return (n && n->type() == scene::SceneNode::Type::Shape) ? static_cast<scene::ShapeNode*>(n) : nullptr;
-}
-
-scene::PhysicsNode* physicsOf(void* self) {
-    auto* n = nodeOf(self);
-    return (n && n->type() == scene::SceneNode::Type::Physics) ? static_cast<scene::PhysicsNode*>(n) : nullptr;
 }
 
 scene::SpriteNode* spriteOf(void* self) {
@@ -325,29 +319,6 @@ void bro_scene_SceneNode_strokeWidth_set(void* self, double v) {
     }
 }
 
-// ---- Physics: autoSync, pixelsPerUnit, syncToPhysics ----------------------
-bool bro_scene_SceneNode_autoSync_get(void* self) {
-    auto* p = physicsOf(self);
-    return p ? p->autoSync() : false;
-}
-void bro_scene_SceneNode_autoSync_set(void* self, bool v) {
-    if (auto* p = physicsOf(self)) p->setAutoSync(v);
-}
-double bro_scene_SceneNode_pixelsPerUnit_get(void* self) {
-    auto* p = physicsOf(self);
-    return p ? p->pixelsPerUnit() : 0.0;
-}
-void bro_scene_SceneNode_pixelsPerUnit_set(void* self, double v) {
-    if (auto* p = physicsOf(self)) p->setPixelsPerUnit(static_cast<float>(v));
-}
-void bro_scene_SceneNode_syncToPhysics(void* self) {
-    auto* cell = nodeCellOf(self);
-    auto* p = physicsOf(self);
-    if (!cell || !p) return;
-    scene::SceneGraph* g = cell->graph();
-    if (g && g->physicsWorld()) p->syncToPhysics(g->physicsWorld());
-}
-
 // ---- billboard (any node; drawn by Shape/Sprite/Html) ---------------------
 const char* bro_scene_SceneNode_billboard_get(void* self) {
     auto* n = nodeOf(self);
@@ -409,13 +380,6 @@ void bro_scene_SceneNode_pxPerUnit_set(void* self, double v) {
     if (n && n->type() == scene::SceneNode::Type::Html && v > 0.0) {
         static_cast<scene::HtmlNode*>(n)->setPxPerUnit(static_cast<float>(v));
     }
-}
-
-// ---- bodyId (Physics): the Jolt body id, -1 with no body ------------------
-double bro_scene_SceneNode_bodyId_get(void* self) {
-    auto* p = physicsOf(self);
-    if (!p || !p->hasBody()) return -1.0;
-    return static_cast<double>(p->bodyId().GetIndexAndSequenceNumber());
 }
 
 // ---- atlasCols / atlasRows / staticBatch (InstancedMesh) ------------------

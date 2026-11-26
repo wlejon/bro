@@ -16,9 +16,6 @@
 #include "dom/document.h"
 #include "layout/el_terminal.h"
 #include "platform/event_loop.h"
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #include "util/main_loop_wake.h"
 #include "util/time.h"
 
@@ -77,9 +74,6 @@ bool Engine::windowIdle() const {
     if (wheelResidualY_ != 0.0f) return false;
     if (inputRegionStale_) return false;  // a click-through region still to catch up
     if (control_ && control_->hasTickers()) return false;  // input timelines, recordings
-#if BRO_WITH_PHYSICS
-    if (physicsWorld_ && physicsWorld_->hasActiveBodies()) return false;
-#endif
     // Script with work for the very next frame: a requestAnimationFrame
     // callback, promise jobs, a host task, a timer already due.
     if (!timePaused_ && bronze_host::hostFrameDueInMs() <= 0.0) return false;

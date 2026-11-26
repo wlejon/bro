@@ -1,8 +1,8 @@
 // Test agent ground-follow — node.attachAgent(..., { groundFollow }) makes
 // the node's Y track the ground under the agent's (x, z), with yOffset as a
 // clearance above it. 'terrain' mode samples a scene terrain via a downward
-// terrain raycast; 'raycast' mode uses a physics down-raycast against the
-// default world. Exercises scene::AgentBinding::syncToNode +
+// terrain raycast; 'raycast' mode casts down through a bro.dynamics
+// world. Exercises scene::AgentBinding::syncToNode +
 // js_node_attachAgent (src/scene/agent_binding.cpp +
 // AI agent integration) and js::terrainSampleHeight.
 
@@ -80,19 +80,13 @@ function runWithScene() {
 }
 
 // =========================================================================
-// Raycast mode — node Y follows static physics floors at varying heights
+// Raycast mode — node Y follows fixed floors of a dynamics world at varying heights
 // =========================================================================
 {
-    Physics.destroyAll();
+    const dyn = bro.dynamics.createWorld();
     // Low floor (top y = 0.5) on the -X side, high platform (top y = 3) on +X.
-    Physics.createBody({
-        shape: 'box', halfExtents: { x: 10, y: 0.25, z: 10 },
-        position: { x: -10, y: 0.25, z: 0 }, static: true,
-    });
-    Physics.createBody({
-        shape: 'box', halfExtents: { x: 10, y: 0.5, z: 10 },
-        position: { x: 10, y: 2.5, z: 0 }, static: true,
-    });
+    dyn.addBox({ half: [10, 0.25, 10], position: [-10, 0.25, 0], mass: 0 });
+    dyn.addBox({ half: [10, 0.5, 10], position: [10, 2.5, 0], mass: 0 });
 
     const world = G.createWorld();
     const agent = G.createAgent({ x: -5, z: 0, speed: 4 });
@@ -101,7 +95,7 @@ function runWithScene() {
     const node = scene.createMesh({ mesh: 'box', color: 'blue' });
     node.attachAgent(world, agent, {
         yOffset: 1.0,
-        groundFollow: { mode: 'raycast', rayStart: 50, rayLength: 100 },
+        groundFollow: { mode: 'raycast', world: dyn, rayStart: 50, rayLength: 100 },
         think(self) { self.hold(1); },
     });
 
@@ -126,7 +120,7 @@ function runWithScene() {
 
     node.detachAgent();
     scene.detachAIWorld();
-    Physics.destroyAll();
+    dyn.destroy();
 }
 
 // =========================================================================

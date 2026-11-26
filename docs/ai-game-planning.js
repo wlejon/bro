@@ -281,9 +281,9 @@ bot.avoid(obstacles, 1.0);
  * Walls: the world's own addObstacle() AABBs are always respected while
  * avoidance is on. Passing a navGrid additionally bases avoidance-only
  * walls on that grid's obstacle boxes, so agents locally steer around the
- * exact geometry A* paths around, and since createNavGrid({fromPhysics})
- * bakes obstacles from static physics bodies, that composition makes
- * avoidance physics-aware for free. Boxes are copied (no reference kept);
+ * exact geometry A* paths around, and since createNavGrid({fromDynamics})
+ * bakes obstacles from a world's fixed bodies, that composition makes
+ * avoidance follow the collision geometry for free. Boxes are copied (no reference kept);
  * call again after mutating the grid.
  *
  * @param {boolean|Object} opts - boolean, or:
@@ -805,14 +805,16 @@ scene.detachAIWorld();
  * known ground height.
  * @param {Object}  [opts.groundFollow]
  * @param {string}  opts.groundFollow.mode - 'terrain' (sample a voxel terrain's
- *                                  surface) or 'raycast' (physics down-raycast
- *                                  against the default world's static geometry)
+ *                                  surface) or 'raycast' (a ray cast down through a
+ *                                  bro.dynamics world)
+ * @param {World}   [opts.groundFollow.world] - required for mode 'raycast':
+ *                                  a bro.dynamics.createWorld() world
  * @param {Terrain} [opts.groundFollow.terrain] - required for mode 'terrain':
  *                                  a scene.createTerrain() object
  * @param {number}  [opts.groundFollow.rayStart=100] - world Y the down-probe starts from
  * @param {number}  [opts.groundFollow.rayLength=200] - probe length below rayStart
- * @param {Array<string|number>} [opts.groundFollow.layers] - raycast mode: only
- *                                  hit bodies on these collision layers
+ * @param {number}  [opts.groundFollow.mask=0xffffffff] - raycast mode: only
+ *                                  hit bodies with a layer bit in this mask
  */
 minionNode.attachAgent(world, minionAgent, {
     capabilities: ["lane_walk", "basic_attack", "hold"],
@@ -832,10 +834,10 @@ scoutNode.attachAgent(world, scoutAgent, {
     think(self) { return self.moveTo(30, -12); },
 });
 
-// Or follow physics floors/platforms via a downward raycast.
+// Or follow a dynamics world's floors/platforms via a downward raycast.
 guardNode.attachAgent(world, guardAgent, {
     yOffset: 1.0,
-    groundFollow: { mode: 'raycast', layers: ['static'] },
+    groundFollow: { mode: 'raycast', world: level, mask: 1 },
     think(self) { return self.hold(1); },
 });
 

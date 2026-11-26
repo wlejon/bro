@@ -400,7 +400,6 @@ const char* bro_scene_SceneNode_type_get(void* self) {
         case scene::SceneNode::Type::InstancedMesh: return "instancedMesh";
         case scene::SceneNode::Type::Light: return "light";
         case scene::SceneNode::Type::Camera: return "camera";
-        case scene::SceneNode::Type::Physics: return "physics";
         case scene::SceneNode::Type::Shape: return "shape";
         case scene::SceneNode::Type::Sprite: return "sprite";
         case scene::SceneNode::Type::Html: return "html";

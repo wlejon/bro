@@ -498,8 +498,8 @@ presenter's offscreen target instead of a swapchain:
 
 It returns `{ frames, presented, held, wallMs }`: how many frames ran, were
 presented, and were held unchanged. The first call starts the pipeline (the
-event loop over the hidden window, the layout and raster threads, the physics
-and audio-inference workers, the source watcher) and it stays up until exit.
+event loop over the hidden window, the layout and raster threads, the
+audio-inference worker, the source watcher) and it stays up until exit.
 Between calls it is idle, so input functions, `advanceTime()`, `flush()` and
 screenshots work as usual in between; the virtual clock carries on from where
 the frames left it. `--real-audio` adds the audio device a window opens.

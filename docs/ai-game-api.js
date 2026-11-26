@@ -90,17 +90,16 @@
  * @param {number} [opts.originX=0] - world X of cell (0,0) in the cell form
  * @param {number} [opts.originZ=0]
  *
- * Physics bake: derive obstacles from collision geometry so AI and physics
- * can never disagree. Every static, non-sensor body's world-space AABB is
- * projected to XZ and added as an obstacle (with `padding`). Bodies whose XZ
- * footprint covers the entire grid (ground slabs) are skipped automatically.
- * @param {Physics|PhysicsWorldHandle|boolean} [opts.fromPhysics] - the default
- *                                  world (`Physics` or `true`) or a sandbox
- *                                  handle from Physics.createWorldHandle()
- * @param {Array<string|number>} [opts.physicsLayers] - only bake bodies on
- *                                  these collision layers (names or indices)
- * @param {number} [opts.physicsMinY=-Infinity] - only bake bodies whose AABB
- * @param {number} [opts.physicsMaxY=+Infinity]   intersects [minY, maxY]:
+ * Dynamics bake: derive obstacles from collision geometry so AI and the
+ * bodies can never disagree. The world-space bounds of every fixed body
+ * (mass 0) of a bro.dynamics world are projected to XZ and added as obstacles
+ * (with `padding`). Bodies whose XZ footprint covers the entire grid (ground
+ * slabs) are skipped automatically.
+ * @param {World} [opts.fromDynamics] - a bro.dynamics.createWorld() world
+ * @param {number} [opts.dynamicsMask=0xffffffff] - only bake bodies with a
+ *                                  layer bit in this mask
+ * @param {number} [opts.dynamicsMinY=-Infinity] - only bake bodies whose bounds
+ * @param {number} [opts.dynamicsMaxY=+Infinity]   intersect [minY, maxY]:
  *                                  use to carve out the walkable slab
  * @returns {NavGrid}
  */
@@ -117,9 +116,9 @@ const nav = bro.ai.game.createNavGrid({
 // Bake the level's static collision geometry instead of hand-authoring:
 const navBaked = bro.ai.game.createNavGrid({
     minX: -20, minZ: -20, maxX: 20, maxZ: 20, cellSize: 0.5,
-    fromPhysics: Physics,          // or a Physics.createWorldHandle() sandbox
-    physicsLayers: ['static'],     // optional layer filter
-    physicsMinY: 0, physicsMaxY: 3, // optional: only the walkable slab
+    fromDynamics: level,           // a bro.dynamics.createWorld() world
+    dynamicsMask: 1,               // optional layer filter
+    dynamicsMinY: 0, dynamicsMaxY: 3, // optional: only the walkable slab
     padding: 0.4,
 });
 
@@ -442,15 +441,12 @@ comp[a] === comp[b];   // false ⇒ findPath(a → b) is null without a search
  * @param {Float32Array|number[]} [opts.positions] - flat xyz vertex triples
  * @param {Uint32Array|number[]}  [opts.indices]   - triangle index list
  *
- * @param {Physics|PhysicsWorldHandle|boolean} [opts.fromPhysics] - collect
- *     every static, non-sensor body's actual triangle geometry (the default
- *     world via `Physics`/`true`, or a Physics.createWorldHandle() sandbox).
- *     Mesh and heightfield shapes contribute their exact triangles;
- *     primitive/convex shapes (box/sphere/capsule/hull) contribute Jolt's
- *     coarse triangulation: a box is 12 triangles, spheres/capsules a
- *     low-LOD tessellation. Fine for navigation, not render-accurate.
- * @param {Array<string|number>} [opts.physicsLayers] - only collect bodies on
- *     these collision layers (names or indices)
+ * @param {World} [opts.fromDynamics] - collect the triangle geometry of every
+ *     fixed body (mass 0) of a bro.dynamics.createWorld() world. Meshes
+ *     contribute their exact triangles, boxes and hulls their faces (a box is
+ *     12 triangles).
+ * @param {number} [opts.dynamicsMask=0xffffffff] - only collect bodies with a
+ *     layer bit in this mask
  *
  * @param {Terrain} [opts.fromTerrain] - a scene.createTerrain() handle. The
  *     terrain's top surface is height-sampled on a regular grid (one down-
@@ -502,7 +498,7 @@ comp[a] === comp[b];   // false ⇒ findPath(a → b) is null without a search
  * @throws {Error} on bake failure, with the Recast build log in the message
  */
 const navMesh = bro.ai.game.bakeNavMesh({
-    fromPhysics: Physics,          // level collision geometry...
+    fromDynamics: level,           // level collision geometry...
     positions: rampVerts,          // ...plus extra hand-authored soup
     indices: rampIndices,
     agentRadius: 0.5,
@@ -615,7 +611,7 @@ try { cached = fs.readFileSync('level.navmesh'); } catch (e) {}
 const mesh = cached
     ? bro.ai.game.loadNavMesh(cached.buffer)
     : (() => {
-        const m = bro.ai.game.bakeNavMesh({ fromPhysics: Physics });
+        const m = bro.ai.game.bakeNavMesh({ fromDynamics: level });
         fs.writeFileSync('level.navmesh', Buffer.from(m.save()));
         return m;
       })();
@@ -644,7 +640,7 @@ const mesh = cached
 // that); obstacle slots are capped by bakeNavMesh's maxObstacles.
 
 const dyn = bro.ai.game.bakeNavMesh({
-    fromPhysics: Physics,
+    fromDynamics: level,
     dynamicObstacles: true,   // tiled dtTileCache bake
     tileSize: 16,
     maxObstacles: 128,

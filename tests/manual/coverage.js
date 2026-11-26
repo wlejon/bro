@@ -210,7 +210,6 @@ var categories = {
     'WebGL':   ['webgl2_bindings'],
     'Scene':   ['scene_bindings', 'terrain_bindings', 'mesh_bindings'],
     'Audio':   ['audio_bindings'],
-    'Physics': ['physics_bindings'],
     'Input':   ['headless_bindings'],
     'Other':   ['custom_elements', 'dialog_bindings', 'image_bindings',
                 'settings_bindings', 'storage_bindings', 'timers',
@@ -247,7 +246,7 @@ console.log('');
 console.log('  Modules with NO test coverage at all:');
 
 // Check for source modules with zero tests
-var srcModules = ['canvas', 'render', 'webgl', 'scene', 'physics', 'svg', 'util', 'platform'];
+var srcModules = ['canvas', 'render', 'webgl', 'scene', 'dynamics', 'svg', 'util', 'platform'];
 for (var m = 0; m < srcModules.length; m++) {
     var mod = srcModules[m];
     // Check if any test file references anything from this module

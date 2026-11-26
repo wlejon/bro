@@ -52,9 +52,9 @@ assert(px[0] === 255 && px[1] === 0 && px[2] === 0 && px[3] === 255,
 // because then feature detection is a ReferenceError instead of an answer.
 //
 // (`available` is not asserted true for a compiled-in namespace -- most only
-// grow the property when stubbed. Physics and Mesh are global classes, not
-// `bro.*` namespaces, and a build without them just does not define the global,
-// so there is nothing to check for them here.)
+// grow the property when stubbed. Mesh is a global class, not a
+// `bro.*` namespace, and a build without it just does not define the global,
+// so there is nothing to check for it here.)
 const GATED = [
   'media', 'net', 'flora', 'ai', 'gizmo',
   'lm', 'stt', 'tts', 'diar', 'rave', 'music', 'wake', 'kws', 'sense', 'gesture',

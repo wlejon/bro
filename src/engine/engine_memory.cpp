@@ -387,9 +387,6 @@ std::string Engine::memoryReport(bool detail) {
     // The subsystems an app pays for only once it uses them.
     auto on = [](bool b) { return b ? "on" : "off"; };
     out += "subsystems";
-#if BRO_WITH_PHYSICS
-    out += std::string(" physics:") + on(physicsWorld_ != nullptr);
-#endif
     out += std::string(" audio:") + on(audioEngine_ != nullptr);
     out += std::string(" audio-inference:") + on(audioInference_ != nullptr);
 #if BRO_WITH_NET

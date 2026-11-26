@@ -75,7 +75,7 @@ assert(typeof globalThis.Animation === 'function', 'globalThis.Animation exists'
 }
 
 // ---------------------------------------------------------------------------
-// 4 & 7. Scene graph createPhysicsNode, JSON resilience & TileWorld loadGrid
+// 4 & 7. Scene graph JSON resilience & TileWorld loadGrid
 // ---------------------------------------------------------------------------
 {
     const canvas = document.createElement('canvas');
@@ -86,21 +86,6 @@ assert(typeof globalThis.Animation === 'function', 'globalThis.Animation exists'
 
     const scene = canvas.getContext('scene');
     if (scene) {
-        // createPhysicsNode with options
-        if (typeof scene.createPhysicsNode === 'function') {
-            const pnode = scene.createPhysicsNode({
-                name: 'physics_test_node',
-                autoSync: false,
-                pixelsPerUnit: 50
-            });
-            assert(pnode !== null, 'createPhysicsNode returned a node');
-            assert(pnode.name === 'physics_test_node', 'pnode name is preserved');
-
-            // Bad JSON should be caught with LOG_WARN and not crash
-            const badPhysics = scene.createPhysicsNode('invalid json syntax {{{');
-            assert(badPhysics !== null, 'badPhysics node created despite bad JSON');
-        }
-
         // Corrupted json options should not crash (handled via LOG_WARN)
         if (typeof scene.createShape === 'function') scene.createShape('invalid json syntax {{{');
         if (typeof scene.createSprite === 'function') scene.createSprite('invalid json syntax {{{');

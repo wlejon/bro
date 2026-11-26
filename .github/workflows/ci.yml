@@ -53,8 +53,8 @@ jobs:
     steps:
       # A plain clone: every dependency is fetched at configure into
       # build/_deps. bronze, brass and the bro-* siblings come from the head of
-      # their main as of this run (the configure prints each sha), SDL and Jolt
-      # from the commits cmake/bro_pins.cmake pins. A release tag builds the
+      # their main as of this run (the configure prints each sha), SDL
+      # from the commit cmake/bro_pins.cmake pins. A release tag builds the
       # commits its cmake/bro_lock.cmake locks instead.
       - uses: actions/checkout@v7
 

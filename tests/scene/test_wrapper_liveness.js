@@ -101,7 +101,6 @@ if (!scene) {
     assert(scene.cameraX === 0, 'cameraX of dead graph reads 0');
     scene.cameraX = 10;                            // setter no-ops
     scene.setCamera({ fov: 60, position: [1, 1, 1], target: [0, 0, 0] });
-    scene.syncPhysics();
     scene.destroyNode(keepNode);
 
     // Node wrapper minted before teardown.

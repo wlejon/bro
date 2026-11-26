@@ -1,12 +1,12 @@
 // scene_extras.js — the SceneNode members over the hand-registered natives in
 // native_scene_extras.cpp: the per-type accessors (alphaCutoff, doubleSided,
 // interior, priority, emissiveColor, radius, fillColor / strokeColor /
-// strokeWidth, autoSync, pixelsPerUnit, billboard, nearClipDist, fadeOutDist, fadeInDist,
+// strokeWidth, billboard, nearClipDist, fadeOutDist, fadeInDist,
 // frameIndex),
 // the instanced-mesh operations (updateInstance, setInstancedMesh,
-// setAtlasGrid, setScatterSegments, setTubeSegments, updateInstances) and
-// PhysicsNode.syncToPhysics, plus the setter-method spellings (setAlphaCutoff,
-// setDoubleSided) beside the accessors.
+// setAtlasGrid, setScatterSegments, setTubeSegments, updateInstances), plus
+// the setter-method spellings (setAlphaCutoff, setDoubleSided) beside the
+// accessors.
 //
 // Entered after js/scene.js, which is what put SceneNode on globalThis, and
 // js/scene_graph.js (installSceneModule, host_js_modules.cpp), which is what
@@ -35,7 +35,6 @@
     const isShape = (node) => typeOf(node) === 'shape';
     const isProbe = (node) => typeOf(node) === 'reflectionProbe';
     const isInteriorVolume = (node) => typeOf(node) === 'interiorVolume';
-    const isPhysics = (node) => typeOf(node) === 'physics';
     const isSprite = (node) => typeOf(node) === 'sprite';
 
     // A typed accessor: `get` answers undefined and `set` is a no-op off the
@@ -118,12 +117,6 @@
     typed('strokeWidth', isShape,
         (n) => __bro_native.scene.SceneNode_strokeWidth_get(n),
         (n, v) => __bro_native.scene.SceneNode_strokeWidth_set(n, +v));
-    typed('autoSync', isPhysics,
-        (n) => __bro_native.scene.SceneNode_autoSync_get(n),
-        (n, v) => __bro_native.scene.SceneNode_autoSync_set(n, !!v));
-    typed('pixelsPerUnit', isPhysics,
-        (n) => __bro_native.scene.SceneNode_pixelsPerUnit_get(n),
-        (n, v) => __bro_native.scene.SceneNode_pixelsPerUnit_set(n, +v));
     typed('frameIndex', isSprite,
         (n) => __bro_native.scene.SceneNode_frameIndex_get(n),
         (n, v) => __bro_native.scene.SceneNode_frameIndex_set(n, v | 0));
@@ -152,13 +145,6 @@
     accessor(SceneNode.prototype, 'atlasRows', function () {
         return isInstanced(this) ? __bro_native.scene.SceneNode_atlasRows_get(this) : 0;
     }, undefined);
-    // The Jolt body id a physics node drives from; null with no body,
-    // undefined on other node types.
-    accessor(SceneNode.prototype, 'bodyId', function () {
-        if (!isPhysics(this)) return undefined;
-        const id = __bro_native.scene.SceneNode_bodyId_get(this);
-        return id < 0 ? null : id;
-    }, undefined);
     // billboard is a base-node field (drawn by Shape/Sprite/Html): 'full' | 'ylock'.
     accessor(SceneNode.prototype, 'billboard',
         function () { return __bro_native.scene.SceneNode_billboard_get(this); },
@@ -166,9 +152,6 @@
 
     fn(SceneNode.prototype, 'setAlphaCutoff', function setAlphaCutoff(v) { this.alphaCutoff = v; return this; });
     fn(SceneNode.prototype, 'setDoubleSided', function setDoubleSided(v) { this.doubleSided = v; return this; });
-    fn(SceneNode.prototype, 'syncToPhysics', function syncToPhysics() {
-        __bro_native.scene.SceneNode_syncToPhysics(this);
-    });
 
     // ---- InstancedMesh operations -------------------------------------------
     fn(SceneNode.prototype, 'updateInstance', function updateInstance(index, data) {
@@ -247,8 +230,6 @@
         if (opts.strokeColor !== undefined && isShape(node)) node.strokeColor = opts.strokeColor;
         if (opts.strokeWidth !== undefined && isShape(node)) node.strokeWidth = opts.strokeWidth;
         if (opts.frameIndex !== undefined && isSprite(node)) node.frameIndex = opts.frameIndex;
-        if (opts.autoSync !== undefined && isPhysics(node)) node.autoSync = opts.autoSync;
-        if (opts.pixelsPerUnit !== undefined && isPhysics(node)) node.pixelsPerUnit = opts.pixelsPerUnit;
         if (isHtml(node)) {
             // createHtmlNode's native takes html/size/transform; the rest are
             // node attributes.
@@ -284,7 +265,7 @@
         });
     };
     ['createMesh', 'createSkinnedMesh', 'createInstancedMesh', 'createShape', 'createSprite',
-     'createPhysicsNode', 'createReflectionProbe', 'createInteriorVolume', 'createHtmlNode'].forEach(wrapFactory);
+     'createReflectionProbe', 'createInteriorVolume', 'createHtmlNode'].forEach(wrapFactory);
 
     // Moving a scene between canvases with everything it has uploaded
     // (native_scene_attach.cpp).

@@ -20,9 +20,6 @@
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #if BRO_WITH_NET
 #include "net/net_service.h"
 #endif
@@ -721,35 +718,6 @@ AudioInference* Engine::audioInference() {
 steam::SteamService* Engine::steamService() {
     if (!steamService_ && !shutdownDone_) steamService_ = std::make_unique<steam::SteamService>();
     return steamService_.get();
-}
-
-physics::PhysicsWorld* Engine::physicsWorld() {
-#if BRO_WITH_PHYSICS
-    // Made on first use: a Jolt world is ~14 MB and a job pool of a thread
-    // per core, which a page that never asks for physics should not pay.
-    if (!physicsWorld_ && !shutdownDone_) {
-        physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
-        physicsWorld_->init();
-        // Headless steps it inline until the windowed pipeline is running.
-        if (displayMode_ != DisplayMode::Headless || headlessPipelineStarted_)
-            physicsWorld_->startThread();
-#if BRO_WITH_3D
-        for (auto& entry : sceneGraphs_)
-            if (entry.graph) entry.graph->setPhysicsWorld(physicsWorld_.get());
-#endif
-    }
-    return physicsWorld_.get();
-#else
-    return nullptr;
-#endif
-}
-
-const physics::PhysicsWorld* Engine::physicsWorld() const {
-#if BRO_WITH_PHYSICS
-    return physicsWorld_.get();
-#else
-    return nullptr;
-#endif
 }
 
 net::NetService* Engine::netService() {

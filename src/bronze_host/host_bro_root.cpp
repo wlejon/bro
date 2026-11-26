@@ -127,16 +127,11 @@ void installBroRoots(engine::Engine& engine) {
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
         makeRoot({"time", "server", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
-                   "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
+                   "menu", "settingsUI", "inspector", "mesh", "net", "rigging",
                    "animation", "terrain", "tile_world", "lighting", "gizmo", "scene", "lm",
                    "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                    "triposplat", "diffusion", "vision", "diar", "stt", "tts",
                    "flora", "tensor", "profiler", "models", "dynamics"}));
-#if !BRO_WITH_3D
-    // With the 3D family, js/physics.js makes `Physics` when a program first
-    // reads it (installDeferredModules).
-    auto* physicsRoot = new ev::Persistent(ev::createObject());
-#endif
 #if BRO_WITH_3D
     {
         ev::Persistent scene(ev::createObject());
@@ -147,9 +142,6 @@ void installBroRoots(engine::Engine& engine) {
     publish("bro", *bro);
     publish("__bro", *dunder);
     publish("__bro_native", *native);
-#if !BRO_WITH_3D
-    publish("Physics", *physicsRoot);
-#endif
 
     // Every sibling's JS API, once (host_sibling_apis.cpp): they mount onto
     // the roots just published and register the natives bro_core.js and the
@@ -252,14 +244,8 @@ void installBroRoots(engine::Engine& engine) {
     setUnavailable("animation", "BRO_WITH_3D");
     setUnavailable("gizmo", "BRO_WITH_3D");
 #endif
-#if !BRO_WITH_PHYSICS
-    setUnavailable("dynamics", "BRO_WITH_PHYSICS");
-    // The `Physics` global js/physics.js would have filled: the same stub
-    // shape, so Physics.available === false and any call names the flag.
-    {
-        ev::Persistent stub(makeUnavailableNamespace("physics", "BRO_WITH_PHYSICS"));
-        publish("Physics", stub);
-    }
+#if !BRO_WITH_DYNAMICS
+    setUnavailable("dynamics", "BRO_WITH_DYNAMICS");
 #endif
 #if !BRO_WITH_AUDIO
     // bro.mic is broaudio's (installAudio mounts it on the makeRoot
@@ -380,7 +366,7 @@ void installBroRoots(engine::Engine& engine) {
     installSettingsObserver(engine);
     installBroCoreModule();
     installModelsModule();
-#if BRO_WITH_PHYSICS
+#if BRO_WITH_DYNAMICS
     installDynamicsModule();
 #endif
     installProfilerModule();
@@ -402,7 +388,7 @@ void markAvailableNamespaces() {
         "tile_world", "lighting", "animation", "mic", "conf", "themes", "keys", "search",
         "apps", "vfs", "thumb", "a11y",
         "displays", "cred", "seat", "portal", "sys", "compositor", "wl",
-        "decor", "clip", "mpris", "pulse", "ime", "permissions",
+        "decor", "clip", "mpris", "pulse", "ime", "permissions", "dynamics",
     };
     auto decorate = [](Value nsIn) {
         if (!ev::isObject(nsIn)) return;
@@ -427,10 +413,6 @@ void markAvailableNamespaces() {
             decorate(ev::getProperty(root.get(), name));
         }
     }
-    if (!isDeferredName("Physics")) {
-        ev::GlobalValue phys = ev::globalValue("Physics");
-        if (phys.found) decorate(phys.value);
-    }
 }
 
 // The worker realm's roots, the same shape as the main realm's cut down to
@@ -448,15 +430,13 @@ void markAvailableNamespaces() {
 // audio) are not here at all.
 void installWorkerBroRoot() {
     auto* bro = new ev::Persistent(makeRoot({"net", "server", "motion", "dynamics"}));
-    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion", "vision", "physics", "dynamics"}));
+    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion", "vision", "dynamics"}));
     publish("bro", *bro);
     publish("__bro_native", *native);
 
     std::string err;
-    // (A worker's Physics is the worlds it makes: Physics.createWorldHandle.)
-    physicsWithoutEngineWorld();
     bool ok = registerServerNatives(&err) && registerMotionNatives(&err) && registerVisionNatives(&err) &&
-              registerPhysicsNatives(&err) && registerDynamicsNatives(&err);
+              registerDynamicsNatives(&err);
 #if BRO_WITH_NET
     ok = ok && registerNetNatives(&err);
 #endif
@@ -509,18 +489,10 @@ void installWorkerBroRoot() {
     setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
 #endif
     installServerModule();
-#if BRO_WITH_PHYSICS
+#if BRO_WITH_DYNAMICS
     installDynamicsModule();
 #else
-    setUnavailable("dynamics", "BRO_WITH_PHYSICS");
-#endif
-#if BRO_WITH_PHYSICS
-    installPhysicsModule();
-#else
-    {
-        ev::Persistent stub(makeUnavailableNamespace("physics", "BRO_WITH_PHYSICS"));
-        publish("Physics", stub);
-    }
+    setUnavailable("dynamics", "BRO_WITH_DYNAMICS");
 #endif
 #if !BRO_WITH_VIDEO && !BRO_WITH_AUDIO
     setUnavailable("media", "BRO_WITH_VIDEO");

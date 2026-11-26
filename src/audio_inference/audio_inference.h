@@ -58,12 +58,12 @@ struct PcmRing {
 //     main thread only delivers results (tickWake). So inference cadence does not
 //     track frame rate — rendering hiccups can neither throttle detection nor
 //     drop audio (the ~2 s ring covers a sub-second stall), and the worker never
-//     burdens a frame. (This is why it does NOT mirror PhysicsWorld's per-frame
-//     signalStep: a real-time audio model must not be gated on the frame loop.)
+//     burdens a frame: a real-time audio model must not be gated on the frame
+//     loop.
 //   - stepInline() runs the same pump synchronously on the calling thread for
 //     Headless mode (no worker thread), keeping scripted/virtual-time tests
-//     deterministic — the established headless convention (cf. PhysicsWorld::
-//     stepInline, broaudio renderBlock).
+//     deterministic — the established headless convention (cf. broaudio
+//     renderBlock).
 //   - shutdown() joins the worker. Tasks are destroyed ON the worker thread, so
 //     a model's destructor (and its CUDA frees) runs there, never on the main
 //     thread.

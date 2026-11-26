@@ -128,7 +128,7 @@ A `Worker` is its own thread and realm with brokit, `ImageBitmap`,
 `bro.media`, and the sibling compute APIs (ear, `SynthGraph`, gameagent, mesh,
 rigging, tensor, lm, soundml compute, diffusion, vision, flora, image, themes,
 keys, search). No
-`bro.time`, `bro.window`, `bro.settings`, scene, physics, `AudioContext` or
+`bro.time`, `bro.window`, `bro.settings`, scene, `AudioContext` or
 `bro.mic`, and `document` is a `ReferenceError`.
 
 ## Differences from the web

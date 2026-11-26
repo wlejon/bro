@@ -307,15 +307,6 @@ check_audio() {
         --diff-head 80
 }
 
-# The physics surface (host_physics.cpp): Physics bodies, transforms, the
-# character controller, soft bodies, raycasts, overlaps, destruction.
-check_physics() {
-    bh_run_check bronze_host_physics \
-        "$SCRIPT_DIR/appdir_physics" \
-        "$SCRIPT_DIR/expected/physics_probe.expected" \
-        --diff-head 30
-}
-
 # The game-AI surface (host_ai.cpp): NavGrid, NavMesh baking and queries,
 # AIAgent.
 check_ai() {
@@ -345,7 +336,7 @@ check_net() {
 
 CHECKS=(natives scenegraph events fetch dom node file abort observer resize
         parser proxy bro_core mesh interp import class codecs input video audio
-        physics ai aigame net)
+        ai aigame net)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before
 # they are ever listed, so the runner does not even see them.

@@ -8,7 +8,7 @@
  * Dedicated background thread running an isolated JavaScript runtime
  * communicating via structured clone postMessage/onmessage.
  *
- * A worker has `Physics` over worlds of its own (physics-api.js "Workers"),
+ * A worker has `bro.dynamics` (worlds of its own, dynamics-api.js),
  * beside `bro.net`, `bro.server`, `bro.motion`, `bro.vision` and the sibling
  * libraries' compute APIs; the engine-bound namespaces (the scene, window,
  * settings, time, audio) are the page's alone.

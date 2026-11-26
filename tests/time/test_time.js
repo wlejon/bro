@@ -97,63 +97,6 @@ advanceTime(20);
 assert(pausedTimerFired, 'unpaused: frozen timer fires once time resumes');
 assert(pausedRafFired, 'unpaused: queued rAF fires on the next frame');
 
-// =========================================================================
-// Pause freezes a falling physics body; unpause resumes the fall
-// =========================================================================
-// Physics is compile-gated (BRO_WITH_PHYSICS); the minimal profile leaves
-// `Physics` as the unavailable stub, and the clock sections around this one
-// still run there.
-if (Physics.available === false) {
-    console.log('skip: physics section — Physics not compiled in (BRO_WITH_PHYSICS off)');
-} else {
-    runPhysicsClockSection();
-}
-
-function runPhysicsClockSection() {
-Physics.destroyAll();
-Physics.setGravity(0, -9.81, 0);
-Physics.setTimeStep(1 / 60);
-
-const ball = Physics.createBody({
-    shape: 'sphere', radius: 0.5, position: { x: 0, y: 50, z: 0 },
-});
-assert(ball > 0, 'falling body created');
-
-advanceTime(100);           // let it start falling
-const yFalling = Physics.getTransform(ball).position.y;
-assert(yFalling < 50, 'body is falling before pause, y=' + yFalling);
-
-bro.time.paused = true;
-const yPaused = Physics.getTransform(ball).position.y;
-advanceTime(500);
-const yAfterPause = Physics.getTransform(ball).position.y;
-assert(yAfterPause === yPaused,
-       'paused: body did not move (y ' + yPaused + ' -> ' + yAfterPause + ')');
-
-bro.time.paused = false;
-advanceTime(500);
-const yResumed = Physics.getTransform(ball).position.y;
-assert(yResumed < yAfterPause, 'unpaused: body resumes falling, y=' + yResumed);
-
-// Timescale scales sim speed: two identical drops, one at scale 2, must
-// fall further in the same advanceTime span.
-Physics.destroyAll();
-const slow = Physics.createBody({ shape: 'sphere', radius: 0.5, position: { x: 0, y: 100, z: 0 } });
-advanceTime(200);
-const dropAt1 = 100 - Physics.getTransform(slow).position.y;
-
-Physics.destroyAll();
-bro.time.scale = 2;
-const fast = Physics.createBody({ shape: 'sphere', radius: 0.5, position: { x: 0, y: 100, z: 0 } });
-advanceTime(200);
-const dropAt2 = 100 - Physics.getTransform(fast).position.y;
-bro.time.scale = 1;
-Physics.destroyAll();
-
-assert(dropAt1 > 0, 'scale 1 drop fell (' + dropAt1 + ')');
-assert(dropAt2 > dropAt1 * 2, 'scale 2 falls >2x as far in the same span: ' +
-       dropAt2 + ' vs ' + dropAt1 + ' (gravity is quadratic in sim time)');
-}  // runPhysicsClockSection
 
 // =========================================================================
 // CSS transition obeys the scale

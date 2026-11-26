@@ -585,7 +585,7 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // namespaces the roots just built, the 3D family, net and motion. Each
     // group enters its modules, in the order they were written against, when
     // a program first reads one of its globals or `bro.<ns>` members: a
-    // calculator does not pay for a physics wrapper. Every name a module
+    // calculator does not pay for a scene wrapper. Every name a module
     // lists in js/module.globals is registered by then (the roots, and the
     // classes an earlier module of its group lifted), and a sibling class
     // such as `Mesh` is read off globalThis at the point of use, never at

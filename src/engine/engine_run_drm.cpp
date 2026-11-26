@@ -26,9 +26,6 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "layout/box.h"
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
 #endif
@@ -351,20 +348,13 @@ void Engine::drmPollPlatform() {
 #endif
 }
 
-// Physics, scenes, panels, iframes, frame callbacks: everything that advances
+// Scenes, panels, iframes, frame callbacks: everything that advances
 // with the clock before layout is signalled.
 double Engine::drmTickWorld(double scaledFrameDtMs) {
-#if BRO_WITH_PHYSICS
-    if (physicsWorld_) physicsWorld_->consumeStep();
-#endif
-
 #if BRO_WITH_3D
     pruneDetachedSceneGraphs();
 #endif
     pruneDeadWebGLContexts();
-#if BRO_WITH_3D
-    for (auto& sg : sceneGraphs_) sg.graph->syncPhysics();
-#endif
 
     {
         double nowMs = engineNowMs_;
@@ -408,25 +398,6 @@ double Engine::drmTickWorld(double scaledFrameDtMs) {
     }
 #endif
 
-#if BRO_WITH_PHYSICS
-    if (physicsWorld_ && physicsWorld_->isIdle()) {
-        if (!physicsWorld_->hasActiveBodies()) {
-            lastPhysicsTimeMs_ = util::currentTimeMs();
-            physicsAccumMs_ = 0.0;
-        } else {
-            double stepMs = physicsWorld_->timeStep() * 1000.0;
-            double nowPhys = util::currentTimeMs();
-            if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-            physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) * effectiveTimeScale();
-            lastPhysicsTimeMs_ = nowPhys;
-            if (physicsAccumMs_ >= stepMs) {
-                physicsAccumMs_ -= stepMs;
-                if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
-                physicsWorld_->signalStep();
-            }
-        }
-    }
-#endif
     return now;
 }
 

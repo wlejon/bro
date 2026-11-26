@@ -28,9 +28,6 @@
 #if BRO_WITH_NET
 #include "net/bronze_api/net_rollback_api.h"
 #endif
-#if BRO_WITH_PHYSICS
-#include "bronze_host/native_physics_internal.h"
-#endif
 #if BRO_WITH_3D
 #include "bronze_host/native_scene_internal.h"
 #endif
@@ -58,7 +55,6 @@ extern "C" void bro_vision_wildlife_main();
 extern "C" void bro_vision_wildlife_bursts_main();
 extern "C" void bro_core_main();
 extern "C" void bro_net_main();
-extern "C" void bro_physics_main();
 extern "C" void bro_dynamics_main();
 extern "C" void bro_terrain_main();
 extern "C" void bro_tile_world_main();
@@ -231,23 +227,13 @@ void installNetModule() {
 #endif
 }
 
-#if BRO_WITH_PHYSICS
+#if BRO_WITH_DYNAMICS
 // js/dynamics.js mounts bro.dynamics over __bro_native.dynamics, in the main
 // realm and in a Worker's.
 void installDynamicsModule() {
     bronze::embed::runEntry(bro_dynamics_main);
 }
 #endif
-
-void installPhysicsModule() {
-    bronze::embed::runEntry(bro_physics_main);
-    adoptGlobalProperty("Physics");
-    adoptGlobalProperty("PhysicsCharacter");
-    adoptGlobalProperty("PhysicsSoftBody");
-    adoptGlobalProperty("PhysicsVehicle");
-    adoptGlobalProperty("PhysicsRagdoll");
-    adoptGlobalProperty("PhysicsWorldHandle");
-}
 
 void installTerrainModule() {
     bronze::embed::runEntry(bro_terrain_main);
@@ -511,7 +497,6 @@ void installDeferredModules() {
     // earlier one lifted in js/module.globals.
     {
         ModuleGroup& g = newGroup("3d", [] {
-            installPhysicsModule();
             installTerrainModule();
             installTileWorldModule();
             installLightingModule();
@@ -519,12 +504,11 @@ void installDeferredModules() {
             installAnimationModule();
             installSceneModule();
         });
-        for (const char* name : {"Physics", "PhysicsCharacter", "PhysicsSoftBody", "PhysicsVehicle",
-                                 "PhysicsRagdoll", "PhysicsWorldHandle", "Terrain", "TileWorld", "Tween", "AnimationPlayer", "SceneNode", "SceneGraph"}) {
+        for (const char* name : {"Terrain", "TileWorld", "Tween", "AnimationPlayer", "SceneNode", "SceneGraph"}) {
             deferGlobal(g, name);
         }
         const ev::Persistent bro(ev::globalValue("bro").value);
-        for (const char* ns : {"physics", "scene", "terrain", "tile_world", "lighting", "animation", "gizmo"}) {
+        for (const char* ns : {"scene", "terrain", "tile_world", "lighting", "animation", "gizmo"}) {
             deferMember(g, bro.get(), ns);
         }
     }

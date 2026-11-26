@@ -30,7 +30,6 @@ void bro_image_gpu_main() {}
 void bro_vision_wildlife_main() {}
 void bro_core_main() {}
 void bro_net_main() {}
-void bro_physics_main() {}
 void bro_terrain_main() {}
 void bro_tile_world_main() {}
 void bro_lighting_main() {}

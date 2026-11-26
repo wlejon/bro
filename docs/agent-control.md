@@ -203,7 +203,7 @@ and every megabyte named:
 - `skia` / `ganesh`: the glyph cache, Ganesh's resource cache against its
   budget, the device memory pool.
 - `images`: the decoded-image store and its decoder threads.
-- `subsystems`: which of physics, audio, audio inference, net and Steam are
+- `subsystems`: which of audio, audio inference, net and Steam are
   running; an app that never uses one should see it `off`.
 - `modules`: bro's own wrapper modules entered when a program first reads
   one of their globals or `bro.<ns>` members (the 3D family, net, motion,

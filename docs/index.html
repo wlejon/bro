@@ -254,7 +254,7 @@ footer { padding: 40px 0 56px; }
         <p class="section-lede">Coding agents build web UIs really well. Native UIs take more debugging to get right. Electron solves that, but only for what the web platform natively supports.</p>
       </div>
       <div class="prose">
-        <p>In bro, HTML/CSS/JS is the UI/app layer like Electron. But the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a <strong>3D scene graph</strong>, <strong>Jolt physics</strong>, a real-time <strong>audio engine</strong>, <strong>mesh generation and CSG</strong>, <strong>navmesh pathfinding</strong>, <strong>game networking over GNS</strong>, and a full <strong>on-device AI/ML inference stack</strong>. All of it is exposed to JS, all running in one process, no IPC to a Chromium renderer.</p>
+        <p>In bro, HTML/CSS/JS is the UI/app layer like Electron. But the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a <strong>3D scene graph</strong>, <strong>rigid-body dynamics</strong>, a real-time <strong>audio engine</strong>, <strong>mesh generation and CSG</strong>, <strong>navmesh pathfinding</strong>, <strong>game networking over GNS</strong>, and a full <strong>on-device AI/ML inference stack</strong>. All of it is exposed to JS, all running in one process, no IPC to a Chromium renderer.</p>
         <p>None of this is new. It's a reconfiguration that works better for coding agents.</p>
       </div>
     </div>
@@ -296,8 +296,8 @@ footer { padding: 40px 0 56px; }
 
       <div class="cap">
         <h3><span class="ic">▸</span> Physics &amp; audio</h3>
-        <p>Jolt rigid-body physics with contact events, wired into the scene graph. A real-time Web Audio engine with synthesis, effects, spatialization, and MIDI, plus live mic capture.</p>
-        <div class="chips"><span class="chip accent">Physics</span><span class="chip accent">AudioContext</span><span class="chip accent">bro.mic</span></div>
+        <p>Rigid bodies over Box3D in worlds the app steps: joints that break, touches and hits, raycasts. A real-time Web Audio engine with synthesis, effects, spatialization, and MIDI, plus live mic capture.</p>
+        <div class="chips"><span class="chip accent">bro.dynamics</span><span class="chip accent">AudioContext</span><span class="chip accent">bro.mic</span></div>
       </div>
 
       <div class="cap">
@@ -356,7 +356,7 @@ footer { padding: 40px 0 56px; }
 <span class="ar">         ↑</span>
 <span class="ar">  </span><span class="l">svg → layout → dom</span>  <span class="ar">htmlayout adapters · draw traversal · tree</span>
 <span class="ar">         ↑</span>
-<span class="a">canvas</span>  <span class="a">webgl</span>  <span class="a">scene</span>  <span class="a">physics</span>   <span class="ar">2D · WebGL2 · 3D · Jolt</span>
+<span class="a">canvas</span>  <span class="a">webgl</span>  <span class="a">scene</span>  <span class="a">dynamics</span>  <span class="ar">2D · WebGL2 · 3D · Box3D</span>
 <span class="ar">         ↑</span>
 <span class="ar">     </span><span class="l">engine</span>  <span class="ar">orchestrates every subsystem · main loop</span></div>
 
@@ -382,7 +382,7 @@ footer { padding: 40px 0 56px; }
       <a class="repo" href="https://github.com/wlejon/bronze"><div class="n">bronze</div><div class="d">AOT JavaScript compiler</div></a>
       <a class="repo" href="https://github.com/wlejon/brass"><div class="n">brass</div><div class="d">JIT/AOT code generation · GC</div></a>
     </div>
-    <p class="section-lede" style="margin-top:24px; font-size:15px;">Plus <b>Jolt</b> for physics, <b>Skia</b> for rasterization, and <b>SDL3</b> for windowing and Vulkan surfaces.</p>
+    <p class="section-lede" style="margin-top:24px; font-size:15px;">Plus <b>Box3D</b> for rigid bodies, <b>Skia</b> for rasterization, and <b>SDL3</b> for windowing and Vulkan surfaces.</p>
     <p class="section-lede" style="font-size:15px;">These are part of a larger family heading toward a cross-platform desktop environment: the <a href="https://github.com/wlejon/helmapps">helmapps</a> desktop apps and the desktop substrate libraries (files, system services, displays, compositing, keybindings, and more). The <a href="reference.html#ecosystem.md">ecosystem index</a> lists every repo.</p>
   </div>
 </section>
@@ -403,7 +403,7 @@ footer { padding: 40px 0 56px; }
   <div class="wrap">
     <div class="foot-inner">
       <span><a href="https://github.com/wlejon/bro">github.com/wlejon/bro</a> · MIT</span>
-      <span>htmlayout · Skia · Vulkan · Jolt · brotensor</span>
+      <span>htmlayout · Skia · Vulkan · Box3D · brotensor</span>
     </div>
     <p class="foot-note">Heads up: bro exposes far more of your system to JavaScript than a browser does, and was not built with a security sandbox. Don't point it at untrusted code.</p>
   </div>

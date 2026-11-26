@@ -36,9 +36,6 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer.h"
 #endif
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
@@ -104,10 +101,6 @@ void Engine::shutdown() {
     // No JS compile may still be running on bronze's compile pool while the
     // engine tears down: queued ones are dropped, running ones finish.
     bronze_host::stopBackgroundCompiles();
-
-#if BRO_WITH_PHYSICS
-    if (physicsWorld_) physicsWorld_->shutdown();
-#endif
 
     if (layoutPipeline_) layoutPipeline_->postShutdown();
     if (layoutThread_.joinable()) layoutThread_.join();
@@ -218,9 +211,6 @@ void Engine::teardown() {
     clearSceneGraphs();
 #endif
 
-#if BRO_WITH_PHYSICS
-    physicsWorld_.reset();
-#endif
     audioInference_.reset();
     SceneAudioSync::shutdown();
     bro::bronze_host::hostCollectGarbage();

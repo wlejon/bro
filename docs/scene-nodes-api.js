@@ -460,8 +460,6 @@ class SceneNode {
   alphaToCoverage;
   /** @type {Array<number>|string} */ emissiveColor;
   /** @type {boolean|string} */ billboard;
-  /** @type {boolean} */ autoSync;
-  /** @type {number} */ pixelsPerUnit;
   /** @type {number} */ radius;
   /** @type {string} */ fillColor;
   /** @type {string} */ strokeColor;
@@ -507,14 +505,6 @@ class SceneNode {
 
   /** @readonly @type {number} */
   atlasRows;
-
-  /**
-   *  PhysicsNode: the Jolt body id it follows (the `bodyId` create option),
-   *  null with no body; undefined on other nodes.
-   * @readonly
-   * @type {number|null}
-   */
-  bodyId;
 
   /**
    * @readonly
@@ -567,7 +557,7 @@ class SceneNode {
    * required), with normals, uvs, colors and tangents when given. A Mesh
    * object works too. The node, its material, transform and children are
    * untouched, so this is the per-frame path for geometry that deforms —
-   * a soft body's vertices(), a procedural surface, a streamed chunk.
+   * a cloth's vertices, a procedural surface, a streamed chunk.
    * Normals are recomputed when the geometry carries none or when
    * `opts.recomputeNormals` is true. Throws on a node that is not a
    * MeshNode. Returns the node.
@@ -576,11 +566,9 @@ class SceneNode {
    * @param {MeshUpdateOptions} [opts]
    * @returns {SceneNode}
    * @example
-   * const topo = cloth.topology();
-   * const node = scene.createMesh({ positions: cloth.vertices(), indices: topo.indices });
-   * // each frame, after Physics.step():
-   * node.updateMesh({ positions: cloth.vertices(), indices: topo.indices },
-   *                 { recomputeNormals: true });
+   * const node = scene.createMesh({ positions, indices });
+   * // each frame, after moving the vertices in `positions`:
+   * node.updateMesh({ positions, indices }, { recomputeNormals: true });
    */
   updateMesh(mesh, opts) {}
 
@@ -1337,7 +1325,6 @@ class SceneNode {
   /** @returns {SceneNode} */ capture() {}
   /** @param {number} cutoff @returns {SceneNode} */ setAlphaCutoff(cutoff) {}
   /** @param {boolean} enabled @returns {SceneNode} */ setDoubleSided(enabled) {}
-  /** @returns {SceneNode} */ syncToPhysics() {}
   /** @param {number} index @param {Object|Array<number>|Float32Array} data @returns {SceneNode} */ updateInstance(index, data) {}
   /** @param {Array<Object>|Float32Array} instances @returns {SceneNode} */ updateInstances(instances) {}
   /** @param {(MeshGeometry|Mesh)} mesh @returns {SceneNode} */ setInstancedMesh(mesh) {}

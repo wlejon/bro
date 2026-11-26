@@ -508,12 +508,6 @@ class SceneGraph {
   createSprite(opts) {}
 
   /**
-   * @param {Object} [opts]
-   * @returns {SceneNode}
-   */
-  createPhysicsNode(opts) {}
-
-  /**
    * @param {MeshNodeOptions} [opts]
    * @returns {SceneNode}
    */
@@ -1091,8 +1085,6 @@ class SceneGraph {
   cullStats() {}
 
   clear() {}
-
-  syncPhysics() {}
 
   /**
    * @param {Array<number>} origin

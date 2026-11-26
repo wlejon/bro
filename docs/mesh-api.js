@@ -690,7 +690,7 @@ class Mesh {
    * @example
    *   const hulls = Mesh.loadOBJ('prop.obj')
    *     .convexDecomposition({ maxHulls: 8, maxVerticesPerHull: 24 });
-   *   for (const h of hulls) physics.createBody({ shape: 'convexHull', mesh: h });
+   *   for (const h of hulls) world.addHull({ points: h.positions, mass: 5 });
    */
   convexDecomposition(params) {}
 

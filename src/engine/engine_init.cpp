@@ -47,9 +47,6 @@
 #include "render/kernel_shader.h"
 #include "render/system_font_mgr.h"
 
-#if BRO_WITH_PHYSICS
-#include "physics/physics_world.h"
-#endif
 #include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
@@ -308,8 +305,8 @@ void Engine::construct(const EngineConfig& config) {
     engineNowMs_ = displayMode_ == DisplayMode::Headless ? virtualTime_
                                                          : util::currentTimeMs();
 
-    // Physics, networking, Steam, audio and audio inference are made on
-    // first use (engine.cpp: physicsWorld(), netService(), ...).
+    // Networking, Steam, audio and audio inference are made on
+    // first use (engine.cpp: netService(), ...).
     audioStartup_.appId = config.appId;
     audioStartup_.appName = config.manifest.name.empty() ? config.appId : config.manifest.name;
     audioStartup_.realAudio = config.realAudio;

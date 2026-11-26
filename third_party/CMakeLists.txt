@@ -333,34 +333,10 @@ if(BRO_WITH_REMOTE)
                                      BROREMOTE_BUILD_VIEWER=OFF)
 endif()
 
-# --- Jolt Physics ---
-# Its CMake project lives in Build/, so it is fetched and added by hand.
-if(BRO_WITH_PHYSICS AND NOT TARGET Jolt)
-    set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
-    set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)          # don't clobber bro's flags
-    set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)          # avoid -Werror on Jolt internals
-    set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)  # LTO handled by bro's build
-    set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
-    set(CPP_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
-    set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
-    # The same steps on Windows, Linux and macOS, x64 and arm64: lockstep and
-    # rollback peers (bro.net, lib/kit/rollback.js, lib/destruct) send inputs,
-    # not state, so every platform must simulate them bit for bit alike.
-    set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
-    set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
-    set(PROFILER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
-    set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
-    set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
-    set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
-    set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-    bro_dependency(jolt SOURCE_ONLY)
-    add_subdirectory("${jolt_SOURCE_DIR}/Build" "${CMAKE_BINARY_DIR}/_deps/jolt-build" EXCLUDE_FROM_ALL)
-endif()
-
 # --- Box3D ---
 # The fork (wlejon/box3d) of Erin Catto's rigid-body engine, under src/dynamics.
 # Added as a subproject it builds its library alone: no samples, tests or docs.
-if(BRO_WITH_PHYSICS AND NOT TARGET box3d)
+if(BRO_WITH_DYNAMICS AND NOT TARGET box3d)
     bro_dependency(box3d TARGET box3d)
 endif()
 

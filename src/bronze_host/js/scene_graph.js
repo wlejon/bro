@@ -505,7 +505,6 @@
         return s ? JSON.parse(s) : { totalNodes: 0, renderedNodes: 0, culledNodes: 0 };
     });
     fn(SceneGraph.prototype, "clear", function clear() { __bro_native.scene.SceneGraph_clear(this); });
-    fn(SceneGraph.prototype, "syncPhysics", function syncPhysics() { __bro_native.scene.SceneGraph_syncPhysics(this); });
     fn(SceneGraph.prototype, "raycast", function raycast(origin, direction, maxDist) {
         if (origin === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.raycast: origin is required");
         if (direction === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.raycast: direction is required");
@@ -589,11 +588,6 @@
     });
     fn(SceneGraph.prototype, "createSprite", function createSprite(opts) {
         const node = canon(__bro_native.scene.SceneGraph_createSprite(this, opts ? JSON.stringify(opts) : ""));
-        if (node) applyNodeOpts(node, opts);
-        return node;
-    });
-    fn(SceneGraph.prototype, "createPhysicsNode", function createPhysicsNode(opts) {
-        const node = canon(__bro_native.scene.SceneGraph_createPhysicsNode(this, opts ? JSON.stringify(opts) : ""));
         if (node) applyNodeOpts(node, opts);
         return node;
     });

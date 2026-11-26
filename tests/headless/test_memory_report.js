@@ -19,7 +19,7 @@ var text = r.payload;
 });
 
 // Optional subsystems start on first use: this page has used none of them.
-['physics:off', 'audio:off', 'audio-inference:off', 'net:off', 'steam:off'].forEach(function(k) {
+['audio:off', 'audio-inference:off', 'net:off', 'steam:off'].forEach(function(k) {
     if (text.indexOf(k.split(':')[0] + ':') >= 0)
         assert(text.indexOf(k) >= 0, 'an unused subsystem is not running (' + k + '):\n' + text);
 });

@@ -77,7 +77,7 @@ void installVisionWildlifeModule();
 // under __bro_native. Entered by installBroRoots (host_bro_root.cpp) after
 // the roots and natives are registered; lifts nothing.
 void installBroCoreModule();
-// The 3D family (js/physics.js, terrain, tile_world, lighting,
+// The 3D family (terrain, tile_world, lighting,
 // gizmo, animation, scene) and js/net.js / js/motion.js /
 // js/server.js: each enters its module after installBroRoots and lifts the
 // classes it defined. The sibling libraries' own APIs (bro.mesh, bro.lm,
@@ -85,8 +85,7 @@ void installBroCoreModule();
 // each exactly once per realm.
 void installNetModule();
 void installServerModule();
-void installPhysicsModule();
-// js/dynamics.js: bro.dynamics over __bro_native.dynamics (BRO_WITH_PHYSICS).
+// js/dynamics.js: bro.dynamics over __bro_native.dynamics (BRO_WITH_DYNAMICS).
 void installDynamicsModule();
 void installTerrainModule();
 void installTileWorldModule();
@@ -97,7 +96,7 @@ void installSceneModule();
 void installMotionModule();
 
 // The main realm's wrapper modules that most apps never touch, deferred
-// until a program first does: the 3D family (physics ... scene), net
+// until a program first does: the 3D family (terrain ... scene), net
 // (net_sync + net), motion, bro.image.gpu and bro.vision.wildlife. Each group
 // registers its globals as lazy host globals (bronze registerLazyGlobal: the
 // manifest lists them, the first read runs the group) and turns its `bro.<ns>`
