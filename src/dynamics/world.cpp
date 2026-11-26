@@ -36,9 +36,46 @@ std::uint32_t slotOf(void* userData) {
 
 struct JointRec {
     b3JointId id = b3_nullJointId;
+    JointKind kind = JointKind::Weld;
     std::uint32_t a = kWorld, b = kWorld;
     bool alive = false;
 };
+
+static b3Vec3 normalizeOr(b3Vec3 v, b3Vec3 fallback) {
+    const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    return len > 1e-6f ? b3Vec3{v.x / len, v.y / len, v.z / len} : fallback;
+}
+
+static b3Quat quatFromBasis(b3Vec3 x, b3Vec3 y, b3Vec3 z) {
+    const float trace = x.x + y.y + z.z;
+    b3Quat q;
+    if (trace > 0.0f) {
+        const float s = std::sqrt(trace + 1.0f) * 2.0f;
+        q.s = 0.25f * s;
+        q.v.x = (y.z - z.y) / s;
+        q.v.y = (z.x - x.z) / s;
+        q.v.z = (x.y - y.x) / s;
+    } else if (x.x > y.y && x.x > z.z) {
+        const float s = std::sqrt(1.0f + x.x - y.y - z.z) * 2.0f;
+        q.s = (y.z - z.y) / s;
+        q.v.x = 0.25f * s;
+        q.v.y = (y.x + x.y) / s;
+        q.v.z = (z.x + x.z) / s;
+    } else if (y.y > z.z) {
+        const float s = std::sqrt(1.0f + y.y - x.x - z.z) * 2.0f;
+        q.s = (z.x - x.z) / s;
+        q.v.x = (y.x + x.y) / s;
+        q.v.y = 0.25f * s;
+        q.v.z = (z.y + y.z) / s;
+    } else {
+        const float s = std::sqrt(1.0f + z.z - x.x - y.y) * 2.0f;
+        q.s = (x.y - y.x) / s;
+        q.v.x = (z.x + x.z) / s;
+        q.v.y = (z.y + y.z) / s;
+        q.v.z = 0.25f * s;
+    }
+    return b3NormalizeQuat(q);
+}
 
 struct BodyRec {
     b3BodyId id = b3_nullBodyId;
@@ -458,17 +495,36 @@ std::uint32_t World::addJoint(const JointDesc& d) {
     if ((!wa && !hasBody(d.a)) || (!wb && !hasBody(d.b)) || (wa && wb)) return kWorld;
     const b3BodyId ida = wa ? impl_->ground : impl_->bodies[d.a].id;
     const b3BodyId idb = wb ? impl_->ground : impl_->bodies[d.b].id;
-    // One frame in the world, at the anchor, its z along the axis; each body holds it as it
-    // sees it now.
-    b3Vec3 axis = v3(d.axis);
-    const float len = std::sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
-    axis = len > 1e-6f ? b3Vec3{axis.x / len, axis.y / len, axis.z / len} : b3Vec3{0, 0, 1};
-    const b3Quat frame = b3ComputeQuatBetweenUnitVectors(b3Vec3{0, 0, 1}, axis);
-    const b3Pos at{d.anchor[0], d.anchor[1], d.anchor[2]};
+    // Joint reference orientation depends on Box3D convention:
+    //   Revolute (Hinge): rotates about local Z
+    //   Prismatic (Slider): slides along local X
+    //   Wheel: suspends/steers along frameA local X, spins about frameB local Z
+    const b3Vec3 axis = normalizeOr(v3(d.axis), b3Vec3{0, 1, 0});
+    b3Quat frame = b3Quat_identity;
+    if (d.kind == JointKind::Slider) {
+        frame = b3ComputeQuatBetweenUnitVectors(b3Vec3{1, 0, 0}, axis);
+    } else if (d.kind == JointKind::Wheel) {
+        b3Vec3 spin = d.hasAxisB ? v3(d.axisB) : b3Vec3{1, 0, 0};
+        // Orthogonalize spin axis against suspension axis.
+        const float proj = spin.x * axis.x + spin.y * axis.y + spin.z * axis.z;
+        spin = b3Vec3{spin.x - proj * axis.x, spin.y - proj * axis.y, spin.z - proj * axis.z};
+        const float slen = std::sqrt(spin.x * spin.x + spin.y * spin.y + spin.z * spin.z);
+        if (slen < 1e-4f) {
+            const b3Vec3 alt = std::fabs(axis.x) < 0.8f ? b3Vec3{1, 0, 0} : b3Vec3{0, 0, 1};
+            spin = b3Cross(axis, alt);
+        }
+        const b3Vec3 cz = normalizeOr(spin, b3Vec3{0, 0, 1});
+        const b3Vec3 cy = normalizeOr(b3Cross(cz, axis), b3Vec3{0, 1, 0});
+        frame = quatFromBasis(axis, cy, cz);
+    } else {
+        frame = b3ComputeQuatBetweenUnitVectors(b3Vec3{0, 0, 1}, axis);
+    }
+    const b3Pos atA{d.anchor[0], d.anchor[1], d.anchor[2]};
+    const b3Pos atB = d.hasAnchorB ? b3Pos{d.anchorB[0], d.anchorB[1], d.anchorB[2]} : atA;
     b3Transform fa, fb;
-    fa.p = b3Body_GetLocalPoint(ida, at);
+    fa.p = b3Body_GetLocalPoint(ida, atA);
     fa.q = b3InvMulQuat(b3Body_GetRotation(ida), frame);
-    fb.p = b3Body_GetLocalPoint(idb, at);
+    fb.p = b3Body_GetLocalPoint(idb, atB);
     fb.q = b3InvMulQuat(b3Body_GetRotation(idb), frame);
 
     std::uint32_t slot;
@@ -500,18 +556,103 @@ std::uint32_t World::addJoint(const JointDesc& d) {
         case JointKind::Hinge: {
             b3RevoluteJointDef jd = b3DefaultRevoluteJointDef();
             base(jd.base);
+            jd.enableLimit = d.enableLimit;
+            jd.lowerAngle = d.lower;
+            jd.upperAngle = d.upper;
+            jd.enableMotor = d.enableMotor;
+            jd.motorSpeed = d.motorSpeed;
+            jd.maxMotorTorque = std::max(0.0f, d.maxMotorEffort);
+            jd.enableSpring = d.enableSpring;
+            jd.targetAngle = d.target;
+            jd.hertz = std::max(0.0f, d.hertz);
+            jd.dampingRatio = std::max(0.0f, d.damping);
+            jd.maxSpringTorque = std::max(0.0f, d.maxSpringEffort);
             id = b3CreateRevoluteJoint(impl_->world, &jd);
             break;
         }
         case JointKind::Ball: {
             b3SphericalJointDef jd = b3DefaultSphericalJointDef();
             base(jd.base);
+            if (d.enableLimit) {
+                jd.enableConeLimit = true;
+                jd.coneAngle = std::clamp(d.upper, 0.0f, 3.10f);
+            }
+            jd.enableMotor = d.enableMotor;
+            jd.motorVelocity = b3Vec3{0, 0, d.motorSpeed};
+            jd.maxMotorTorque = std::max(0.0f, d.maxMotorEffort);
+            jd.enableSpring = d.enableSpring;
+            jd.hertz = std::max(0.0f, d.hertz);
+            jd.dampingRatio = std::max(0.0f, d.damping);
             id = b3CreateSphericalJoint(impl_->world, &jd);
+            break;
+        }
+        case JointKind::Slider: {
+            b3PrismaticJointDef jd = b3DefaultPrismaticJointDef();
+            base(jd.base);
+            jd.enableLimit = d.enableLimit;
+            jd.lowerTranslation = std::min(d.lower, d.upper);
+            jd.upperTranslation = std::max(d.lower, d.upper);
+            jd.enableMotor = d.enableMotor;
+            jd.motorSpeed = d.motorSpeed;
+            jd.maxMotorForce = std::max(0.0f, d.maxMotorEffort);
+            jd.enableSpring = d.enableSpring;
+            jd.targetTranslation = d.target;
+            jd.hertz = std::max(0.0f, d.hertz);
+            jd.dampingRatio = std::max(0.0f, d.damping);
+            jd.maxSpringForce = std::max(0.0f, d.maxSpringEffort);
+            id = b3CreatePrismaticJoint(impl_->world, &jd);
+            break;
+        }
+        case JointKind::Wheel: {
+            b3WheelJointDef jd = b3DefaultWheelJointDef();
+            base(jd.base);
+            jd.enableSuspensionSpring = d.enableSpring || !(d.hertz == 0.0f && d.enableLimit);
+            jd.suspensionHertz = d.hertz > 0.0f ? d.hertz : 6.0f;
+            jd.suspensionDampingRatio = d.damping > 0.0f ? d.damping : 0.8f;
+            jd.enableSuspensionLimit = d.enableLimit;
+            jd.lowerSuspensionLimit = std::min(d.lower, d.upper);
+            jd.upperSuspensionLimit = std::max(d.lower, d.upper);
+            jd.enableSpinMotor = d.enableMotor;
+            jd.spinSpeed = d.motorSpeed;
+            jd.maxSpinTorque = std::max(0.0f, d.maxMotorEffort);
+            jd.enableSteering = false;
+            id = b3CreateWheelJoint(impl_->world, &jd);
+            break;
+        }
+        case JointKind::Distance: {
+            b3DistanceJointDef jd = b3DefaultDistanceJointDef();
+            base(jd.base);
+            const float dx = static_cast<float>(atB.x - atA.x);
+            const float dy = static_cast<float>(atB.y - atA.y);
+            const float dz = static_cast<float>(atB.z - atA.z);
+            const float initialLen = std::sqrt(dx * dx + dy * dy + dz * dz);
+            jd.length = std::max(0.01f, d.target > 0.0f ? d.target : initialLen);
+            jd.enableLimit = d.enableLimit;
+            jd.minLength = std::max(0.01f, std::min(d.lower, d.upper));
+            jd.maxLength = std::max(jd.minLength, std::max(d.lower, d.upper));
+            jd.enableSpring = d.enableSpring;
+            jd.hertz = std::max(0.0f, d.hertz);
+            jd.dampingRatio = std::max(0.0f, d.damping);
+            if (d.maxSpringEffort > 0.0f) {
+                jd.lowerSpringForce = -d.maxSpringEffort;
+                jd.upperSpringForce = d.maxSpringEffort;
+            }
+            jd.enableMotor = d.enableMotor;
+            jd.motorSpeed = d.motorSpeed;
+            jd.maxMotorForce = std::max(0.0f, d.maxMotorEffort);
+            id = b3CreateDistanceJoint(impl_->world, &jd);
+            break;
+        }
+        case JointKind::Filter: {
+            b3FilterJointDef jd = b3DefaultFilterJointDef();
+            base(jd.base);
+            id = b3CreateFilterJoint(impl_->world, &jd);
             break;
         }
     }
     JointRec& r = impl_->joints[slot];
     r.id = id;
+    r.kind = d.kind;
     r.a = d.a;
     r.b = d.b;
     r.alive = true;
@@ -535,6 +676,191 @@ void World::jointLoad(std::uint32_t joint, float force[3], float torque[3]) cons
     }
     force[0] = f.x; force[1] = f.y; force[2] = f.z;
     torque[0] = t.x; torque[1] = t.y; torque[2] = t.z;
+}
+
+void World::setJointMotor(std::uint32_t joint, float speed, float maxEffort, bool enabled) {
+    if (!hasJoint(joint)) return;
+    const JointRec& r = impl_->joints[joint];
+    const float effort = std::max(0.0f, maxEffort);
+    bool changed = false;
+    switch (r.kind) {
+        case JointKind::Hinge:
+            changed = b3RevoluteJoint_IsMotorEnabled(r.id) != enabled ||
+                      b3RevoluteJoint_GetMotorSpeed(r.id) != speed ||
+                      b3RevoluteJoint_GetMaxMotorTorque(r.id) != effort;
+            b3RevoluteJoint_EnableMotor(r.id, enabled);
+            b3RevoluteJoint_SetMotorSpeed(r.id, speed);
+            b3RevoluteJoint_SetMaxMotorTorque(r.id, effort);
+            break;
+        case JointKind::Slider:
+            changed = b3PrismaticJoint_IsMotorEnabled(r.id) != enabled ||
+                      b3PrismaticJoint_GetMotorSpeed(r.id) != speed ||
+                      b3PrismaticJoint_GetMaxMotorForce(r.id) != effort;
+            b3PrismaticJoint_EnableMotor(r.id, enabled);
+            b3PrismaticJoint_SetMotorSpeed(r.id, speed);
+            b3PrismaticJoint_SetMaxMotorForce(r.id, effort);
+            break;
+        case JointKind::Wheel:
+            changed = b3WheelJoint_IsSpinMotorEnabled(r.id) != enabled ||
+                      b3WheelJoint_GetSpinMotorSpeed(r.id) != speed ||
+                      b3WheelJoint_GetMaxSpinTorque(r.id) != effort;
+            b3WheelJoint_EnableSpinMotor(r.id, enabled);
+            b3WheelJoint_SetSpinMotorSpeed(r.id, speed);
+            b3WheelJoint_SetMaxSpinTorque(r.id, effort);
+            break;
+        case JointKind::Distance:
+            changed = b3DistanceJoint_IsMotorEnabled(r.id) != enabled ||
+                      b3DistanceJoint_GetMotorSpeed(r.id) != speed ||
+                      b3DistanceJoint_GetMaxMotorForce(r.id) != effort;
+            b3DistanceJoint_EnableMotor(r.id, enabled);
+            b3DistanceJoint_SetMotorSpeed(r.id, speed);
+            b3DistanceJoint_SetMaxMotorForce(r.id, effort);
+            break;
+        default: break;
+    }
+    if (changed) { wake(r.a); wake(r.b); }
+}
+
+void World::setJointTarget(std::uint32_t joint, float target, float hertz, float damping, float maxEffort, bool enabled) {
+    if (!hasJoint(joint)) return;
+    const JointRec& r = impl_->joints[joint];
+    const float hz = std::max(0.0f, hertz);
+    const float dr = std::max(0.0f, damping);
+    const float eff = std::max(0.0f, maxEffort);
+    bool changed = false;
+    switch (r.kind) {
+        case JointKind::Hinge: {
+            const float tgt = std::clamp(target, -3.14159f, 3.14159f);
+            changed = b3RevoluteJoint_IsSpringEnabled(r.id) != enabled ||
+                      b3RevoluteJoint_GetTargetAngle(r.id) != tgt ||
+                      b3RevoluteJoint_GetSpringHertz(r.id) != hz ||
+                      b3RevoluteJoint_GetSpringDampingRatio(r.id) != dr ||
+                      b3RevoluteJoint_GetMaxSpringTorque(r.id) != eff;
+            b3RevoluteJoint_EnableSpring(r.id, enabled);
+            b3RevoluteJoint_SetTargetAngle(r.id, tgt);
+            b3RevoluteJoint_SetSpringHertz(r.id, hz);
+            b3RevoluteJoint_SetSpringDampingRatio(r.id, dr);
+            b3RevoluteJoint_SetMaxSpringTorque(r.id, eff);
+            break;
+        }
+        case JointKind::Slider:
+            changed = b3PrismaticJoint_IsSpringEnabled(r.id) != enabled ||
+                      b3PrismaticJoint_GetTargetTranslation(r.id) != target ||
+                      b3PrismaticJoint_GetSpringHertz(r.id) != hz ||
+                      b3PrismaticJoint_GetSpringDampingRatio(r.id) != dr ||
+                      b3PrismaticJoint_GetMaxSpringForce(r.id) != eff;
+            b3PrismaticJoint_EnableSpring(r.id, enabled);
+            b3PrismaticJoint_SetTargetTranslation(r.id, target);
+            b3PrismaticJoint_SetSpringHertz(r.id, hz);
+            b3PrismaticJoint_SetSpringDampingRatio(r.id, dr);
+            b3PrismaticJoint_SetMaxSpringForce(r.id, eff);
+            break;
+        case JointKind::Wheel: {
+            const float shz = hz > 0.0f ? hz : 8.0f;
+            changed = b3WheelJoint_IsSteeringEnabled(r.id) != enabled ||
+                      b3WheelJoint_GetTargetSteeringAngle(r.id) != target ||
+                      b3WheelJoint_GetSteeringHertz(r.id) != shz ||
+                      b3WheelJoint_GetSteeringDampingRatio(r.id) != dr;
+            b3WheelJoint_EnableSteering(r.id, enabled);
+            b3WheelJoint_SetTargetSteeringAngle(r.id, target);
+            b3WheelJoint_SetSteeringHertz(r.id, shz);
+            b3WheelJoint_SetSteeringDampingRatio(r.id, dr);
+            if (eff > 0.0f) b3WheelJoint_SetMaxSteeringTorque(r.id, eff);
+            break;
+        }
+        case JointKind::Distance: {
+            const float len = std::max(0.01f, target);
+            changed = b3DistanceJoint_IsSpringEnabled(r.id) != enabled ||
+                      b3DistanceJoint_GetLength(r.id) != len ||
+                      b3DistanceJoint_GetSpringHertz(r.id) != hz ||
+                      b3DistanceJoint_GetSpringDampingRatio(r.id) != dr;
+            b3DistanceJoint_EnableSpring(r.id, enabled);
+            if (b3DistanceJoint_GetLength(r.id) != len) b3DistanceJoint_SetLength(r.id, len);
+            b3DistanceJoint_SetSpringHertz(r.id, hz);
+            b3DistanceJoint_SetSpringDampingRatio(r.id, dr);
+            if (eff > 0.0f) b3DistanceJoint_SetSpringForceRange(r.id, -eff, eff);
+            break;
+        }
+        default: break;
+    }
+    if (changed) { wake(r.a); wake(r.b); }
+}
+
+void World::setJointLimits(std::uint32_t joint, float lower, float upper, bool enabled) {
+    if (!hasJoint(joint)) return;
+    const JointRec& r = impl_->joints[joint];
+    const float lo = std::min(lower, upper);
+    const float hi = std::max(lower, upper);
+    bool changed = false;
+    switch (r.kind) {
+        case JointKind::Hinge:
+            changed = b3RevoluteJoint_IsLimitEnabled(r.id) != enabled ||
+                      b3RevoluteJoint_GetLowerLimit(r.id) != lo ||
+                      b3RevoluteJoint_GetUpperLimit(r.id) != hi;
+            b3RevoluteJoint_EnableLimit(r.id, enabled);
+            b3RevoluteJoint_SetLimits(r.id, lo, hi);
+            break;
+        case JointKind::Slider:
+            changed = b3PrismaticJoint_IsLimitEnabled(r.id) != enabled ||
+                      b3PrismaticJoint_GetLowerLimit(r.id) != lo ||
+                      b3PrismaticJoint_GetUpperLimit(r.id) != hi;
+            b3PrismaticJoint_EnableLimit(r.id, enabled);
+            b3PrismaticJoint_SetLimits(r.id, lo, hi);
+            break;
+        case JointKind::Wheel:
+            changed = b3WheelJoint_IsSuspensionLimitEnabled(r.id) != enabled ||
+                      b3WheelJoint_GetLowerSuspensionLimit(r.id) != lo ||
+                      b3WheelJoint_GetUpperSuspensionLimit(r.id) != hi;
+            b3WheelJoint_EnableSuspensionLimit(r.id, enabled);
+            b3WheelJoint_SetSuspensionLimits(r.id, lo, hi);
+            break;
+        case JointKind::Distance: {
+            const float dlo = std::max(0.01f, lo), dhi = std::max(0.01f, hi);
+            changed = b3DistanceJoint_IsLimitEnabled(r.id) != enabled ||
+                      b3DistanceJoint_GetMinLength(r.id) != dlo ||
+                      b3DistanceJoint_GetMaxLength(r.id) != dhi;
+            b3DistanceJoint_EnableLimit(r.id, enabled);
+            b3DistanceJoint_SetLengthRange(r.id, dlo, dhi);
+            break;
+        }
+        default: break;
+    }
+    if (changed) { wake(r.a); wake(r.b); }
+}
+
+void World::jointState(std::uint32_t joint, float out[4]) const {
+    out[0] = out[1] = out[2] = out[3] = 0.0f;
+    if (!hasJoint(joint)) return;
+    const JointRec& r = impl_->joints[joint];
+    switch (r.kind) {
+        case JointKind::Hinge: {
+            out[0] = b3RevoluteJoint_GetAngle(r.id);
+            const b3BodyId ida = r.a == kWorld ? impl_->ground : impl_->bodies[r.a].id;
+            const b3BodyId idb = r.b == kWorld ? impl_->ground : impl_->bodies[r.b].id;
+            const b3Quat qa = b3MulQuat(b3Body_GetRotation(ida), b3Joint_GetLocalFrameA(r.id).q);
+            const b3Vec3 worldAxis = b3RotateVector(qa, b3Vec3{0, 0, 1});
+            const b3Vec3 wRel = b3Sub(b3Body_GetAngularVelocity(idb), b3Body_GetAngularVelocity(ida));
+            out[1] = b3Dot(wRel, worldAxis);
+            out[2] = b3RevoluteJoint_GetMotorTorque(r.id);
+            break;
+        }
+        case JointKind::Slider:
+            out[0] = b3PrismaticJoint_GetTranslation(r.id);
+            out[1] = b3PrismaticJoint_GetSpeed(r.id);
+            out[2] = b3PrismaticJoint_GetMotorForce(r.id);
+            break;
+        case JointKind::Wheel:
+            out[0] = b3WheelJoint_GetSteeringAngle(r.id);
+            out[1] = b3WheelJoint_GetSpinSpeed(r.id);
+            out[2] = b3WheelJoint_GetSpinTorque(r.id);
+            out[3] = b3WheelJoint_GetSteeringTorque(r.id);
+            break;
+        case JointKind::Distance:
+            out[0] = b3DistanceJoint_GetCurrentLength(r.id);
+            out[2] = b3DistanceJoint_GetMotorForce(r.id);
+            break;
+        default: break;
+    }
 }
 
 void World::step(float dt, int substeps) {
@@ -620,6 +946,16 @@ void World::setVelocity(std::uint32_t body, const float linear[3], const float a
 void World::applyImpulse(std::uint32_t body, const float impulse[3], const float at[3]) {
     if (!hasBody(body)) return;
     b3Body_ApplyLinearImpulse(impl_->bodies[body].id, v3(impulse), b3Pos{at[0], at[1], at[2]}, true);
+}
+
+void World::applyForce(std::uint32_t body, const float force[3], const float at[3]) {
+    if (!hasBody(body)) return;
+    b3Body_ApplyForce(impl_->bodies[body].id, v3(force), b3Pos{at[0], at[1], at[2]}, true);
+}
+
+void World::applyTorque(std::uint32_t body, const float torque[3]) {
+    if (!hasBody(body)) return;
+    b3Body_ApplyTorque(impl_->bodies[body].id, v3(torque), true);
 }
 
 float World::mass(std::uint32_t body) const { return hasBody(body) ? b3Body_GetMass(impl_->bodies[body].id) : 0.0f; }

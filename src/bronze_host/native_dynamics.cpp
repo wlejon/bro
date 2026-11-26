@@ -161,6 +161,22 @@ int32_t bro_dynamics_addMesh(int32_t world, const float* desc, uint32_t descLen,
                             static_cast<int>(indexLen / 3)));
 }
 
+int32_t bro_dynamics_addBoxes(int32_t world, const float* desc, uint32_t descLen, int32_t flags, int32_t layers,
+                              int32_t mask, const float* parts, uint32_t partsLen) {
+    World* w = worldOf(world);
+    if (!w || descLen < 22 || partsLen < 11 || partsLen % 11 != 0) return -1;
+    const uint32_t n = partsLen / 11;
+    std::vector<bro::dynamics::Part> pv(n);
+    for (uint32_t i = 0; i < n; i++) {
+        const float* p = parts + i * 11;
+        for (int k = 0; k < 3; k++) pv[i].c[k] = p[k];
+        for (int k = 0; k < 4; k++) pv[i].q[k] = p[3 + k];
+        for (int k = 0; k < 3; k++) pv[i].h[k] = p[7 + k];
+        pv[i].mass = p[10];
+    }
+    return named(w->addBoxes(bodyDesc(desc, flags, layers, mask), pv.data(), static_cast<int>(n)));
+}
+
 int32_t bro_dynamics_addHeightField(int32_t world, const float* desc, uint32_t descLen, int32_t layers, int32_t mask,
                                     const float* heights, uint32_t heightsLen, int32_t countX, int32_t countZ,
                                     const float* params, uint32_t paramsLen) {
@@ -251,7 +267,7 @@ void bro_dynamics_removeBody(int32_t world, int32_t body) {
 int32_t bro_dynamics_addJoint(int32_t world, int32_t kind, int32_t a, int32_t b, const float* desc, uint32_t descLen,
                               bool collide) {
     World* w = worldOf(world);
-    if (!w || descLen < 8 || kind < 0 || kind > 2) return -1;
+    if (!w || descLen < 8 || kind < 0 || kind > 6) return -1;
     bro::dynamics::JointDesc d;
     d.kind = static_cast<bro::dynamics::JointKind>(kind);
     d.a = idOf(a);
@@ -260,6 +276,23 @@ int32_t bro_dynamics_addJoint(int32_t world, int32_t kind, int32_t a, int32_t b,
     d.breakForce = desc[6];
     d.breakTorque = desc[7];
     d.collide = collide;
+    if (descLen >= 25) {
+        for (int i = 0; i < 3; i++) { d.anchorB[i] = desc[8 + i]; d.axisB[i] = desc[11 + i]; }
+        d.lower = desc[14];
+        d.upper = desc[15];
+        d.motorSpeed = desc[16];
+        d.maxMotorEffort = desc[17];
+        d.target = desc[18];
+        d.hertz = desc[19];
+        d.damping = desc[20];
+        d.maxSpringEffort = desc[21];
+        const int flags = static_cast<int>(desc[22]);
+        d.hasAnchorB = (flags & 1) != 0;
+        d.hasAxisB = (flags & 2) != 0;
+        d.enableLimit = (flags & 4) != 0;
+        d.enableMotor = (flags & 8) != 0;
+        d.enableSpring = (flags & 16) != 0;
+    }
     const std::uint32_t id = w->addJoint(d);
     return id == bro::dynamics::kWorld ? -1 : static_cast<int32_t>(id);
 }
@@ -276,6 +309,32 @@ bool bro_dynamics_hasJoint(int32_t world, int32_t joint) {
 void bro_dynamics_jointLoad(int32_t world, int32_t joint, bronze_native_buffer* out) {
     std::vector<float> v(6, 0.0f);
     if (World* w = worldOf(world)) w->jointLoad(idOf(joint), v.data(), v.data() + 3);
+    give(std::move(v), out);
+}
+
+void bro_dynamics_setJointMotor(int32_t world, int32_t joint, double speed, double maxEffort, bool enabled) {
+    if (World* w = worldOf(world)) {
+        w->setJointMotor(idOf(joint), static_cast<float>(speed), static_cast<float>(maxEffort), enabled);
+    }
+}
+
+void bro_dynamics_setJointTarget(int32_t world, int32_t joint, double target, double hertz, double damping,
+                                 double maxEffort, bool enabled) {
+    if (World* w = worldOf(world)) {
+        w->setJointTarget(idOf(joint), static_cast<float>(target), static_cast<float>(hertz),
+                          static_cast<float>(damping), static_cast<float>(maxEffort), enabled);
+    }
+}
+
+void bro_dynamics_setJointLimits(int32_t world, int32_t joint, double lower, double upper, bool enabled) {
+    if (World* w = worldOf(world)) {
+        w->setJointLimits(idOf(joint), static_cast<float>(lower), static_cast<float>(upper), enabled);
+    }
+}
+
+void bro_dynamics_jointState(int32_t world, int32_t joint, bronze_native_buffer* out) {
+    std::vector<float> v(4, 0.0f);
+    if (World* w = worldOf(world)) w->jointState(idOf(joint), v.data());
     give(std::move(v), out);
 }
 
@@ -317,6 +376,16 @@ void bro_dynamics_setVelocity(int32_t world, int32_t body, const float* v, uint3
 void bro_dynamics_applyImpulse(int32_t world, int32_t body, const float* v, uint32_t vLen) {
     World* w = worldOf(world);
     if (w && vLen >= 6) w->applyImpulse(idOf(body), v, v + 3);
+}
+
+void bro_dynamics_applyForce(int32_t world, int32_t body, const float* v, uint32_t vLen) {
+    World* w = worldOf(world);
+    if (w && vLen >= 6) w->applyForce(idOf(body), v, v + 3);
+}
+
+void bro_dynamics_applyTorque(int32_t world, int32_t body, const float* v, uint32_t vLen) {
+    World* w = worldOf(world);
+    if (w && vLen >= 3) w->applyTorque(idOf(body), v);
 }
 
 double bro_dynamics_mass(int32_t world, int32_t body) {

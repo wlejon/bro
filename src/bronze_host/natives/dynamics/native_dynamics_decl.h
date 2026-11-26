@@ -57,6 +57,12 @@ int32_t bro_dynamics_addHull(int32_t world, const float* desc, uint32_t descLen,
 int32_t bro_dynamics_addMesh(int32_t world, const float* desc, uint32_t descLen, int32_t layers, int32_t mask,
                              const float* xyz, uint32_t xyzLen, const int32_t* indices, uint32_t indexLen);
 
+// World.addBoxes (compound body)
+//   registered at __bro_native.dynamics.addBoxes
+//   parts: 11 floats each: center 3, rotation 4, half 3, mass
+int32_t bro_dynamics_addBoxes(int32_t world, const float* desc, uint32_t descLen, int32_t flags, int32_t layers,
+                              int32_t mask, const float* parts, uint32_t partsLen);
+
 // World.addHeightField
 //   registered at __bro_native.dynamics.addHeightField
 //   params: scaleX, scaleY, scaleZ, minH, maxH
@@ -117,6 +123,13 @@ bool bro_dynamics_hasJoint(int32_t world, int32_t joint);
 //   registered at __bro_native.dynamics.jointLoad; force 3, torque 3
 void bro_dynamics_jointLoad(int32_t world, int32_t joint, bronze_native_buffer* out);
 
+// World.setJointMotor / setJointTarget / setJointLimits / jointState
+void bro_dynamics_setJointMotor(int32_t world, int32_t joint, double speed, double maxEffort, bool enabled);
+void bro_dynamics_setJointTarget(int32_t world, int32_t joint, double target, double hertz, double damping,
+                                 double maxEffort, bool enabled);
+void bro_dynamics_setJointLimits(int32_t world, int32_t joint, double lower, double upper, bool enabled);
+void bro_dynamics_jointState(int32_t world, int32_t joint, bronze_native_buffer* out);
+
 // World.step
 //   registered at __bro_native.dynamics.step
 void bro_dynamics_step(int32_t world, double dt, int32_t substeps);
@@ -137,9 +150,11 @@ void bro_dynamics_velocity(int32_t world, int32_t body, bronze_native_buffer* ou
 //   registered at __bro_native.dynamics.setVelocity
 void bro_dynamics_setVelocity(int32_t world, int32_t body, const float* v, uint32_t vLen);
 
-// World.applyImpulse
-//   registered at __bro_native.dynamics.applyImpulse; impulse 3, the point 3
+// World.applyImpulse / applyForce / applyTorque
+//   registered at __bro_native.dynamics.applyImpulse / applyForce / applyTorque
 void bro_dynamics_applyImpulse(int32_t world, int32_t body, const float* v, uint32_t vLen);
+void bro_dynamics_applyForce(int32_t world, int32_t body, const float* v, uint32_t vLen);
+void bro_dynamics_applyTorque(int32_t world, int32_t body, const float* v, uint32_t vLen);
 
 // World.mass
 //   registered at __bro_native.dynamics.mass

@@ -15,7 +15,7 @@
 
     const ns = mount(globalThis.bro, 'dynamics');
 
-    const KINDS = { weld: 0, hinge: 1, ball: 2 };
+    const KINDS = { weld: 0, hinge: 1, ball: 2, slider: 3, wheel: 4, distance: 5, filter: 6 };
 
     const put3 = (out, at, v, d) => {
         out[at] = v ? +v[0] : d[0];
@@ -124,6 +124,24 @@
             return made('addMesh', __bro_native.dynamics.addMesh(this._id, d, layersOf(o), maskOf(o), xyz, idx));
         }
 
+        addCompound(o) {
+            const d = bodyDesc('addCompound', o, ZERO);
+            const plist = o && o.parts;
+            if (!Array.isArray(plist) || !plist.length) throw new RangeError('bro.dynamics: addCompound: parts must be a non-empty array');
+            const parts = new Float32Array(plist.length * 11);
+            for (let i = 0; i < plist.length; i++) {
+                const p = plist[i], at = i * 11, h = p && p.half;
+                if (!h || !(h[0] > 0 && h[1] > 0 && h[2] > 0)) throw new RangeError(`bro.dynamics: addCompound: part ${i}: half must be > 0`);
+                put3(parts, at, p.center || p.position, ZERO);
+                const r = p.rotation;
+                parts[at + 3] = r ? +r[0] : 0; parts[at + 4] = r ? +r[1] : 0;
+                parts[at + 5] = r ? +r[2] : 0; parts[at + 6] = r ? +r[3] : 1;
+                parts[at + 7] = +h[0]; parts[at + 8] = +h[1]; parts[at + 9] = +h[2];
+                parts[at + 10] = p.mass === undefined ? 1 : +p.mass;
+            }
+            return made('addCompound', __bro_native.dynamics.addBoxes(this._id, d, flagsOf(o), layersOf(o), maskOf(o), parts));
+        }
+
         addHeightField(o) {
             const d = bodyDesc('addHeightField', o, ZERO);
             const cx = o && (o.countX | 0), cz = o && (o.countZ | 0);
@@ -148,12 +166,33 @@
         addJoint(o) {
             if (o === null || typeof o !== 'object') throw new TypeError('bro.dynamics: addJoint takes an object');
             const kind = KINDS[o.kind === undefined ? 'weld' : o.kind];
-            if (kind === undefined) throw new TypeError("bro.dynamics: addJoint: kind is 'weld', 'hinge' or 'ball'");
-            const d = new Float32Array(8);
+            if (kind === undefined) throw new TypeError("bro.dynamics: addJoint: kind is 'weld', 'hinge', 'ball', 'slider', 'wheel', 'distance' or 'filter'");
+            const d = new Float32Array(25);
             put3(d, 0, o.anchor, ZERO);
             put3(d, 3, o.axis, [0, 1, 0]);
             d[6] = o.breakForce === undefined ? 0 : +o.breakForce;
             d[7] = o.breakTorque === undefined ? 0 : +o.breakTorque;
+            let flags = 0;
+            if (o.anchorB) { put3(d, 8, o.anchorB, ZERO); flags |= 1; }
+            if (o.axisB) { put3(d, 11, o.axisB, [0, 0, 1]); flags |= 2; }
+            if (o.lower !== undefined || o.upper !== undefined || o.enableLimit) {
+                d[14] = o.lower === undefined ? 0 : +o.lower;
+                d[15] = o.upper === undefined ? 0 : +o.upper;
+                if (o.enableLimit !== false) flags |= 4;
+            }
+            if (o.motorSpeed !== undefined || o.maxMotor !== undefined || o.enableMotor) {
+                d[16] = o.motorSpeed === undefined ? 0 : +o.motorSpeed;
+                d[17] = o.maxMotor === undefined ? 0 : +o.maxMotor;
+                if (o.enableMotor !== false) flags |= 8;
+            }
+            if (o.target !== undefined || o.hertz !== undefined || o.enableSpring) {
+                d[18] = o.target === undefined ? 0 : +o.target;
+                d[19] = o.hertz === undefined ? 0 : +o.hertz;
+                d[20] = o.damping === undefined ? 1 : +o.damping;
+                d[21] = o.maxSpring === undefined ? 0 : +o.maxSpring;
+                if (o.enableSpring !== false) flags |= 16;
+            }
+            d[22] = flags;
             const a = o.a === undefined || o.a === null ? -1 : o.a | 0;
             const b = o.b === undefined || o.b === null ? -1 : o.b | 0;
             const id = __bro_native.dynamics.addJoint(this._id, kind, a, b, d, !!o.collide);
@@ -167,6 +206,21 @@
         jointLoad(joint) {
             const v = __bro_native.dynamics.jointLoad(this._id, joint | 0);
             return { force: [v[0], v[1], v[2]], torque: [v[3], v[4], v[5]] };
+        }
+
+        setJointMotor(joint, speed, maxEffort, enabled) {
+            __bro_native.dynamics.setJointMotor(this._id, joint | 0, +speed, maxEffort === undefined ? 1e6 : +maxEffort, enabled === undefined ? true : !!enabled);
+        }
+        setJointTarget(joint, target, hertz, damping, maxEffort, enabled) {
+            __bro_native.dynamics.setJointTarget(this._id, joint | 0, +target, hertz === undefined ? 8 : +hertz,
+                damping === undefined ? 1 : +damping, maxEffort === undefined ? 0 : +maxEffort, enabled === undefined ? true : !!enabled);
+        }
+        setJointLimits(joint, lower, upper, enabled) {
+            __bro_native.dynamics.setJointLimits(this._id, joint | 0, +lower, +upper, enabled === undefined ? true : !!enabled);
+        }
+        jointState(joint) {
+            const v = __bro_native.dynamics.jointState(this._id, joint | 0);
+            return { position: v[0], speed: v[1], motorEffort: v[2], extra: v[3] };
         }
 
         step(dt, substeps) {
@@ -184,6 +238,13 @@
         applyImpulse(body, impulse, at) {
             __bro_native.dynamics.applyImpulse(this._id, body | 0,
                 Float32Array.of(+impulse[0], +impulse[1], +impulse[2], +at[0], +at[1], +at[2]));
+        }
+        applyForce(body, force, at) {
+            __bro_native.dynamics.applyForce(this._id, body | 0,
+                Float32Array.of(+force[0], +force[1], +force[2], +at[0], +at[1], +at[2]));
+        }
+        applyTorque(body, torque) {
+            __bro_native.dynamics.applyTorque(this._id, body | 0, Float32Array.of(+torque[0], +torque[1], +torque[2]));
         }
         mass(body) { return __bro_native.dynamics.mass(this._id, body | 0); }
         moveTo(body, pose, dt) {

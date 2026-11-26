@@ -15,9 +15,13 @@ namespace bro::dynamics {
 inline constexpr std::uint32_t kWorld = 0xffffffffu;
 
 enum class JointKind : std::uint8_t {
-    Weld,   // nothing moves
-    Hinge,  // turns about the axis
-    Ball,   // turns any way about the anchor
+    Weld,      // nothing moves
+    Hinge,     // turns about the axis
+    Ball,      // turns any way about the anchor
+    Slider,    // translates along the axis (prismatic)
+    Wheel,     // suspension along axis, spin around axisB (default orthogonal)
+    Distance,  // distance rod / cable / spring between anchor and anchorB
+    Filter,    // disables collision between a and b while keeping island link
 };
 
 struct Pose {
@@ -79,10 +83,25 @@ struct JointDesc {
     std::uint32_t a = kWorld;
     std::uint32_t b = kWorld;         // kWorld: the world itself
     float anchor[3] = {0, 0, 0};      // world, at the bodies' poses now
-    float axis[3] = {0, 1, 0};        // world, a hinge's
+    float axis[3] = {0, 1, 0};        // world hinge/slider/suspension axis
+    float anchorB[3] = {0, 0, 0};     // world anchor on b (Distance), when hasAnchorB
+    float axisB[3] = {0, 0, 1};       // world spin axis (Wheel), when hasAxisB
     float breakForce = 0;             // N; 0: any
     float breakTorque = 0;            // N m; 0: any
     bool collide = false;             // whether the two bodies touch each other
+    bool hasAnchorB = false;
+    bool hasAxisB = false;
+    bool enableLimit = false;
+    float lower = 0.0f;               // rad (Hinge) or m (Slider/Wheel/Distance)
+    float upper = 0.0f;
+    bool enableMotor = false;
+    float motorSpeed = 0.0f;          // rad/s or m/s
+    float maxMotorEffort = 0.0f;      // N*m or N
+    bool enableSpring = false;
+    float target = 0.0f;              // target angle, translation, or rest length
+    float hertz = 0.0f;
+    float damping = 1.0f;
+    float maxSpringEffort = 0.0f;     // N*m or N (0: unclamped)
 };
 
 // One box of a body made of several: its centre, turn and half extents in the body's space,
@@ -164,6 +183,11 @@ public:
     bool hasJoint(std::uint32_t joint) const;
     // What goes through a joint: on body b, world axes.
     void jointLoad(std::uint32_t joint, float force[3], float torque[3]) const;
+    void setJointMotor(std::uint32_t joint, float speed, float maxEffort, bool enabled);
+    void setJointTarget(std::uint32_t joint, float target, float hertz, float damping, float maxEffort, bool enabled);
+    void setJointLimits(std::uint32_t joint, float lower, float upper, bool enabled);
+    // Out[4]: position/angle (rad or m), speed (rad/s or m/s), motor effort (N*m or N), extra (steeringTorque/0).
+    void jointState(std::uint32_t joint, float out[4]) const;
 
     void step(float dt, int substeps);
 
@@ -172,6 +196,8 @@ public:
     void velocity(std::uint32_t body, float linear[3], float angular[3]) const;
     void setVelocity(std::uint32_t body, const float linear[3], const float angular[3]);
     void applyImpulse(std::uint32_t body, const float impulse[3], const float at[3]);
+    void applyForce(std::uint32_t body, const float force[3], const float at[3]);
+    void applyTorque(std::uint32_t body, const float torque[3]);
     float mass(std::uint32_t body) const;
     // A kinematic body, given the velocity that has it at the pose a step of dt from now.
     void moveTo(std::uint32_t body, const Pose& pose, float dt);
