@@ -37,7 +37,22 @@ const idle = (w, n) => { for (let i = 0; i < n; i++) w.step(1 / 60); };
     // Five tonnes at 40 m/s go through, slower, with what they knocked out.
     const shot = w.addSphere({ radius: 0.5, position: [2, 5, 10], mass: 5000, velocity: [0, 0, -40] });
     let movedRows = 0;
-    for (let i = 0; i < 60; i++) { w.step(1 / 60); movedRows = Math.max(movedRows, wall.moved().length / 8); }
+    const bare = new Map();
+    for (let i = 0; i < 60; i++) {
+        w.step(1 / 60);
+        movedRows = Math.max(movedRows, wall.moved().length / 8);
+        const b = wall.bared();
+        for (let k = 0; k < b.length; k += 2) bare.set(b[k], b[k + 1]);
+    }
+    // Every cell a neighbour parted from is told of, with the faces that left bare: the
+    // wall is one cell thick along z, so nothing of it is bare on a z face.
+    let standingBare = 0;
+    const st = wall.state();
+    for (const [cell, faces] of bare) {
+        assert(faces > 0 && (wall.cells[cell * 12] !== 1 || (faces & 0x30) === 0), 'cell ' + cell + ' bare on ' + faces);
+        if (st[cell] === -1) standingBare++;
+    }
+    assert(bare.size > 0 && standingBare > 0, 'the rim of the hole is bare: ' + standingBare + ' standing cells of ' + bare.size);
     const c = wall.counts;
     assert(c.standing < 92 && c.standing > 80, 'a hole, not the wall: ' + c.standing + ' standing');
     assert(c.pieces >= 1 && movedRows >= 1, 'what came out is loose: ' + c.pieces + ' bodies');

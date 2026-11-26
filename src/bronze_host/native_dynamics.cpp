@@ -433,6 +433,17 @@ void bro_dynamics_structureCrushed(int32_t world, int32_t structure, bronze_nati
     give(std::move(v), out);
 }
 
+void bro_dynamics_structureBared(int32_t world, int32_t structure, bronze_native_buffer* out) {
+    std::vector<int32_t> v;
+    if (Structure* s = structureOf(world, structure)) {
+        for (const bro::dynamics::CellFaces& f : s->bared()) {
+            v.push_back(static_cast<int32_t>(f.cell));
+            v.push_back(static_cast<int32_t>(f.faces));
+        }
+    }
+    give(std::move(v), out);
+}
+
 void bro_dynamics_structurePieces(int32_t world, int32_t structure, bronze_native_buffer* out) {
     std::vector<float> v;
     if (Structure* s = structureOf(world, structure)) {

@@ -188,6 +188,11 @@ void bro_dynamics_structureRaycast(int32_t world, int32_t structure, const float
 //   registered at __bro_native.dynamics.structureCrushed; the cells the last step crushed
 void bro_dynamics_structureCrushed(int32_t world, int32_t structure, bronze_native_buffer* out);
 
+// Structure.bared
+//   registered at __bro_native.dynamics.structureBared
+//   the cells a neighbour parted from in the last step, two ints each: cell, its bare faces
+void bro_dynamics_structureBared(int32_t world, int32_t structure, bronze_native_buffer* out);
+
 // Structure.pieces
 //   registered at __bro_native.dynamics.structurePieces; per loose body: body, cells, mass
 void bro_dynamics_structurePieces(int32_t world, int32_t structure, bronze_native_buffer* out);

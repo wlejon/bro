@@ -261,6 +261,7 @@
         state() { return __bro_native.dynamics.structureState(this._world, this._id); }
         moved() { return __bro_native.dynamics.structureMoved(this._world, this._id); }
         crushed() { return __bro_native.dynamics.structureCrushed(this._world, this._id); }
+        bared() { return __bro_native.dynamics.structureBared(this._world, this._id); }
         raycast(origin, direction, maxDistance) {
             const v = __bro_native.dynamics.structureRaycast(this._world, this._id,
                 Float32Array.of(+origin[0], +origin[1], +origin[2], +direction[0], +direction[1], +direction[2]),

@@ -70,6 +70,7 @@ struct Cell {
     float far0 = 0;       // m it was, as built
     float pressed = 0;    // N s of what rests on it, since the weight was last sent
     std::int32_t piece = kStanding;  // kStanding, kGone, or its piece
+    std::uint8_t faces = 0;  // bare: bit 2 * axis + 1 for the + face, in its member's frame
     int struck = -1000;   // the step of the last blow counted
     std::uint32_t adj0 = 0, adjN = 0;
     bool anchored = false;
@@ -149,6 +150,8 @@ struct Structure::Impl {
     std::vector<Blow> blows;
     std::vector<CellMove> moved;
     std::vector<std::uint32_t> gone;  // the cells the last step crushed
+    std::vector<std::uint32_t> bared; // the cells a joint of which the last step parted (as often as it did)
+    std::vector<CellFaces> faces;     // and what is bare of each now
     std::vector<std::uint32_t> none;
     int tick = 0;
     int standing = 0, jointsHeld = 0, pieceCount = 0;
@@ -392,14 +395,32 @@ struct Structure::Impl {
         return std::max(sum - cell.damage, 0.0f);
     }
 
+    // A joint lets go: the faces of its two cells it was across are bare from now on.
+    void let(Joint& e) {
+        if (!e.held) return;
+        e.held = false;
+        jointsHeld--;
+        for (int side = 0; side < 2; side++) {
+            const std::uint32_t c = side ? e.b : e.a, o = side ? e.a : e.b;
+            Cell& cell = cells[c];
+            const V3 d = rot(conj(members[cell.member].q), cells[o].p - cell.p);
+            int axis = 0;
+            float most = -1.0f;
+            for (int k = 0; k < 3; k++) {
+                const float r = std::fabs(axisOf(d, k)) / std::max(cell.h[k], 1e-6f);
+                if (r > most) {
+                    most = r;
+                    axis = k;
+                }
+            }
+            cell.faces = static_cast<std::uint8_t>(cell.faces | (1u << (2 * axis + (axisOf(d, axis) > 0 ? 1 : 0))));
+            bared.push_back(c);
+        }
+    }
+
     void part(std::uint32_t c) {
         const Cell& cell = cells[c];
-        for (std::uint32_t k = 0; k < cell.adjN; k++) {
-            Joint& e = joints[adj[cell.adj0 + k]];
-            if (!e.held) continue;
-            e.held = false;
-            jointsHeld--;
-        }
+        for (std::uint32_t k = 0; k < cell.adjN; k++) let(joints[adj[cell.adj0 + k]]);
     }
 
     void leave(std::uint32_t c) {
@@ -734,8 +755,7 @@ struct Structure::Impl {
         bool gave = false;
         for (std::uint32_t ji : cut) {
             if (!joints[ji].held) continue;
-            joints[ji].held = false;
-            jointsHeld--;
+            let(joints[ji]);
             gave = true;
         }
         std::sort(crushed.begin(), crushed.end());
@@ -953,8 +973,7 @@ struct Structure::Impl {
                         break;
                     }
                     budget -= e.energy;
-                    e.held = false;
-                    jointsHeld--;
+                    let(e);
                 }
             }
         }
@@ -1075,11 +1094,7 @@ struct Structure::Impl {
                 }
             }
         }
-        for (std::uint32_t ji : cut) {
-            if (!joints[ji].held) continue;
-            joints[ji].held = false;
-            jointsHeld--;
-        }
+        for (std::uint32_t ji : cut) let(joints[ji]);
         return !cut.empty();
     }
 
@@ -1176,8 +1191,7 @@ struct Structure::Impl {
                         const float edge = 0.5f * std::sqrt(e.area) * (std::fabs(bv) + std::fabs(bu));
                         const float stress = std::max(pull + bv * axisOf(d, v) + bu * axisOf(d, u) + edge, 0.0f) + shear;
                         if (stress <= e.sigma) continue;
-                        e.held = false;
-                        jointsHeld--;
+                        this->let(e);
                         let = true;
                     }
                     if (!let) break;
@@ -1262,6 +1276,14 @@ struct Structure::Impl {
     }
 
     void report() {
+        faces.clear();
+        const std::uint32_t tag = ++stamp;
+        for (std::uint32_t c : bared) {
+            if (mark[c] == tag) continue;
+            mark[c] = tag;
+            faces.push_back({c, cells[c].faces});
+        }
+        bared.clear();
         moved.clear();
         const auto add = [&](const Piece& p, const Pose& pose) {
             const Q q = fromQ(pose.q);
@@ -1305,6 +1327,7 @@ void Structure::state(std::vector<std::int32_t>& out) const {
 
 const std::vector<CellMove>& Structure::moved() const { return impl_->moved; }
 const std::vector<std::uint32_t>& Structure::crushed() const { return impl_->gone; }
+const std::vector<CellFaces>& Structure::bared() const { return impl_->faces; }
 
 void Structure::pieces(std::vector<PieceInfo>& out) const {
     out.clear();

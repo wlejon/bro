@@ -300,6 +300,15 @@ class Structure {
     crushed() {}
 
     /**
+     * The cells, standing or loose, a neighbour parted from in the last step,
+     * two numbers each: cell, and all of its faces that are bare now (bit
+     * 2 * axis + 1 for the + face, 2 * axis for the - face, in the cell's own
+     * frame): what a picture of them draws broken.
+     * @returns {Int32Array}
+     */
+    bared() {}
+
+    /**
      * The nearest standing cell along a ray, or null. A standing structure has
      * no bodies, so World.raycast passes through it; loose cells are bodies,
      * which World.raycast finds.

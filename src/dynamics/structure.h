@@ -78,6 +78,13 @@ struct CellMove {
     Pose pose;
 };
 
+// The faces of a cell its neighbours have parted from: bit 2 * axis + 1 for the + face and
+// 2 * axis for the - face, in the cell's own frame.
+struct CellFaces {
+    std::uint32_t cell = 0;
+    std::uint32_t faces = 0;
+};
+
 // Cells that came loose together: one body.
 struct PieceInfo {
     std::uint32_t body = 0;
@@ -111,6 +118,9 @@ public:
     const std::vector<CellMove>& moved() const;
     // The cells the last step crushed: they are gone.
     const std::vector<std::uint32_t>& crushed() const;
+    // The cells, standing or loose, a neighbour parted from in the last step, with all that
+    // is bare of each now: what a picture of them draws broken.
+    const std::vector<CellFaces>& bared() const;
     void pieces(std::vector<PieceInfo>& out) const;
     // The cells of a loose body; empty when it is not one of this structure's.
     const std::vector<std::uint32_t>& pieceCells(std::uint32_t body) const;

@@ -51,6 +51,7 @@ bool registerNatives_dynamics(std::string* error) {
            fn("__bro_native.dynamics.structureMoved", BRO_NATIVE_FN(bro_dynamics_structureMoved), "f32[]", {"i32", "i32"}, error) &&
            fn("__bro_native.dynamics.structureRaycast", BRO_NATIVE_FN(bro_dynamics_structureRaycast), "f32[]", {"i32", "i32", "f32[]", "f64"}, error) &&
            fn("__bro_native.dynamics.structureCrushed", BRO_NATIVE_FN(bro_dynamics_structureCrushed), "i32[]", {"i32", "i32"}, error) &&
+           fn("__bro_native.dynamics.structureBared", BRO_NATIVE_FN(bro_dynamics_structureBared), "i32[]", {"i32", "i32"}, error) &&
            fn("__bro_native.dynamics.structurePieces", BRO_NATIVE_FN(bro_dynamics_structurePieces), "f32[]", {"i32", "i32"}, error) &&
            fn("__bro_native.dynamics.structurePieceCells", BRO_NATIVE_FN(bro_dynamics_structurePieceCells), "i32[]", {"i32", "i32", "i32"}, error) &&
            fn("__bro_native.dynamics.structureDrop", BRO_NATIVE_FN(bro_dynamics_structureDrop), "void", {"i32", "i32", "i32"}, error) &&
