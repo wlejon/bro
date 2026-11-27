@@ -54,8 +54,6 @@ export const SMALL = {
 
 export const TIERS = {
   jit: ['jit', {}],
-  tier0: ['jit', { BRO_JIT_TIER: '0' }],
-  tier2: ['jit', { BRO_JIT_TIER: '2' }],
   aot: ['aot', {}],
   deopt3: ['jit', { BRASS_DEOPT_STRESS: '3' }],
   gcstress: ['jit', { BRONZE_GC_STRESS: '1' }],

@@ -74,7 +74,3 @@ BRO_SCENE_SHADER_SOURCE=D:/work/shaders bro ...     # a directory other than the
 ```
 
 `1` reads the tree this binary was built from; any other value is a directory. Each `.bk` file is read from that directory when brass compiles the scene's shaders and custom module hooks (`bro_vulkan_scene_test` checks every stage). It is read once per process: edit, then run again. The persistent pipeline cache is keyed by the driver on the SPIR-V itself, so an edited shader never picks up a stale pipeline.
-
-## JIT tier
-
-`BRO_JIT_TIER` pins one tier for the whole process, for debugging: `0` interpreter only, `1` every function baseline-compiled up front, `2` the whole program optimized before it runs, `auto` (default) tiered.

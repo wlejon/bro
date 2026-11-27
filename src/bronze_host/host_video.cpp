@@ -649,15 +649,14 @@ void installVideoGlobals() {
 //   A NAME IN THE MANIFEST MUST BE REGISTERED IN EVERY BUILD, whatever value it
 //   gets. Lowering admits manifest names as global reads; at run time
 //   bronze_global_get asks the builtins, then the host registry, then
-//   globalThis, and then calls fatal() (runtime/rt_state.cpp). A miss is not a
-//   ReferenceError a program could catch and not an undefined it could test —
-//   it aborts the process. So `typeof VideoEncoder` in a build without video
-//   would kill an app whose only crime was asking whether it could record.
+//   globalThis, and throws ReferenceError (`runtime/rt_global_cache.cpp`) if
+//   none hold it. Without registering `VideoEncoder` as `undefined` when video
+//   is compiled out, feature checks referencing `VideoEncoder` directly (not
+//   `typeof`) or missing from `globalThis` fail instead of reading `undefined`.
 //
-// Registered undefined is explicitly not a miss (runtime/host_globals.h says
-// so), so the lookup succeeds and answers undefined — which makes
-// `typeof VideoEncoder === 'undefined'` true, exactly the feature detection
-// bro's own docs tell an app to write (docs/video-api.js) when video is absent.
+// Registered undefined explicitly resolves to undefined (`runtime/host_globals.h`),
+// so `typeof VideoEncoder === 'undefined'` and `VideoEncoder === undefined` hold,
+// matching the feature detection in `docs/video-api.js` when video is absent.
 void installVideoGlobals() {
     ev::registerGlobal("VideoEncoder", ev::undefined());
     ev::registerGlobal("GifEncoder", ev::undefined());

@@ -74,8 +74,11 @@ class Worker {
    * small records clones in ~2 ms and rebuilds in ~4 ms). ArrayBuffer bytes
    * of 4 KB or more are copied ONCE, out of band, and the receiver adopts
    * that block without a second copy; a buffer in `transfer` is copied once
-   * the same way and detached on the sender. Transferring an ImageBitmap
-   * moves its pixels; a Mesh must be transferred (it moves by pointer).
+   * the same way and detached on the sender. A `SharedArrayBuffer` shares
+   * backing memory directly across main and Worker threads without copying
+   * (supporting `Atomics.wait`/`notify`/`waitAsync`); listing one in
+   * `transfer` throws a `TypeError`. Transferring an ImageBitmap moves its
+   * pixels; a Mesh must be transferred (it moves by pointer).
    * @param {*} message
    * @param {Array<Object>} [transfer]  ArrayBuffers, ImageBitmaps, Meshes
    */

@@ -101,10 +101,10 @@ carries `gcCycles`, `gcCycleFrames` and `gcCycleOpen`.
   APIs → bro's hand-built namespaces and compiled-out stubs → natives →
   `js/bro_core.js`.
 - A class an app can `instanceof` goes through `HostClass` (`host_class.cpp`).
-- **Register a host global in every build.** A manifest name the registry does
-  not have is `fatal()` at the read, not a `ReferenceError`. A compiled-out
+- **Register a host global in every build.** Reading an unregistered manifest
+  name throws `ReferenceError` at the read (`bronze_global_get`). A compiled-out
   feature registers its names bound to `undefined` (e.g. `VideoEncoder` with
-  `BRO_WITH_VIDEO=0`).
+  `BRO_WITH_VIDEO=0`), so feature detection sees `undefined` without throwing.
 
 ## WebGL bindings
 
@@ -123,7 +123,9 @@ backend. An error the binding decides goes down the ring
 ## Workers
 
 A `Worker` is its own thread and realm with brokit, `ImageBitmap`,
-`FastNoise`, and a cut-down `bro` (`installWorkerBroRoot`): `bro.net` +
+`FastNoise`, `SharedArrayBuffer` (plus `Atomics.wait` / `notify` /
+`waitAsync` shared across main and Worker threads), and a cut-down `bro`
+(`installWorkerBroRoot`): `bro.net` +
 `bro.net.sync`, `bro.server`, `bro.motion`, `bro.math`, `bro.gpu`,
 `bro.media`, and the sibling compute APIs (ear, `SynthGraph`, gameagent, mesh,
 rigging, tensor, lm, soundml compute, diffusion, vision, flora, image, themes,

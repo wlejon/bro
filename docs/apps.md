@@ -574,8 +574,8 @@ its module build lowers, so the run's records name the build's sites, and
 counting in every tier, interpreter to optimized code, what a module made to
 be harvested counts (function entries and loop iterations, call counts, the
 slow paths and arms that ran, which object layouts each property access met,
-which functions each call reached, allocation sites' promotions; bronze
-docs/type-feedback.md, "Harvest"). The counting costs the first run some
+which functions each call reached, allocation sites' promotions (bronze's
+inline-cache harvest). The counting costs the first run some
 speed; it is not served from or stored in the [code cache](code-cache.md).
 When the page is hidden or the app quits, the harvest is written beside the
 modules as the unit's profile (`<unit>.tfb`) and `bro --build-exe` starts in

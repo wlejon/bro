@@ -32,7 +32,7 @@ installed app's ahead-of-time build alike.
 
 | Command | Level | What it checks |
 |---|---|---|
-| `rw.js l1` | 1, JS state | After K frames with no renderer, the scene's state (world matrices, the culled and sorted render list, bone matrices, pixi transforms and batched vertices) hashed in node and in bro-headless at each bronze tier (`jit`, `aot`, `tier0`, `tier2`, `deopt3`, `gcstress`). `match` is bit-exact; `ulp` means the float64 hash differs but the float32 hash and counts agree (last-ulp libm differences). |
+| `rw.js l1` | 1, JS state | After K frames with no renderer, the scene's state (world matrices, the culled and sorted render list, bone matrices, pixi transforms and batched vertices) hashed in node and in bro-headless at each bronze mode (`jit`, `aot`, `deopt3`, `gcstress`). `match` is bit-exact; `ulp` means the float64 hash differs but the float32 hash and counts agree (last-ulp libm differences). |
 | `rw.js surface` | 2a, WebGL surface | Extensions, `getParameter` values, shader precision and context attributes in windowed bro and Chromium, diffed. |
 | `rw.js record` | 2b, WebGL calls | Every WebGL call of frames 0-2 at a small N, in both, diffed; prints the calls per frame and the functions whose counts differ. Equal per-frame counts mean the library made the same decisions in both. |
 | `rw.js shot --scene S` | 3, pixels | `readPixels` of one frame in both, compared by `compare_shots.js`. |

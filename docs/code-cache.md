@@ -11,8 +11,6 @@ Any of these differs from the stored entry:
 - any `BRONZE_*` environment variable except `BRONZE_TIMINGS`;
 - any source file the module graph read, the file list of an `import()` glob directory, or a bare specifier's resolution.
 
-`BRO_JIT_TIER` is not part of the key: every tier lowers the same IL (guarded method inlining included), so a unit cached at one tier loads at another.
-
 On a reload each script unit is looked up separately: the classic scripts of a page are one unit, each `<script type="module">` is its own. An edit to any file of a unit recompiles that whole unit.
 
 The log (`bro.log`, or stderr headless) says per compile whether it hit and why not: `compiled D:/app/index.html in 212 ms (code cache hit)`.

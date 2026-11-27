@@ -98,7 +98,7 @@ function compareStates(ref, got) {
 function cmdL1(argv) {
   const { opts } = parseArgs(argv, {
     scenes: { default: '' },
-    tiers: { default: 'jit,aot,tier0,deopt3,gcstress' },
+    tiers: { default: 'jit,aot,deopt3,gcstress' },
     sizes: { default: 'min,max' },
     frames: { type: 'int', default: 120 },
     'json-out': { default: '' },
@@ -119,7 +119,7 @@ function cmdL1(argv) {
         continue;
       }
       for (const tier of tiers) {
-        if ((tier === 'gcstress' || tier === 'tier0') && n > lo) continue;
+        if (tier === 'gcstress' && n > lo) continue;
         const f = tier === 'gcstress' ? Math.min(frames, 10) : frames;
         let cp2 = cp;
         let ref2 = ref;

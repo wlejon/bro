@@ -41,9 +41,8 @@ var before = released();
 var t = trim();
 assert(t.indexOf('script function bodies released') >= 0, 'trim releases bodies:\n' + t);
 var after = released();
-// A pinned tier (BRO_JIT_TIER) compiles with no tier-up to come and keeps no
-// MIR bodies ("built 0"), so there is nothing to release; the checks after
-// this one hold in every mode.
+// An AOT or non-retaining run keeps no MIR bodies ("built 0"), so there is
+// nothing to release; the checks after this one hold in every mode.
 var keepsBodies = !/built 0\b/.test(mirLine());
 if (keepsBodies)
     assert(after > before, 'the trim released bodies: ' + before + ' -> ' + after + ' (' + mirLine() + ')');

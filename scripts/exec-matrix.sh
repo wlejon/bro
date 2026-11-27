@@ -2,7 +2,7 @@
 # exec-matrix.sh — run a test suite once per way bronze can execute it, and
 # report the tests whose verdict depends on the way.
 #
-#   scripts/exec-matrix.sh [--modes auto,1,2,aot] [--out <dir>] -- <runner> [args...]
+#   scripts/exec-matrix.sh [--modes auto,aot,gc] [--out <dir>] -- <runner> [args...]
 #
 # <runner> is any suite runner that prints `PASS <name>` / `FAIL <name>` /
 # `SKIP <name>` lines: bro's tests/run_tests.sh, helmapps' scripts/run_tests.sh,
@@ -10,22 +10,18 @@
 # lines; e.g. helm's UI tests: -- ctest --test-dir ../helm/build-release).
 # Each mode runs it with the environment that selects the mode:
 #
-#   auto     the default tiered JIT
+#   auto     the default Auto multi-tier JIT
 #
 # The first mode listed is the reference every other mode is held to.
 #
-#   0        BRO_JIT_TIER=0, interpreter only
-#   1        BRO_JIT_TIER=1, every function baseline-compiled up front
-#   2        BRO_JIT_TIER=2, the whole program optimized before it runs
 #   aot      TEST_AOT=1, the page's scripts from ahead-of-time modules
 #            (runners that support it: helmapps' run_tests.sh)
 #   gc       BRONZE_GC_STRESS=1, a collection at every allocation (slow)
 #
-# Default modes: auto,1,2,aot. A test that passes in `auto` and fails in
-# another mode is a bronze bug until shown otherwise; a pinned tier also
-# shifts timing (tier 0 is slow, tier 2 compiles everything first), so check
-# for a race before blaming the compiler. Names that look like timing tests
-# (perf, budget, latency) are marked `timing?`.
+# Default modes: auto,aot. A test that passes in `auto` and fails in
+# another mode is a bronze bug until shown otherwise; GC stress shifts timing,
+# so check for a race before blaming the compiler. Names that look like timing
+# tests (perf, budget, latency) are marked `timing?`.
 #
 # To turn a divergence into a small repro, scripts/reduce-js.js shrinks a JS
 # file while a run of it in the failing mode still shows the symptom.
@@ -35,7 +31,7 @@
 # verdict differs from auto's, 0 otherwise.
 set -u
 
-modes="auto,1,2,aot"
+modes="auto,aot"
 out=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -55,17 +51,16 @@ mkdir -p "$out"
 
 IFS=',' read -r -a mode_list <<< "$modes"
 for m in "${mode_list[@]}"; do
-    case "$m" in auto|0|1|2|aot|gc) ;; *) echo "exec-matrix: unknown mode $m" >&2; exit 2 ;; esac
+    case "$m" in auto|aot|gc) ;; *) echo "exec-matrix: unknown mode $m" >&2; exit 2 ;; esac
 done
 
 for m in "${mode_list[@]}"; do
     log="$out/$m.log"
     start=$(date +%s)
     case "$m" in
-        auto) env -u BRO_JIT_TIER -u TEST_AOT -u BRONZE_GC_STRESS "$@" > "$log" 2>&1 ;;
-        0|1|2) env -u TEST_AOT -u BRONZE_GC_STRESS BRO_JIT_TIER="$m" "$@" > "$log" 2>&1 ;;
-        aot) env -u BRO_JIT_TIER -u BRONZE_GC_STRESS TEST_AOT=1 "$@" > "$log" 2>&1 ;;
-        gc)  env -u BRO_JIT_TIER -u TEST_AOT BRONZE_GC_STRESS=1 "$@" > "$log" 2>&1 ;;
+        auto) env -u TEST_AOT -u BRONZE_GC_STRESS "$@" > "$log" 2>&1 ;;
+        aot) env -u BRONZE_GC_STRESS TEST_AOT=1 "$@" > "$log" 2>&1 ;;
+        gc)  env -u TEST_AOT BRONZE_GC_STRESS=1 "$@" > "$log" 2>&1 ;;
     esac
     echo "mode $m: $(grep -cE '^\s*PASS |Test +#[0-9]+: .* Passed' "$log") passed," \
          "$(grep -cE '^\s*FAIL |Test +#[0-9]+: .*\*\*\*(Failed|Timeout|Exception|Not Run)' "$log") failed," \
