@@ -26,6 +26,9 @@ if (!bro.kernel.available || !bro.tensor || bro.tensor.available === false) {
     assert(sb.memorySafe === true, 'verifySandbox memorySafe');
     assert(sb.barrierUniform === true, 'verifySandbox barrierUniform');
     assert(sb.barriersProven >= 1, 'verifySandbox barriersProven >= 1');
+    assert(sb.proofTier === 3, 'verifySandbox proofTier === FullSmt');
+    assert(sb.hardeningTier === 1, 'verifySandbox hardeningTier === PureSmtZeroOverhead');
+    assert(sb.globalBoundsProven === true, 'verifySandbox globalBoundsProven');
 
     assert(typeof bro.kernel.dispatchTensorsVerified === 'function',
         'bro.kernel.dispatchTensorsVerified exists');
@@ -43,6 +46,45 @@ if (!bro.kernel.available || !bro.tensor || bro.tensor.available === false) {
         const want = seed[i] * 2.0 + 1.0;
         assert(Math.abs(got[i] - want) < 1e-4, `verified[${i}]=${got[i]} want ${want}`);
     }
+
+    // Out-of-bounds gridShape > store length must fail dispatch bounds check cleanly
+    // on a grid-covered @grid(1) kernel without barriers.
+    const gridMod = bro.kernel.compile(`
+        @kernel @grid(1)
+        fn k_grid_scale(g: grid<1>, out: rw_store<f32, 1>, inp: store<f32, 1>, scale: f32) {
+            let i = g.x();
+            out[i] = inp[i] * scale;
+        }
+    `, { file: 'verified_grid_bounds.bk' });
+    const kGrid = gridMod.kernel('k_grid_scale');
+    const gsb = kGrid.verifySandbox();
+    assert(gsb.passed === true && gsb.globalBoundsProven === true, 'k_grid_scale sandbox passes');
+    bro.kernel.dispatchTensorsVerified(kGrid, 16, dst, src, 2.0);
+    let threwOob = false;
+    try {
+        bro.kernel.dispatchTensorsVerified(kGrid, 32, dst, src, 2.0);
+    } catch (e) {
+        threwOob = e instanceof Error && e.message.indexOf('dispatch bounds') >= 0;
+    }
+    assert(threwOob, 'dispatchTensorsVerified must throw when gridShape exceeds proved store bounds');
+
+    // hardenSandbox option clamps unproven dynamic accesses and instruments unbounded loops.
+    const dynMod = bro.kernel.compile(`
+        @kernel @grid(1)
+        fn k_dyn_clamp(g: grid<1>, out: rw_store<f32, 1>, inp: store<f32, 1>, n: i32) {
+            let i = g.x();
+            var acc: f32 = 0.0;
+            for (var k: i32 = 0; k < n; k = k + 1) {
+                acc = acc + inp[k];
+            }
+            out[i] = acc;
+        }
+    `, { file: 'verified_harden_sandbox.bk', hardenSandbox: true, sandboxMaxLoopIterations: 4096 });
+    const kDyn = dynMod.kernel('k_dyn_clamp');
+    const dsb = kDyn.verifySandbox();
+    assert(dsb.passed === true, 'hardened dynamic kernel passes verifySandbox: ' + dsb.diagnostic);
+    assert(dsb.hardeningTier === 2, 'hardened dynamic kernel has HybridSmtClamped tier');
+    bro.kernel.dispatchTensorsVerified(kDyn, 16, dst, src, 4);
 
     // @cpu kernel must fail verifySandbox() and throw in dispatchTensorsVerified().
     const cpuMod = bro.kernel.compile(`

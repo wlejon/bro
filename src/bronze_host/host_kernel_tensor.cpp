@@ -712,6 +712,13 @@ Value dispatchTensorsImpl(std::span<const Value> args, bool requireSandbox, cons
     }
 
     std::string err;
+    if (requireSandbox) {
+        std::string boundsErr;
+        if (!k->verify_dispatch_bounds(shape, kargs, &boundsErr)) {
+            return ev::throwError(std::string(fnName) + ": kernel '" + k->name +
+                                  "' failed dispatch bounds check: " + boundsErr);
+        }
+    }
     if (sawVulkan) {
         brokernel::GpuLaunch launch;
         if (!k->gpu_launch(shape, kargs, 0, launch, &err)) {
