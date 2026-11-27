@@ -230,7 +230,7 @@ bool bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, c
                                         const double* /*opts_color*/, uint32_t /*opts_color_len*/,
                                         bool opts_intensity_given, double opts_intensity,
                                         bool opts_rotation_given, double opts_rotation,
-                                        bool /*opts_background_given*/, bool /*opts_background*/) {
+                                        bool opts_background_given, bool opts_background) {
     auto* g = graphOf(self);
     if (!g) return false;
     bool loaded = true;
@@ -243,6 +243,7 @@ bool bro_scene_SceneGraph_setEnvironment(void* self, bool opts_panorama_given, c
     }
     if (opts_intensity_given) g->setEnvironmentIntensity(static_cast<float>(opts_intensity));
     if (opts_rotation_given) g->setEnvironmentRotation(static_cast<float>(opts_rotation));
+    if (opts_background_given) g->renderer().setEnvironmentBackground(opts_background);
     return loaded;
 }
 

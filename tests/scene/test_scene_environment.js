@@ -1,7 +1,8 @@
 // The scene's environment and sky, by their pixels:
 //   - an HDR panorama (setEnvironment) lights meshes through its irradiance
-//     and draws as the sky; rotation turns both, intensity scales both, and
-//     clearing it brings back the transparent background;
+//     and draws as the sky; rotation turns both, intensity scales both,
+//     background: false keeps the light and drops the sky, and clearing it
+//     brings back the transparent background;
 //   - the physical atmosphere (setAtmosphere) draws a blue day sky;
 //   - the starfield (setStarfield) draws stars into the sky.
 // The panorama is written here as a Radiance .hdr: four quadrants of
@@ -115,6 +116,15 @@ if (!probe.scene) {
         const f2 = face(bright);
         const sum = (c) => c[0] + c[1] + c[2];
         assert(sum(f2) > sum(f1) * 1.5, `intensity scales the lighting: ${fmt(f1)} -> ${fmt(f2)}`);
+
+        // background: false keeps the lighting and drops the sky: the frame
+        // is clear where nothing draws (the canvas's own background shows).
+        sc.setEnvironment({ background: false });
+        const studio = sc.captureFrame();
+        assert(sky(studio)[3] < 5, `background: false draws no sky ${fmt(sky(studio))}`);
+        assert(rgbDiff(face(studio), f2) < 6, `background: false keeps the lighting: ${fmt(f2)} -> ${fmt(face(studio))}`);
+        sc.setEnvironment({ background: true });
+        assert(sky(sc.captureFrame())[3] > 250, 'background: true draws the sky again');
 
         // A panorama wider than any device's image limit is refused up
         // front (the bake would fail on the next frame), keeping the

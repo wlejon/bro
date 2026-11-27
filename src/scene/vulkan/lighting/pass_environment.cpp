@@ -7,8 +7,12 @@
 namespace bro::scene::vk {
 
 bool PassEnvironment::active(const SceneFrame& frame) const {
-    // (A debug view shows what answers it over black.)
-    return frame.renderer.debugView() == 0 && frame.gpu.environment.skyVisible(frame.renderer, frame.view.perspective);
+    // (A debug view shows what answers it over black.) A panorama set to
+    // light without a background draws no sky; an atmosphere or starfield
+    // still does.
+    const SceneRenderer& r = frame.renderer;
+    if (!r.environmentBackground() && !r.atmosphere().enabled && !r.starfield().enabled) return false;
+    return r.debugView() == 0 && frame.gpu.environment.skyVisible(r, frame.view.perspective);
 }
 
 void PassEnvironment::declare(const SceneFrame& frame, PassIO& io) const {

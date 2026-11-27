@@ -498,6 +498,13 @@ public:
     void  setEnvironmentRotation(float r) { envRotation_ = r; }
     float environmentRotation() const { return envRotation_; }
 
+    /// Whether the environment also draws as the sky behind the scene (the
+    /// default). Off, it only lights and reflects: where nothing draws the
+    /// frame stays clear and what is behind the canvas shows, while
+    /// reflection probes still see the panorama.
+    void setEnvironmentBackground(bool on) { envBackground_ = on; }
+    bool environmentBackground() const { return envBackground_; }
+
     void setStarfield(const StarfieldParams& s) { starfield_ = s; }
     const StarfieldParams& starfield() const { return starfield_; }
 
@@ -735,6 +742,7 @@ private:
     uint64_t envGeneration_ = 0;
     float  envIntensity_ = 1.0f;
     float  envRotation_ = 0.0f;
+    bool   envBackground_ = true;
     AtmosphereParams atmosphere_;
     StarfieldParams starfield_;
 };

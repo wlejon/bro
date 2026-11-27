@@ -43,6 +43,10 @@
  * @property {string} [panorama]  Path to an equirectangular .hdr (`hdr` is an alias); "" clears. On a load failure the previous environment stays.
  * @property {number} [intensity]  IBL strength multiplier.
  * @property {number} [rotation]  Y-axis rotation in radians, to line the panorama's sun up with a directional light.
+ * @property {boolean} [background=true]  Whether the panorama also draws as the sky. false: it only
+ *   lights and reflects (reflection probes still see it), and where nothing draws the canvas stays
+ *   clear, so the canvas's CSS background shows: a studio backdrop under image-based lighting. An
+ *   atmosphere or starfield still draws its sky. Kept until set again.
  */
 
 /**
