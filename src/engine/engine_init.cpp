@@ -219,8 +219,6 @@ void Engine::construct(const EngineConfig& config) {
     installWorkerHostBindings_ = config.installWorkerHostBindings;
     initDevLoopConfig(config);
     if (!config.manifestError.empty()) throw std::runtime_error(config.manifestError);
-    // JS runs on bronze's tiered default; BRO_JIT_TIER pins a tier to debug one.
-    bronze_host::applyJitTierOverride();
     // CSS animations are Web Animations records (css_transitions.h).
     animationManager_.setWebAnimations(&webAnimationManager_);
     transitionManager_.setWebAnimations(&webAnimationManager_);

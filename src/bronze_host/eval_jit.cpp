@@ -8,7 +8,6 @@
 #include "bronze_host/host_script_log.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_brokit.h"
-#include "bronze_host/host_pins.h"
 #include "bronze_host/host_rejection_events.h"
 #include "engine/engine.h"
 #include "engine/app_runtime.h"
@@ -36,17 +35,6 @@
 #include <vector>
 
 namespace bro::bronze_host {
-
-void applyJitTierOverride() {
-    const char* val = std::getenv("BRO_JIT_TIER");
-    if (!val || !*val) return;
-    if (auto tier = bronze::parseExecutionTier(val)) {
-        bronze::eval::setDefaultTier(*tier);
-        LOG_INFO("JS runs at the '%s' tier (BRO_JIT_TIER)", std::string(bronze::executionTierToString(*tier)).c_str());
-    } else {
-        LOG_WARN("BRO_JIT_TIER='%s' names no tier (0, 1, 2 or auto); JS runs tiered", val);
-    }
-}
 
 void stopBackgroundCompiles() {
     bronze::eval::stopBackgroundCompiles();
@@ -295,7 +283,6 @@ bronze::eval::EvalOptions scriptEvalOptions(engine::Engine& engine, const std::s
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = entryResolvesAsFor(engine, filename);
     opts.retainSource = true;
-    opts.pinsPath = discoverPinsPath(engine, filename);
     // One module map per realm. The page is one compilation unit and a headless
     // driver script is another, so without this a test's `import "/app/lib/x.js"`
     // compiles the app's module into its OWN unit and evaluates it a second
@@ -529,7 +516,6 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = absPath;
     opts.retainSource = true;
-    opts.pinsPath = discoverPinsPath(engine, absPath);
     // The consuming half of the same seam: a specifier that resolves to a file
     // the page already evaluated binds that instance instead of compiling a
     // second copy of it into this unit. The driver's OWN file is the entry and

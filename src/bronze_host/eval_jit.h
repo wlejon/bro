@@ -13,12 +13,6 @@ class Engine;
 
 namespace bro::bronze_host {
 
-/// Pins the tier every in-process compile runs at when BRO_JIT_TIER names one
-/// (bronze's parseExecutionTier: 0/interpreter, 1/baseline, 2/optimized,
-/// auto). Unset, JS runs on bronze's tiered default. A debugging switch,
-/// applied once when an Engine starts.
-void applyJitTierOverride();
-
 /// Drops every in-process program's queued background compiles (tier-ups
 /// and OSR entries) and waits out the running ones, so none is still
 /// compiling while the engine tears down.
