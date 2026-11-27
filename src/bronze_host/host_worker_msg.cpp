@@ -54,6 +54,19 @@ ByteBlock& ByteBlock::operator=(ByteBlock&& o) noexcept {
 
 ByteBlock::~ByteBlock() { std::free(data); }
 
+SharedBufferSlot& SharedBufferSlot::operator=(SharedBufferSlot&& o) noexcept {
+    if (this != &o) {
+        if (store) bronze::embed::releaseSharedArrayBuffer(store);
+        store = o.store;
+        o.store = nullptr;
+    }
+    return *this;
+}
+
+SharedBufferSlot::~SharedBufferSlot() {
+    if (store) bronze::embed::releaseSharedArrayBuffer(store);
+}
+
 namespace {
 
 using TransferRoots = std::vector<ev::Persistent>;
@@ -189,7 +202,7 @@ private:
     bool array(uint32_t m, int depth);
     bool collection(uint32_t m, bool isMap, int depth);
     bool handle(uint32_t m);
-    void buffer(Value buf);
+    bool buffer(Value buf);
     void string(Value s);
     void key(clone::Key k);
     void chars(const clone::Chars& c);
@@ -223,7 +236,23 @@ void Writer::string(Value s) {
     out_.bytes(c.data, size_t(c.length) * (c.utf16 ? 2 : 1));
 }
 
-void Writer::buffer(Value buf) {
+bool Writer::buffer(Value buf) {
+    if (ev::isSharedArrayBuffer(buf)) {
+        if (target_ != CloneTarget::Local) {
+            ev::throwTypeError("postMessage: SharedArrayBuffer cannot cross the network");
+            return false;
+        }
+        ev::SharedBufferHandle h = ev::retainSharedArrayBuffer(buf);
+        if (!h) {
+            ev::throwTypeError("postMessage: invalid SharedArrayBuffer");
+            return false;
+        }
+        const uint32_t idx = static_cast<uint32_t>(msg_.sharedBuffers.size());
+        msg_.sharedBuffers.emplace_back(h.store);
+        out_.u8(kSharedArrayBuffer);
+        out_.u32(idx);
+        return true;
+    }
     auto info = ev::arrayBufferInfo(buf);
     const bool transferred = isTransferred(buf, transfers_);
     if (transferred || (target_ == CloneTarget::Local && info.byteLength >= kOutOfBandMin)) {
@@ -235,11 +264,12 @@ void Writer::buffer(Value buf) {
         msg_.buffers.emplace_back(info.data, info.data ? info.byteLength : 0);
         out_.u8(kBufferBlock);
         out_.u32(idx);
-        return;
+        return true;
     }
     out_.u8(kArrayBuffer);
     out_.u32(info.byteLength);
     if (info.data) out_.bytes(info.data, info.byteLength);
+    return true;
 }
 
 bool Writer::value(Value val, int depth) {
@@ -308,8 +338,7 @@ bool Writer::object(Value val, int depth) {
         out_.f64(clone::dateValue(val));
         return true;
     case clone::Kind::ArrayBuffer:
-        buffer(val);
-        return true;
+        return buffer(val);
     case clone::Kind::TypedArray: {
         auto info = ev::typedArrayInfo(val);
         const uint8_t subtype = static_cast<uint8_t>(info.elementKind);
@@ -553,6 +582,7 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out,
 
     out.data.clear();
     out.buffers.clear();
+    out.sharedBuffers.clear();
     out.transferredImages.clear();
     out.sharedSnapshots.clear();
 #if BRO_WITH_3D
@@ -562,13 +592,21 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out,
         ev::throwTypeError("postMessage: a transfer list cannot cross the network");
         return false;
     }
+    for (const ev::Persistent& t : transferRoots) {
+        if (ev::isSharedArrayBuffer(t.get())) {
+            ev::throwTypeError("postMessage: SharedArrayBuffer cannot be transferred");
+            return false;
+        }
+    }
     Writer w(out, transferRoots, target);
     if (!w.value(root.get(), 0)) return false;
     // Serialize first, detach after (HTML StructuredSerializeWithTransfer):
     // every listed ArrayBuffer is detached, including one the payload reaches
     // only through a view, and none is when the clone fails.
     for (const ev::Persistent& t : transferRoots) {
-        if (ev::isArrayBuffer(t.get())) ev::detachArrayBuffer(t.get());
+        if (ev::isArrayBuffer(t.get()) && !ev::isSharedArrayBuffer(t.get())) {
+            ev::detachArrayBuffer(t.get());
+        }
     }
     return true;
 }

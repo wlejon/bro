@@ -40,7 +40,7 @@ void freeBlock(void*, uint8_t* bytes) { std::free(bytes); }
 bool makesObject(uint8_t tag) {
     switch (tag) {
     case kArray: case kObject: case kObjectLayout: case kArrayBuffer: case kBufferBlock:
-    case kTypedArray: case kTransferImageBitmap: case kDate: case kRegExp:
+    case kSharedArrayBuffer: case kTypedArray: case kTransferImageBitmap: case kDate: case kRegExp:
     case kMap: case kSet: case kError: case kDataView: case kTransferMesh:
     case kTableSnapshot:
         return true;
@@ -199,6 +199,14 @@ Value ReaderState::tagged(uint8_t tag, size_t slot, int depth) {
         const uint32_t size = block.size;
         block.data = nullptr;
         return ev::createExternalArrayBuffer(bytes, size, freeBlock, nullptr);
+    }
+    case kSharedArrayBuffer: {
+        if (!r_.ok(4)) return ev::throwTypeError("postMessage: truncated shared buffer index");
+        const uint32_t idx = r_.u32();
+        if (idx >= msg_.sharedBuffers.size() || !msg_.sharedBuffers[idx].store) {
+            return ev::throwTypeError("postMessage: invalid shared buffer index");
+        }
+        return ev::adoptSharedArrayBuffer(msg_.sharedBuffers[idx].store);
     }
     case kObjectRef: {
         if (!r_.ok(4)) return ev::throwTypeError("postMessage: truncated object reference");

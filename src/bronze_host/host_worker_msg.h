@@ -45,12 +45,27 @@ struct ByteBlock {
     ~ByteBlock();
 };
 
+// Reference-counted SharedBufferBlock handle carried in a local Message.
+// Move-only; drops its retained reference on destruction.
+struct SharedBufferSlot {
+    void* store = nullptr;
+
+    SharedBufferSlot() = default;
+    explicit SharedBufferSlot(void* s) : store(s) {}
+    SharedBufferSlot(SharedBufferSlot&& o) noexcept : store(o.store) { o.store = nullptr; }
+    SharedBufferSlot& operator=(SharedBufferSlot&& o) noexcept;
+    SharedBufferSlot(const SharedBufferSlot&) = delete;
+    SharedBufferSlot& operator=(const SharedBufferSlot&) = delete;
+    ~SharedBufferSlot();
+};
+
 struct Message {
     std::vector<uint8_t> data;
     // Out-of-band ArrayBuffer bytes: every transferred buffer, and a copied
     // one past the inline threshold (CloneTarget::Local only). Consumed by
     // deserializeMessage, one-shot like a transfer — hence mutable.
     mutable std::vector<ByteBlock> buffers;
+    std::vector<SharedBufferSlot> sharedBuffers;
     std::vector<SerializedImage> transferredImages;
     std::vector<std::shared_ptr<const bro::table::TableSnapshot>> sharedSnapshots;
     bool isError = false;
