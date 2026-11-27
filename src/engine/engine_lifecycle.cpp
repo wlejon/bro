@@ -14,6 +14,7 @@
 #include "bronze_host/eval_jit.h"
 #include "bronze_host/script_pump.h"
 #include "bronze_host/host_gc.h"
+#include "embed/embed.h"
 #include "api/fs_watch.h"
 
 #include "canvas/canvas_scene.h"
@@ -101,6 +102,7 @@ void Engine::shutdown() {
     // No JS compile may still be running on bronze's compile pool while the
     // engine tears down: queued ones are dropped, running ones finish.
     bronze_host::stopBackgroundCompiles();
+    bronze::embed::setAtomicsWaitWakeCallback(nullptr, nullptr);
 
     if (layoutPipeline_) layoutPipeline_->postShutdown();
     if (layoutThread_.joinable()) layoutThread_.join();

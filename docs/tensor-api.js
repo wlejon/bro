@@ -147,7 +147,9 @@ const dup = t.clone();      // owning device-side copy (same shape + dtype)
 
 /**
  * Upload host -> device as FP32. Accepts a Float32Array or anything
- * Float32Array.from() takes (a plain array). The destination keeps its
+ * Float32Array.from() takes (a plain array), including SharedArrayBuffer-backed
+ * TypedArray views consumed zero-copy on upload (synchronize Worker writes with
+ * double-buffering + Atomics before calling upload). The destination keeps its
  * (rows, cols) when their product equals the element count, otherwise it
  * becomes (n, 1).
  * @param {Float32Array|number[]} src

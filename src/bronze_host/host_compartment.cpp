@@ -7,7 +7,9 @@
 
 #include "bronze_host/host_compartment.h"
 
+#include "bronze_host/app_aot.h"
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/eval_jit.h"
 #include "bronze_host/host_appview.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_js_modules.h"
@@ -109,11 +111,17 @@ void finishDestroy(std::unique_ptr<Compartment> owned) {
         c->fiber = nullptr;
     }
     if (c->realm) {
+        ev::Realm* deadRealm = c->realm;
         s_byRealm.erase(c->realm);
         forgetRealmKeys(c->realm);
         ev::destroyRealm(c->realm);
         c->realm = nullptr;
+        clearReloadedModulesForRealm(deadRealm);
     }
+    for (ev::ModuleHandle h : c->moduleHandles) {
+        if (h != 0) ev::unloadModule(h);
+    }
+    c->moduleHandles.clear();
 }
 
 }  // namespace
@@ -231,6 +239,8 @@ Compartment* createCompartment(engine::Engine& engine, CompartmentSetup setup) {
     c->name = setup.name.empty() ? appSlot().name : setup.name;
     c->appDir = std::move(setup.appDir);
     c->basePath = std::move(setup.basePath);
+    c->aotDir = std::move(setup.aotDir);
+    c->aotExe = std::move(setup.aotExe);
     if (setup.permissions) {
         c->ownPermissions = std::move(setup.permissions);
         c->permissions = c->ownPermissions.get();
@@ -281,6 +291,10 @@ void destroyCompartment(Compartment* c, const std::string& why) {
         for (auto h = c->teardownHooks.rbegin(); h != c->teardownHooks.rend(); ++h)
             if (*h) (*h)();
         c->teardownHooks.clear();
+        if (!c->aotDir.empty()) {
+            bronze::embed::writeInlineCacheHarvests();
+            settleAotHarvestsForDir(c->aotDir);
+        }
     }
     c->dying = true;
     // The host's tables keyed by compartment.
@@ -500,6 +514,27 @@ void serviceCompartmentFibers() {
         }
     }
     dispatchAppViewEvents();
+}
+
+std::vector<CompartmentDiagnostics> compartmentDiagnostics() {
+    std::vector<CompartmentDiagnostics> out;
+    out.reserve(s_live.size());
+    for (const auto& c : s_live) {
+        if (!c || c->dying) continue;
+        CompartmentDiagnostics d;
+        d.id = c->id;
+        d.kind = c->kind;
+        d.name = c->name;
+        d.responding = !c->notResponding;
+        d.hasFiber = c->fiber != nullptr;
+        if (c->fiber) {
+            d.overruns = ev::compartmentOverruns(c->fiber);
+            d.longestOverrunMs = ev::compartmentLongestOverrunMs(c->fiber);
+            d.longestOverrunSite = ev::compartmentLongestOverrunSite(c->fiber);
+        }
+        out.push_back(std::move(d));
+    }
+    return out;
 }
 
 namespace {

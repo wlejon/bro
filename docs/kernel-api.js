@@ -416,6 +416,11 @@ if (bro.kernel.gpu) {
 // premultiplied by alpha. The texels are taken at present(), so the buffer
 // may be dispatched into again at once.
 //
+// Zero-copy Worker integration: any TypedArray view passed to `write` /
+// `createBuffer` / `dispatch` may be backed by a `SharedArrayBuffer`, allowing
+// a Worker to populate vertex/field data directly without structured-clone
+// copies; guard concurrent Worker writes with double-buffering + `Atomics`.
+//
 // Main thread only, like the GPU half; null in an iframe's document and on
 // a canvas that has another context (and the other contexts are null on it).
 // Errors: a non-KernelBuffer or an unknown format throws a TypeError; texels

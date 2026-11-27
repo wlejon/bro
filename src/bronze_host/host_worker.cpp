@@ -263,8 +263,13 @@ void installWorkerGlobals(engine::Engine& engine) {
                 Value type = ev::getProperty(a[1], "type");
                 moduleScript = ev::isString(type) && ev::toUtf8(type) == "module";
             }
+            const std::string workerAotDir = comp && !comp->aotDir.empty() ? comp->aotDir : engine.aotDir();
+            const std::string workerAppDir =
+                (comp && comp->kind == CompartmentKind::AppView && !comp->appDir.empty())
+                    ? comp->appDir
+                    : engine.appDir();
             auto* w = new WorkerInstance(script, base, &engine.assetMounts(), wid, std::move(inlineSource),
-                                         moduleScript);
+                                         moduleScript, workerAotDir, workerAppDir);
             {
                 std::lock_guard<std::mutex> lock(s_workersMutex);
                 s_activeWorkers.push_back(w);

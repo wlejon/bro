@@ -126,6 +126,13 @@ class HTMLAppViewElement extends HTMLIFrameElement {
   permissions;
 
   /**
+   *  Slice overrun telemetry for this app compartment, or null while it is not running.
+   * @readonly
+   * @type {{running: boolean, responding: boolean, overruns: number, longestOverrunMs: number, longestOverrunSite: string}|null}
+   */
+  stats;
+
+  /**
    *  Starts the app after `stop()`.
    */
   start() {}

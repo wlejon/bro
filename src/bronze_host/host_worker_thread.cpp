@@ -19,10 +19,12 @@
 #include "util/object_url.h"
 #include <api/api.h>
 #include "embed/embed_access.h"
+#include "embed/embed_gc.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -34,6 +36,16 @@
 #include <vector>
 
 namespace bro::bronze_host {
+
+void WorkerInstance::wakeFromAtomics(void* arg) {
+    auto* self = static_cast<WorkerInstance*>(arg);
+    if (!self) return;
+    {
+        std::lock_guard<std::mutex> lock(self->toWorkerMutex_);
+        self->atomicsWake_ = true;
+    }
+    self->toWorkerCv_.notify_all();
+}
 
 void WorkerInstance::threadFunc() {
     // Where a worker's boot goes, for the one line logged once its script
@@ -393,12 +405,33 @@ void WorkerInstance::threadFunc() {
     opts.classicScript = !moduleScript_;
     applyCodeCacheOptions(opts);
 
+    ev::Compartment* comp = nullptr;
+    auto runInWorkerComp = [&](const std::function<void()>& fn) -> bool {
+        if (terminated_.load(std::memory_order_acquire)) return false;
+        if (!comp) {
+            fn();
+            return !terminated_.load(std::memory_order_acquire);
+        }
+        ev::CompartmentStatus s = ev::runInCompartment(comp, fn);
+        if (s.state == ev::CompartmentState::Terminated) {
+            if (!terminated_.load(std::memory_order_acquire)) {
+                LOG_ERROR("worker '%s' aborted: %s%s%s", scriptPath_.c_str(), s.terminationReason.c_str(),
+                          s.terminationSite.empty() ? "" : "\n    at ", s.terminationSite.c_str());
+                dispatchWorkerError(s.terminationReason, scriptPath_, 0);
+            }
+            terminated_.store(true, std::memory_order_release);
+            return false;
+        }
+        return true;
+    };
+
     if (aotBuild_) {
         // `--aot-build`: this realm is the one the unit is compiled against,
         // and the script does not run (app_aot.cpp, buildAppAot).
         if (!scriptCode.empty()) {
             aotBuild_->scriptRead = true;
             opts.feedbackInPath = aotBuild_->profilePath;
+            opts.buildThreads = aotBuildThreads();
             if (aotBuild_->keepCurrent) {
                 bronze::eval::LoadedModule existing = bronze::eval::loadModule(scriptCode, opts, aotBuild_->recordPath);
                 if (existing.ok) {
@@ -416,53 +449,71 @@ void WorkerInstance::threadFunc() {
         LOG_ERROR("worker: empty or missing script: %s", resolvedPath.string().c_str());
         dispatchWorkerError("worker: empty or missing script: " + resolvedPath.string(), resolvedPath.string(), 0);
     } else {
+        ev::setAtomicsWaitWakeCallback(&WorkerInstance::wakeFromAtomics, this);
+        ev::CompartmentOptions copts;
+        copts.sliceMs = 0.0;  // unlimited slice; still preemptible & isolated on fatal()
+        copts.stackBytes = size_t{8} << 20;
+        copts.name = scriptPath_;
+        comp = ev::createCompartment(ev::currentRealm(), copts);
+        if (comp) {
+            std::lock_guard<std::mutex> lock(compMutex_);
+            if (terminated_.load(std::memory_order_acquire)) {
+                ev::destroyCompartment(comp);
+                comp = nullptr;
+            } else {
+                compartment_ = comp;
+            }
+        }
+
         // An installed app's worker script runs its ahead-of-time module, or
         // compiles to be harvested for one (app_aot.h, loadWorkerAotUnit). A
         // blob: or data: worker's text has no file to be the unit of.
         bootMarks[2] = BootClock::now();
-        bronze::embed::CallResult res;
         std::optional<bronze::eval::LoadedModule> aot;
         if (auto* eng = hostEngine(); eng && inlineSource_.empty()) {
-            aot = loadWorkerAotUnit(*eng, scriptCode, opts, moduleScript_, basePath_, workerAot_);
+            aot = loadWorkerAotUnit(*eng, scriptCode, opts, moduleScript_, basePath_, workerAot_, aotDir_, appDir_);
         }
-        if (aot) {
-            res = bronze::eval::runModule(*aot, opts);
-        } else {
-            auto compiled = bronze::eval::compileScript(scriptCode, opts);
-            res = bronze::eval::runCompiledScript(std::move(compiled), opts);
+        std::unique_ptr<bronze::eval::CompiledScript> compiled;
+        if (!aot && !terminated_.load(std::memory_order_acquire)) {
+            compiled = bronze::eval::compileScript(scriptCode, opts);
         }
-        bootMarks[3] = BootClock::now();
-        auto ms = [](BootClock::time_point a, BootClock::time_point b) {
-            return std::chrono::duration<double, std::milli>(b - a).count();
-        };
-        LOG_INFO("worker %s ready in %.1f ms (setup %.1f, brokit %.1f, bro %.1f, compile + top level %.1f)",
-                 resolvedPath.filename().string().c_str(), ms(bootStart, bootMarks[3]),
-                 ms(bootStart, bootMarks[0]), ms(bootMarks[0], bootMarks[1]), ms(bootMarks[1], bootMarks[2]),
-                 ms(bootMarks[2], bootMarks[3]));
+        runInWorkerComp([&] {
+            bronze::embed::CallResult res =
+                aot ? bronze::eval::runModule(*aot, opts)
+                    : bronze::eval::runCompiledScript(std::move(compiled), opts);
+            bootMarks[3] = BootClock::now();
+            auto ms = [](BootClock::time_point a, BootClock::time_point b) {
+                return std::chrono::duration<double, std::milli>(b - a).count();
+            };
+            LOG_INFO("worker %s ready in %.1f ms (setup %.1f, brokit %.1f, bro %.1f, compile + top level %.1f)",
+                     resolvedPath.filename().string().c_str(), ms(bootStart, bootMarks[3]),
+                     ms(bootStart, bootMarks[0]), ms(bootMarks[0], bootMarks[1]), ms(bootMarks[1], bootMarks[2]),
+                     ms(bootMarks[2], bootMarks[3]));
 
-        if (res.thrown) {
-            std::string errStr;
-            int lineno = 0;
-            ev::Persistent thrown(res.value);
-            if (thrown.get().isObject()) {
-                Value st = ev::getProperty(thrown.get(), "stack");
-                if (!ev::isUndefined(st) && !ev::isNull(st)) {
-                    errStr = ev::toUtf8(st);
-                } else {
-                    Value msg = ev::getProperty(thrown.get(), "message");
-                    if (!ev::isUndefined(msg) && !ev::isNull(msg)) {
-                        errStr = ev::toUtf8(msg);
+            if (res.thrown) {
+                std::string errStr;
+                int lineno = 0;
+                ev::Persistent thrown(res.value);
+                if (thrown.get().isObject()) {
+                    Value st = ev::getProperty(thrown.get(), "stack");
+                    if (!ev::isUndefined(st) && !ev::isNull(st)) {
+                        errStr = ev::toUtf8(st);
+                    } else {
+                        Value msg = ev::getProperty(thrown.get(), "message");
+                        if (!ev::isUndefined(msg) && !ev::isNull(msg)) {
+                            errStr = ev::toUtf8(msg);
+                        }
                     }
+                    Value ln = ev::getProperty(thrown.get(), "lineNumber");
+                    if (ev::isNumber(ln)) lineno = satCast<int>(ev::toDouble(ln));
                 }
-                Value ln = ev::getProperty(thrown.get(), "lineNumber");
-                if (ev::isNumber(ln)) lineno = satCast<int>(ev::toDouble(ln));
+                if (errStr.empty()) {
+                    errStr = thrownValueText(thrown.get());
+                }
+                LOG_ERROR("worker script execution failed for %s: %s", resolvedPath.string().c_str(), errStr.c_str());
+                dispatchWorkerError(errStr, resolvedPath.string(), lineno);
             }
-            if (errStr.empty()) {
-                errStr = thrownValueText(thrown.get());
-            }
-            LOG_ERROR("worker script execution failed for %s: %s", resolvedPath.string().c_str(), errStr.c_str());
-            dispatchWorkerError(errStr, resolvedPath.string(), lineno);
-        }
+        });
     }
 
     ev::Persistent fetchTick(ev::globalValue("__brokit_fetch_tick").value);
@@ -483,129 +534,176 @@ void WorkerInstance::threadFunc() {
     ev::Persistent fsAsyncTick(ev::globalValue("__brokit_fs_async_tick").value);
     ev::Persistent fsAsyncHasPending(ev::globalValue("__brokit_fs_async_has_pending").value);
 
-    while (!terminated_.load(std::memory_order_relaxed)) {
+    bool workSinceTrim = true;
+    BootClock::time_point idleSince = BootClock::now();
+    BootClock::time_point lastTrim = BootClock::now();
+
+    while (!terminated_.load(std::memory_order_acquire)) {
         std::deque<std::unique_ptr<Message>> batch;
         {
             std::lock_guard<std::mutex> lock(toWorkerMutex_);
             batch.swap(toWorkerQueue_);
+            atomicsWake_ = false;
         }
 
-        for (auto& msg : batch) {
-            ev::CallResult data = ev::catchThrow([&] { return deserializeMessage(*msg); });
-            if (data.thrown) {
-                LOG_ERROR("[bronze:worker] dropping a message that does not deserialize: %s",
-                          thrownValueText(data.value).c_str());
-                continue;
-            }
-            ev::Persistent dataRoot(data.value);
-            ev::Persistent evObjRoot(makeWorkerMessageEvent(dataRoot));
-
-            // The handler as it is now: an earlier message's handler may
-            // have replaced it (Monaco's worker swaps onmessage on its first).
-            Value gtVal = ev::globalValue("globalThis").value;
-            Value cb = ev::isObject(gtVal) ? ev::getProperty(gtVal, "onmessage") : ev::undefined();
-            if (ev::isFunction(cb)) {
-                ev::Persistent cbRoot(cb);
-                Value event = evObjRoot.get();
-                ev::CallResult r = ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
-                if (r.thrown) {
-                    std::string errStr = thrownValueText(r.value);
-                    dispatchWorkerError(errStr, scriptPath_, 0);
-                }
-            }
-
-            std::vector<ev::Persistent> msgListeners;
-            for (const auto& l : workerListeners) {
-                if (l.type == "message" && ev::isFunction(l.fn.get())) {
-                    msgListeners.emplace_back(l.fn.get());
-                }
-            }
-            for (auto& lfn : msgListeners) {
-                Value event = evObjRoot.get();
-                ev::CallResult r = ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&event, 1));
-                if (r.thrown) {
-                    std::string errStr = thrownValueText(r.value);
-                    dispatchWorkerError(errStr, scriptPath_, 0);
-                }
-            }
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        }
-
-        const double nowMs = wallNowMs();
-        if (ev::isFunction(timersTick.get())) {
-            Value args[2] = {ev::fromDouble(nowMs), ev::fromDouble(1.0)};
-            for (int fired = 0; fired < 256; ++fired) {
-                ev::CallResult res = ev::call(timersTick.get(), ev::undefined(), std::span<const Value>(args, 2));
-                if (ev::microtasksPending()) ev::drainMicrotasks();
-                if (res.thrown || !ev::isNumber(res.value) || ev::toDouble(res.value) != 0.0) break;
-            }
-        }
-        if (ev::isFunction(fetchTick.get())) {
-            ev::call(fetchTick.get(), ev::undefined(), {});
-        }
-        if (ev::isFunction(wsTick.get())) {
-            ev::call(wsTick.get(), ev::undefined(), {});
-        }
-        if (ev::isFunction(netTick.get())) {
-            ev::call(netTick.get(), ev::undefined(), {});
-        }
-        if (ev::isFunction(fsWatchTick.get())) {
-            ev::call(fsWatchTick.get(), ev::undefined(), {});
-        }
-        if (ev::isFunction(fsAsyncTick.get())) {
-            ev::call(fsAsyncTick.get(), ev::undefined(), {});
-        }
-        pollNet();
-        tickWorkerSiblingApis();
-        // A grant taken back while the app runs: what this Worker holds open
-        // under it closes here (embed/embed_access.h).
-        bronze::embed::revalidateHeldAccess();
-        // Every turn, pending microtasks or not: the checkpoint also runs the
-        // deferred finalizers, among them the ones that free an ArrayBuffer's
-        // external block, and a Worker whose handlers never await would
-        // otherwise keep every buffer it was ever handed (a decode worker's
-        // pixels, 24 MB a photo).
-        ev::drainMicrotasks();
-        flushRejections();
-
+        const bool hadBatch = !batch.empty();
+        bool didWork = hadBatch;
         bool hasPendingWork = false;
-        auto checkPending = [&](const ev::Persistent& fn) {
-            if (!hasPendingWork && ev::isFunction(fn.get())) {
-                Value has = ev::call(fn.get(), ev::undefined(), {}).value;
-                if (ev::toBool(has)) hasPendingWork = true;
-            }
-        };
-        checkPending(fetchHasPending);
-        checkPending(wsHasPending);
-        checkPending(netHasPending);
-        checkPending(fsWatchHasPending);
-        checkPending(fsAsyncHasPending);
-
         double nextTimerMs = -1.0;
-        if (ev::isFunction(timersNext.get())) {
-            Value nowVal = ev::fromDouble(wallNowMs());
-            ev::CallResult res = ev::call(timersNext.get(), ev::undefined(), std::span<const Value>(&nowVal, 1));
-            if (!res.thrown && ev::isNumber(res.value)) nextTimerMs = ev::toDouble(res.value);
+
+        if (!runInWorkerComp([&] {
+                for (auto& msg : batch) {
+                    ev::CallResult data = ev::catchThrow([&] { return deserializeMessage(*msg); });
+                    if (data.thrown) {
+                        LOG_ERROR("[bronze:worker] dropping a message that does not deserialize: %s",
+                                  thrownValueText(data.value).c_str());
+                        continue;
+                    }
+                    ev::Persistent dataRoot(data.value);
+                    ev::Persistent evObjRoot(makeWorkerMessageEvent(dataRoot));
+
+                    // The handler as it is now: an earlier message's handler may
+                    // have replaced it (Monaco's worker swaps onmessage on its first).
+                    Value gtVal = ev::globalValue("globalThis").value;
+                    Value cb = ev::isObject(gtVal) ? ev::getProperty(gtVal, "onmessage") : ev::undefined();
+                    if (ev::isFunction(cb)) {
+                        ev::Persistent cbRoot(cb);
+                        Value event = evObjRoot.get();
+                        ev::CallResult r = ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                        if (r.thrown) {
+                            std::string errStr = thrownValueText(r.value);
+                            dispatchWorkerError(errStr, scriptPath_, 0);
+                        }
+                    }
+
+                    std::vector<ev::Persistent> msgListeners;
+                    for (const auto& l : workerListeners) {
+                        if (l.type == "message" && ev::isFunction(l.fn.get())) {
+                            msgListeners.emplace_back(l.fn.get());
+                        }
+                    }
+                    for (auto& lfn : msgListeners) {
+                        Value event = evObjRoot.get();
+                        ev::CallResult r = ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                        if (r.thrown) {
+                            std::string errStr = thrownValueText(r.value);
+                            dispatchWorkerError(errStr, scriptPath_, 0);
+                        }
+                    }
+                    if (ev::microtasksPending()) ev::drainMicrotasks();
+                }
+
+                const double nowMs = wallNowMs();
+                if (ev::isFunction(timersTick.get())) {
+                    Value args[2] = {ev::fromDouble(nowMs), ev::fromDouble(1.0)};
+                    for (int fired = 0; fired < 256; ++fired) {
+                        ev::CallResult res =
+                            ev::call(timersTick.get(), ev::undefined(), std::span<const Value>(args, 2));
+                        if (ev::microtasksPending()) ev::drainMicrotasks();
+                        if (res.thrown || !ev::isNumber(res.value) || ev::toDouble(res.value) != 0.0) break;
+                        didWork = true;
+                    }
+                }
+                if (ev::isFunction(fetchTick.get())) ev::call(fetchTick.get(), ev::undefined(), {});
+                if (ev::isFunction(wsTick.get())) ev::call(wsTick.get(), ev::undefined(), {});
+                if (ev::isFunction(netTick.get())) ev::call(netTick.get(), ev::undefined(), {});
+                if (ev::isFunction(fsWatchTick.get())) ev::call(fsWatchTick.get(), ev::undefined(), {});
+                if (ev::isFunction(fsAsyncTick.get())) ev::call(fsAsyncTick.get(), ev::undefined(), {});
+                pollNet();
+                tickWorkerSiblingApis();
+                // A grant taken back while the app runs: what this Worker holds open
+                // under it closes here (embed/embed_access.h).
+                bronze::embed::revalidateHeldAccess();
+                if (ev::microtasksPending()) didWork = true;
+                // Every turn, pending microtasks or not: the checkpoint also runs the
+                // deferred finalizers, among them the ones that free an ArrayBuffer's
+                // external block, and a Worker whose handlers never await would
+                // otherwise keep every buffer it was ever handed (a decode worker's
+                // pixels, 24 MB a photo).
+                ev::drainMicrotasks();
+                flushRejections();
+
+                auto checkPending = [&](const ev::Persistent& fn) {
+                    if (!hasPendingWork && ev::isFunction(fn.get())) {
+                        Value has = ev::call(fn.get(), ev::undefined(), {}).value;
+                        if (ev::toBool(has)) hasPendingWork = true;
+                    }
+                };
+                checkPending(fetchHasPending);
+                checkPending(wsHasPending);
+                checkPending(netHasPending);
+                checkPending(fsWatchHasPending);
+                checkPending(fsAsyncHasPending);
+
+                if (ev::isFunction(timersNext.get())) {
+                    Value nowVal = ev::fromDouble(wallNowMs());
+                    ev::CallResult res =
+                        ev::call(timersNext.get(), ev::undefined(), std::span<const Value>(&nowVal, 1));
+                    if (!res.thrown && ev::isNumber(res.value)) nextTimerMs = ev::toDouble(res.value);
+                }
+            })) {
+            break;
         }
-        if (nextTimerMs == 0.0) continue;
+
+        if (terminated_.load(std::memory_order_acquire)) break;
+        if (nextTimerMs == 0.0) {
+            workSinceTrim = true;
+            idleSince = BootClock::now();
+            continue;
+        }
+
+        if (didWork || hasPendingWork) {
+            workSinceTrim = true;
+            idleSince = BootClock::now();
+        } else if (workSinceTrim) {
+            const auto now = BootClock::now();
+            const double idleMs = std::chrono::duration<double, std::milli>(now - idleSince).count();
+            const double sinceTrimMs = std::chrono::duration<double, std::milli>(now - lastTrim).count();
+            if (idleMs >= 2000.0 && sinceTrimMs >= 10000.0) {
+                const auto p = ev::heapPressure();
+                if (p.oldGrowth > p.fullThreshold / 2) ev::collectGarbage();
+                ev::releaseIdleHeapMemory();
+                ev::releaseIdleCompiledBodies();
+                workSinceTrim = false;
+                lastTrim = BootClock::now();
+            }
+        }
+
+        const double asyncAtomicsMs = ev::nextAsyncAtomicsTimeoutMs();
+        if (asyncAtomicsMs == 0.0 || ev::microtasksPending()) continue;
 
         {
             std::unique_lock<std::mutex> lock(toWorkerMutex_);
-            if (!toWorkerQueue_.empty()) continue;
+            if (!toWorkerQueue_.empty() || atomicsWake_ || terminated_.load(std::memory_order_acquire)) continue;
             const double hz = tickRateHz.load(std::memory_order_relaxed);
             std::chrono::milliseconds wait;
             if (hz > 0.0) {
-                wait = std::chrono::milliseconds(static_cast<long long>(std::max(1.0, 1000.0 / hz)));
+                double capMs = std::max(1.0, 1000.0 / hz);
+                if (std::isfinite(asyncAtomicsMs)) capMs = std::min(capMs, std::max(1.0, asyncAtomicsMs));
+                wait = std::chrono::milliseconds(static_cast<long long>(capMs));
             } else if (hasPendingWork) {
-                wait = std::chrono::milliseconds(5);
-            } else if (nextTimerMs < 0.0) {
-                wait = std::chrono::milliseconds(500);
+                double capMs = 5.0;
+                if (std::isfinite(asyncAtomicsMs)) capMs = std::min(capMs, std::max(1.0, asyncAtomicsMs));
+                wait = std::chrono::milliseconds(static_cast<long long>(capMs));
             } else {
-                long long t = static_cast<long long>(std::clamp(nextTimerMs, 1.0, 500.0));
+                double capMs = 500.0;
+                if (nextTimerMs > 0.0) capMs = std::min(capMs, nextTimerMs);
+                if (std::isfinite(asyncAtomicsMs)) capMs = std::min(capMs, asyncAtomicsMs);
+                long long t = static_cast<long long>(std::clamp(capMs, 1.0, 500.0));
                 wait = std::chrono::milliseconds(t);
             }
             toWorkerCv_.wait_for(lock, wait);
         }
+    }
+
+    ev::setAtomicsWaitWakeCallback(nullptr, nullptr);
+    if (comp) {
+        {
+            std::lock_guard<std::mutex> lock(compMutex_);
+            compartment_ = nullptr;
+        }
+        ev::destroyCompartment(comp);
+        comp = nullptr;
     }
 
     // A worker compiled to be harvested leaves its harvest while its realm

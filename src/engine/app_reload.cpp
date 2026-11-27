@@ -20,6 +20,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_aot.h"
+#include "bronze_host/eval_jit.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_js_modules.h"
 #include "embed/embed.h"
@@ -109,6 +110,7 @@ void Engine::unloadAppModules() {
         if (handle != 0) bronze::embed::unloadModule(handle);
     }
     appModuleHandles_.clear();
+    bronze_host::clearAllReloadedModules();
 }
 
 void Engine::requestAppReload() {

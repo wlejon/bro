@@ -47,6 +47,11 @@
 
 namespace bro::bronze_host {
 
+struct Compartment;
+
+/// Bounded per-build compiler thread count (BRO_AOT_THREADS or half cores clamped 1..4).
+size_t aotBuildThreads();
+
 /// The name a unit's record goes by in an AOT directory (`<id>.bzm`): a
 /// digest of the unit's compile name and whether it is published as a module
 /// file (EvalOptions filename / publishEntry), so the build and a run agree on
@@ -102,6 +107,17 @@ bool loadAheadAotUnit(engine::Engine& engine, const std::string& execCode, bronz
 std::optional<bronze::eval::LoadedModule> takeAotUnit(engine::Engine& engine, const std::string& execCode,
                                                       bronze::eval::EvalOptions& opts, bool pageUnit);
 
+/// The same for a child compartment (`<appview>` / `<iframe>`) with its own
+/// `aotDir` and per-compartment ordinals (`aotRunOrdinals`).
+std::optional<bronze::eval::LoadedModule> takeCompartmentAotUnit(engine::Engine& engine, Compartment& comp,
+                                                                 const std::string& execCode,
+                                                                 bronze::eval::EvalOptions& opts,
+                                                                 bool allowHarvest = true);
+
+/// Settles harvests and rebuild requests recorded for a specific AOT directory
+/// (e.g. when an <appview> compartment is torn down before process exit).
+void settleAotHarvestsForDir(const std::string& aotDir);
+
 /// Drops a module loadAheadAotUnit kept that no run took.
 void discardAheadAotUnit();
 
@@ -121,7 +137,9 @@ struct WorkerAotRun;
 /// be harvested. Worker thread.
 std::optional<bronze::eval::LoadedModule> loadWorkerAotUnit(engine::Engine& engine, const std::string& code,
                                                             bronze::eval::EvalOptions& opts, bool moduleScript,
-                                                            const std::string& basePath, WorkerAotRun& run);
+                                                            const std::string& basePath, WorkerAotRun& run,
+                                                            const std::string& overrideAotDir = {},
+                                                            const std::string& overrideAppDir = {});
 
 /// The worker is ending, its harvest (if any) just written on its thread:
 /// the harvest becomes the unit's profile, and a module whose run entered a

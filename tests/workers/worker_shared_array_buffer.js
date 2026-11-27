@@ -50,4 +50,14 @@ onmessage = (e) => {
         Atomics.notify(view, msg.index, 1);
         return;
     }
+
+    if (msg.cmd === 'fill-floats') {
+        const f32 = new Float32Array(msg.sab, 32, 4);
+        f32[0] = 1.5;
+        f32[1] = 2.5;
+        f32[2] = 3.5;
+        f32[3] = 4.5;
+        postMessage({ cmd: 'floats-ready' });
+        return;
+    }
 };

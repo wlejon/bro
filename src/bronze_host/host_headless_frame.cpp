@@ -2,6 +2,7 @@
 #include "bronze_host/host_access.h"
 #include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_builder.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_telemetry.h"
 #include "bronze_host/host_gc.h"
@@ -806,7 +807,24 @@ void installHeadlessFrame(engine::Engine& engine) {
                 bnum("gcCycleFrames", static_cast<double>(cycles.lastFrames));
                 bnum("gcCycleOpen", cycles.open ? 1.0 : 0.0);
                 bnum("shapeTransitions", static_cast<double>(tel.shapeTransitions));
+                const std::vector<CompartmentDiagnostics> comps = compartmentDiagnostics();
+                uint64_t totalOverruns = 0;
+                for (const auto& d : comps) totalOverruns += d.overruns;
+                bnum("compartmentOverruns", static_cast<double>(totalOverruns));
                 o.set(ev::setProperty(o.get(), "bronze", bz.get()));
+                ev::Persistent arr(hostArrayOf(comps.size(), [&comps](size_t i) -> Value {
+                    const auto& d = comps[i];
+                    ObjectBuilder cobj;
+                    cobj.set("id", ev::fromDouble(static_cast<double>(d.id)));
+                    cobj.set("kind", ev::fromUtf8(compartmentKindName(d.kind)));
+                    cobj.set("name", ev::fromUtf8(d.name));
+                    cobj.set("responding", ev::fromBool(d.responding));
+                    cobj.set("overruns", ev::fromDouble(static_cast<double>(d.overruns)));
+                    cobj.set("longestOverrunMs", ev::fromDouble(d.longestOverrunMs));
+                    cobj.set("longestOverrunSite", ev::fromUtf8(d.longestOverrunSite));
+                    return cobj.get();
+                }));
+                o.set(ev::setProperty(o.get(), "compartments", arr.get()));
             }
             {
                 const NodeRegistryStats rs = hostNodeRegistryStats();

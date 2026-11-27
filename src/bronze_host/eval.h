@@ -14,6 +14,8 @@ class Engine;
 
 namespace bro::bronze_host {
 
+struct Compartment;
+
 /// How a compile's top level binds. `Module`: a page or iframe `<script
 /// type="module">` (and internal expression helpers), whose top-level
 /// declarations stay its own bindings (`publishTopLevel = false`,
@@ -64,6 +66,12 @@ bool evalScript(engine::Engine& engine, const std::string& code,
 /// `goal`: ClassicScripts for the page's joined classic unit.
 bool evalAppScript(engine::Engine& engine, const std::string& code,
                    const std::string& filename, bool moduleFile, ScriptGoal goal);
+
+/// evalScript for a child compartment's sub-document (`<appview>` / `<iframe>`),
+/// tracking its loaded module handle on `comp` so it can be unloaded on
+/// compartment teardown and allowing its own AOT directory to load/harvest.
+bool evalSubDocScript(engine::Engine& engine, Compartment& comp, const std::string& code,
+                      const std::string& filename, bool moduleFile, ScriptGoal goal);
 
 /// A page's classic scripts run as one unit (Engine::pageScriptUnits) whose
 /// text sets a marker as it enters each script, `classicScriptMarker(i)`, and

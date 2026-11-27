@@ -59,8 +59,14 @@ void cleanGlobalProp(const std::string& name) {
 // dynamic imports alike.
 std::vector<bronze::modules::ModuleRoot> moduleRootsFor(const engine::Engine& engine) {
     std::vector<bronze::modules::ModuleRoot> roots;
+    const Compartment* comp = currentCompartment();
+    const bool appViewOverride = comp && comp->kind == CompartmentKind::AppView && !comp->appDir.empty();
     for (const auto& [prefix, target] : engine.assetMounts().mounts()) {
-        roots.push_back({prefix, std::filesystem::path(target)});
+        if (appViewOverride && prefix == "/app") {
+            roots.push_back({prefix, std::filesystem::path(comp->appDir)});
+        } else {
+            roots.push_back({prefix, std::filesystem::path(target)});
+        }
     }
     const dom::Document* doc = currentHostDocument();
     const auto& importMap = doc && doc != engine.document() ? doc->importMap() : engine.pageImportMap();
@@ -107,6 +113,23 @@ bool evalAppScript(engine::Engine& engine, const std::string& code, const std::s
     // Recorded on failure too: a top level that threw halfway still
     // registered its spans, and they are still the reload's to retire.
     engine.addAppModuleHandle(handle);
+    return ok;
+}
+
+bool evalSubDocScript(engine::Engine& engine, Compartment& comp, const std::string& code,
+                      const std::string& filename, bool moduleFile, ScriptGoal goal) {
+    ev::ModuleHandle handle = 0;
+    std::optional<brokit::api::RequireDirGuard> requireDir;
+    if (moduleFile) {
+        const std::filesystem::path file(std::u8string(filename.begin(), filename.end()));
+        requireDir.emplace(file.parent_path());
+    }
+    bool ok;
+    {
+        HostEvalScope evalScope;
+        ok = evalScriptJit(engine, code, filename, &handle, moduleFile, goal);
+    }
+    if (handle != 0) comp.moduleHandles.push_back(handle);
     return ok;
 }
 

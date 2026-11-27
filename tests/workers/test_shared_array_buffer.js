@@ -88,4 +88,16 @@ timeoutWait.value.then((v) => { timeoutVal = v; });
 pumpUntil(() => timeoutVal !== null);
 assert(timeoutVal === 'timed-out', 'timed waitAsync resolved to timed-out, got ' + timeoutVal);
 
+// 8. Zero-copy SharedArrayBuffer-backed TypedArray consumed by bro.tensor.
+if (typeof bro !== 'undefined' && bro.tensor && bro.tensor.available) {
+    const f32 = new Float32Array(sab, 32, 4);
+    w.postMessage({ cmd: 'fill-floats', sab: sab });
+    pumpUntil(() => replies.some((r) => r.cmd === 'floats-ready'));
+    const t = bro.tensor.createTensor(2, 2);
+    t.upload(f32);
+    const out = t.download();
+    assert(out.length === 4 && out[0] === 1.5 && out[1] === 2.5 && out[2] === 3.5 && out[3] === 4.5,
+           'bro.tensor.upload read SharedArrayBuffer Floats cleanly: ' + Array.from(out));
+}
+
 w.terminate();

@@ -36,7 +36,17 @@ void applyCodeCacheOptions(bronze::eval::EvalOptions& opts);
 bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
                                               const std::string& filename = {},
                                               bronze::embed::ModuleHandle* moduleHandleOut = nullptr,
-                                              bool moduleFile = false, ScriptGoal goal = ScriptGoal::Unit);
+                                              bool moduleFile = false, ScriptGoal goal = ScriptGoal::Unit,
+                                              bool allowAot = true);
+
+/// Reload an ES module file in place inside the current compartment's realm:
+/// invalidates its entry in bronze's module registry, compiles and evaluates
+/// the updated file via JIT (bypassing any prior AOT image), retires any
+/// previously reloaded handle for that module path, and returns its new
+/// module namespace object.
+bronze::Value reloadModuleInPlace(engine::Engine& engine, const std::string& rawPath);
+void clearReloadedModulesForRealm(bronze::embed::Realm* realm);
+void clearAllReloadedModules();
 
 /// Starts compiling the page's first script on another thread, ahead of its
 /// run: the realm's host globals are installed here (on this, the page

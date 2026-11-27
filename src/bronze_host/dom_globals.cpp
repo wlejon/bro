@@ -43,6 +43,7 @@
 #endif
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_control.h"
+#include "util/main_loop_wake.h"
 #include "bronze_host/host_script_log.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_node_sweep.h"
@@ -298,6 +299,7 @@ double hostFrameDueInMs() {
     // load to settle and its paint to redo.
     if (layout::imageSettlesPending()) return 0.0;
     double due = nextHostTimerDueMs() - g_host->clockMs;
+    due = std::min(due, ev::nextAsyncAtomicsTimeoutMs());
     // A painted animated image's next frame (render/animated_image.h), on
     // the engine's clock.
     if (g_host->engine) {
@@ -311,7 +313,9 @@ double hostFrameDueInMs() {
 double hostTimerDueInMs() {
     if (!g_host) return std::numeric_limits<double>::infinity();
     if (ev::microtasksPending()) return 0.0;
-    return std::max(0.0, nextHostTimerDueMs() - g_host->clockMs);
+    double due = nextHostTimerDueMs() - g_host->clockMs;
+    due = std::min(due, ev::nextAsyncAtomicsTimeoutMs());
+    return std::max(0.0, due);
 }
 
 void clearHostAnimationFramesForDocument(dom::Document* doc) {
@@ -497,6 +501,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     installDialogHooks(engine);
     // A promise job runs in the compartment that subscribed it.
     installJobCompartmentHooks();
+    // Wake the main event loop immediately when Atomics.notify resolves a main-thread waitAsync.
+    ev::setAtomicsWaitWakeCallback([](void*) { util::wakeMainLoop(); }, nullptr);
 
     // Everything the app's own code sees, in its realm.
     installRealmHostGlobals(engine, appCompartment());

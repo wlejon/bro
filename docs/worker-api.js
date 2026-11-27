@@ -32,11 +32,31 @@
  * timer runs). `setTimeout(fn, 0)` runs on the worker's next turn — well under
  * a millisecond (50 chained zero timers take ~0-1 ms), so yielding to the loop
  * with `await new Promise(r => setTimeout(r, 0))` is cheap — and an idle
- * worker sleeps until its next timer or message. Timers run on real time.
+ * worker sleeps until its next timer, message, or `Atomics.notify` wakeup
+ * on `Atomics.waitAsync` (and releases idle JS heap / compiled bodies once
+ * quiescent). Timers run on real time.
+ *
+ * Termination & fault isolation: each Worker runs inside an isolated bronze
+ * compartment so `worker.terminate()` preempts tight JS loops and blocks on
+ * `Atomics.wait` promptly, and any runtime fault terminates only the Worker
+ * (delivering an `error` event to the host page).
+ *
+ * Zero-copy SharedArrayBuffer pipelines: TypedArray views over a
+ * `SharedArrayBuffer` pass their backing pointer directly to `WebGL`,
+ * `bro.kernel`, `bro.tensor`, `bro.mesh`, and `bro.audio` without copying.
+ * Use double-buffered regions with `Atomics.store`/`load`/`waitAsync` to
+ * synchronize worker writes before main-thread GPU/audio submissions read.
  * @example
  * const worker = new Worker('worker.js');
  *   worker.onmessage = (e) => console.log('From worker:', e.data);
  *   worker.postMessage({ task: 'compute', count: 1000 });
+ *   // Zero-copy shared ring/double-buffer with Atomics.waitAsync:
+ *   const sab = new SharedArrayBuffer(4096);
+ *   const ctrl = new Int32Array(sab, 0, 4);
+ *   const data = new Float32Array(sab, 16);
+ *   worker.postMessage({ sab });
+ *   const { async, value } = Atomics.waitAsync(ctrl, 0, 0);
+ *   if (async) await value; // wakes immediately when worker calls Atomics.notify(ctrl, 0, 1)
  */
 class Worker {
 

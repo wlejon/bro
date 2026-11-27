@@ -24,6 +24,9 @@
 #include "engine/engine.h"
 #include "engine/window_host.h"
 #include "util/log.h"
+#include "util/sha.h"
+
+#include <filesystem>
 
 namespace bro::bronze_host {
 
@@ -127,6 +130,7 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                           const std::string& appDir, const std::string& basePath,
                           bool /*isChild*/) {
     if (!subDoc) return;
+    if (!isWebHostGlobalsInstalled()) installWebHostGlobals(engine);
 
     // Every sub-document is a compartment of its own, made here as its
     // scripts are about to run (a scriptless one too: its window still
@@ -147,6 +151,12 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                 prepareAppView(engine, setup);
             } else {
                 setup.kind = CompartmentKind::Frame;
+                if (!engine.aotDir().empty() && !appDir.empty()) {
+                    const std::string key = engine::canonicalPath(appDir);
+                    util::Sha256 h;
+                    h.update(key.data(), key.size());
+                    setup.aotDir = (std::filesystem::path(engine.aotDir()) / "frames" / h.hex().substr(0, 16)).string();
+                }
             }
         } else if (engine::WindowHost* wh = engine.windowHostForDocument(subDoc)) {
             setup.kind = CompartmentKind::Window;
@@ -171,7 +181,7 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     // Classic scripts first, while the document is loading; then, parsing
     // over, the module scripts (deferred on the web) and the end of the load:
     // DOMContentLoaded, readiness "complete" and the window's `load`.
-    runEntry(c, EntryKind::Async, [&engine, scripts, basePath, subDoc] {
+    runEntry(c, EntryKind::Async, [&engine, c, scripts, basePath, subDoc] {
         reloadHostStorage(basePath);
         for (const bool modules : {false, true}) {
             // The entry may finish on a later frame (an appview's slice), by
@@ -184,7 +194,8 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                 std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
                 if (code.empty()) continue;
                 std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
-                evalScript(engine, code, fname, modules ? ScriptGoal::Module : ScriptGoal::ClassicScript);
+                evalSubDocScript(engine, *c, code, fname, modules && !s.isInline(),
+                                 modules ? ScriptGoal::Module : ScriptGoal::ClassicScript);
             }
         }
         if (dom::Document::isLiveDocument(subDoc)) dom::completeDocumentLoad(subDoc);

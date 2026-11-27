@@ -647,6 +647,11 @@ else()
     # js/<name>.js -> generated/<name>.o, entered through <entry_symbol>. The
     # object depends on the compiler, the source and the manifest(s), so a
     # change to any of them recompiles it.
+    set(BRO_JS_HARVEST_DIR "" CACHE PATH "Optional directory to harvest .tfb profiles from bro_bronze_js")
+    set(BRO_JS_PROFILE_DIR "" CACHE PATH "Optional directory of <module>.tfb harvest profiles for bro_bronze_js")
+    if(BRO_JS_HARVEST_DIR)
+        file(MAKE_DIRECTORY "${BRO_JS_HARVEST_DIR}")
+    endif()
     function(bro_compile_js JS_FILE ENTRY_SYMBOL)
         cmake_parse_arguments(ARG "" "NATIVE_MANIFEST" "" ${ARGN})
         set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/js/${JS_FILE}.js")
@@ -656,6 +661,12 @@ else()
         if(ARG_NATIVE_MANIFEST)
             set(EXTRA_ARGS --native-manifest "${ARG_NATIVE_MANIFEST}")
             set(EXTRA_DEPS "${ARG_NATIVE_MANIFEST}")
+        endif()
+        if(BRO_JS_HARVEST_DIR)
+            list(APPEND EXTRA_ARGS --harvest-out "${BRO_JS_HARVEST_DIR}/${JS_FILE}.tfb")
+        elseif(BRO_JS_PROFILE_DIR AND EXISTS "${BRO_JS_PROFILE_DIR}/${JS_FILE}.tfb")
+            list(APPEND EXTRA_ARGS --feedback-in "${BRO_JS_PROFILE_DIR}/${JS_FILE}.tfb")
+            list(APPEND EXTRA_DEPS "${BRO_JS_PROFILE_DIR}/${JS_FILE}.tfb")
         endif()
         add_custom_command(
             OUTPUT  "${OUTPUT}"

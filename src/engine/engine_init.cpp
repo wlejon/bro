@@ -773,7 +773,7 @@ void Engine::initAppRealm() {
         document_->performLayout(static_cast<float>(viewportWidth_),
                                  static_cast<float>(contentHeight()), *textMetrics_);
         updateDocumentHeight();
-        syncIframes();
+        if (aotBuildDir_.empty()) syncIframes();
 #if BRO_WITH_A11Y
         if (a11yBridge_) a11yBridge_->shutdown();
         a11yBridge_ = std::make_unique<a11y::AccessibilityBridge>();

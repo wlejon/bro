@@ -17,6 +17,7 @@
 #include "bronze_host/host_control.h"
 #include "bronze_host/eval_jit.h"
 #include "bronze_host/host_access.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_headless_internal.h"
 
 #include "dom/document.h"
@@ -231,6 +232,37 @@ void cmdStyle(engine::ControlServer& server, const engine::ControlCallPtr& call)
     }
     j.endObject();
     call->ok(j.take());
+}
+
+void cmdCompartments(engine::ControlServer&, const engine::ControlCallPtr& call) {
+    const std::vector<CompartmentDiagnostics> comps = compartmentDiagnostics();
+    if (call->flag("json")) {
+        util::JsonOut j;
+        j.beginArray();
+        for (const auto& d : comps) {
+            j.beginObject()
+                .key("id").number(static_cast<double>(d.id))
+                .key("kind").string(compartmentKindName(d.kind))
+                .key("name").string(d.name)
+                .key("responding").boolean(d.responding)
+                .key("overruns").number(static_cast<double>(d.overruns))
+                .key("longestOverrunMs").number(d.longestOverrunMs)
+                .key("longestOverrunSite").string(d.longestOverrunSite)
+                .endObject();
+        }
+        j.endArray();
+        return call->ok(j.take());
+    }
+    if (comps.empty()) return call->ok("no live child compartments\n");
+    std::ostringstream out;
+    for (const auto& d : comps) {
+        out << d.id << " [" << compartmentKindName(d.kind) << "] " << d.name
+            << " responding=" << (d.responding ? "true" : "false")
+            << " overruns=" << d.overruns
+            << " longestOverrunMs=" << d.longestOverrunMs << "\n";
+        if (!d.longestOverrunSite.empty()) out << "  site: " << d.longestOverrunSite << "\n";
+    }
+    call->ok(out.str());
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +743,8 @@ void installControlCommands(engine::Engine& engine) {
                       [&s](const engine::ControlCallPtr& c) { cmdInspect(s, c); });
     s.registerCommand("style", "<selector> [property...]  computed style of the first match (JSON)",
                       [&s](const engine::ControlCallPtr& c) { cmdStyle(s, c); });
+    s.registerCommand("compartments", "[--json]  live child compartments and slice overrun telemetry",
+                      [&s](const engine::ControlCallPtr& c) { cmdCompartments(s, c); });
 
     installInboxNamespace(engine);
 

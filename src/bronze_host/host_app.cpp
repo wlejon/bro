@@ -20,6 +20,7 @@
 // its ahead-of-time module.
 
 #include "bronze_host/host_bro_namespaces.h"
+#include "bronze_host/eval_jit.h"
 #include "bronze_host/host_builder.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_runtime.h"
@@ -611,6 +612,16 @@ Value makeBroAppValue() {
         ev::Persistent result(appOpenValue(rec));
         ev::resolvePromise(promise.get(), result.get());
         return promise.get();
+    });
+
+    // Reload a single ES module file in place in the current realm (hot-swap).
+    o.def("reloadModule", 1, [](Value, std::span<const Value> a) -> Value {
+        auto* eng = hostEngine();
+        if (!eng) return ev::throwError("bro.app.reloadModule: no active engine");
+        if (!hasArg(a, 0) || !ev::isString(a[0])) {
+            return ev::throwTypeError("bro.app.reloadModule(path): a module path string is required");
+        }
+        return reloadModuleInPlace(*eng, ev::toUtf8(a[0]));
     });
 
     // ---- scheduled launches (engine/app_schedule.h) ----------------------

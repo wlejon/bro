@@ -47,6 +47,17 @@ window.addEventListener('sourcechange', (e) => {
 });
 ```
 
+For ES modules whose changes can be swapped into a live page without resetting DOM or runtime state, `bro.app.reloadModule(path)` invalidates that module's entry in bronze's module registry, re-evaluates the updated file in place, retires the prior swapped module handle, and returns the updated namespace object (already-loaded modules keep their existing imported bindings, while the returned namespace and subsequent dynamic `import(expr)` / newly compiled units receive the new instance):
+
+```js
+window.addEventListener('sourcechange', (e) => {
+    if (!e.detail.files.every((f) => f === 'sim/rules.js')) return;
+    e.preventDefault();
+    const ns = bro.app.reloadModule('/app/sim/rules.js');
+    applyUpdatedRules(ns);
+});
+```
+
 An app with many `.bk` files can take them this way: a `reload(files)` of its own names each by file and as a module, then rebuilds whatever the changed kernels feed (a planet's rivers, tiles, clouds, grass and trees, say).
 
 A watcher reload is held back while the tree looks incomplete (index.html missing, a script it names missing, or a static import naming a file or export that does not exist). The page stays up and the log says why: `Not reloading yet, the source looks incomplete: js/shell.js imports NotificationCenter from js/notify.js, which does not export it`. F5 and `location.reload()` are never held back.

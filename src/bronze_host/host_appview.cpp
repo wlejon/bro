@@ -15,6 +15,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/shadow_root.h"
+#include "engine/app_exe.h"
 #include "engine/app_manifest.h"
 #include "engine/app_permissions.h"
 #include "engine/app_runtime.h"
@@ -22,6 +23,7 @@
 #include "engine/settings.h"
 #include "util/log.h"
 #include "util/model_dirs.h"
+#include "util/sha.h"
 
 #include <filesystem>
 #include <memory>
@@ -306,8 +308,16 @@ void prepareAppView(engine::Engine& engine, CompartmentSetup& setup) {
     p->configure(perms);
 
     setup.name = d.name.empty() ? info->id : d.name;
+    setup.appDir = dir;
     setup.permissions = std::move(p);
     setup.app = std::move(info);
+    if (std::string exe = engine::currentAppExecutable(setup.app->id, dir); !exe.empty()) {
+        setup.aotDir = (fs::path(engine::appExeAotDir(exe)) / "appview").string();
+    } else if (!engine.aotDir().empty()) {
+        util::Sha256 h;
+        h.update(dir.data(), dir.size());
+        setup.aotDir = (fs::path(engine.aotDir()) / "appviews" / h.hex().substr(0, 16)).string();
+    }
 }
 
 void attachAppViewCompartment(Compartment& c) {
@@ -395,6 +405,22 @@ void decorateAppViewProto(ObjectBuilder& b) {
                        ev::Persistent v(stringArray(r.undecided));
                        o.set("undecided", v.get());
                    }
+                   return o.get();
+               },
+               nullptr);
+    b.accessor("stats",
+               [](Value self, std::span<const Value>) -> Value {
+                   Compartment* c = viewCompartment(hostElementOf(self));
+                   if (!c) return ev::null();
+                   ObjectBuilder o;
+                   o.set("running", ev::fromBool(true));
+                   o.set("responding", ev::fromBool(!c->notResponding));
+                   const uint32_t overruns = c->fiber ? ev::compartmentOverruns(c->fiber) : 0;
+                   const double longestMs = c->fiber ? ev::compartmentLongestOverrunMs(c->fiber) : 0.0;
+                   const std::string site = c->fiber ? ev::compartmentLongestOverrunSite(c->fiber) : std::string();
+                   o.set("overruns", ev::fromDouble(static_cast<double>(overruns)));
+                   o.set("longestOverrunMs", ev::fromDouble(longestMs));
+                   o.set("longestOverrunSite", ev::fromUtf8(site));
                    return o.get();
                },
                nullptr);

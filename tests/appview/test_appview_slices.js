@@ -33,6 +33,29 @@ while (!has('spun') && frames < 2000) {
 assert(has('spun'), `the long job finished slice by slice (${frames} frames)`);
 assert(av.running, 'and the app runs on');
 
+// Compartment overrun diagnostics surfaced on appview.stats, perf.stats(), and bro-ctl.
+const viewStats = av.stats;
+assert(viewStats && viewStats.running === true, 'av.stats reports running');
+assert(viewStats.overruns > 0, `av.stats recorded slice overruns (${viewStats.overruns})`);
+assert(typeof viewStats.longestOverrunMs === 'number' && typeof viewStats.longestOverrunSite === 'string',
+       'av.stats exposes longestOverrunMs and longestOverrunSite');
+const pstats = perf.stats();
+assert(Array.isArray(pstats.compartments) &&
+       pstats.compartments.some((c) => c.kind === 'appview' && c.overruns >= viewStats.overruns),
+       'perf.stats().compartments reports appview overruns');
+assert(pstats.bronze && pstats.bronze.compartmentOverruns >= viewStats.overruns,
+       'perf.stats().bronze.compartmentOverruns summarizes live compartments');
+const ctlId = controlCommand('compartments', '--json');
+let ctlRes = null;
+for (let i = 0; i < 10 && !ctlRes; i++) {
+  runFrames(1);
+  ctlRes = controlResult(ctlId);
+}
+assert(ctlRes && ctlRes.ok, 'compartments control command succeeded');
+const ctlParsed = JSON.parse(ctlRes.payload);
+assert(Array.isArray(ctlParsed) && ctlParsed.some((c) => c.kind === 'appview' && c.overruns > 0),
+       'compartments control command returned appview telemetry');
+
 // The click listener never returns, and the dispatch waits on it: past the
 // budget the app is stopped, the page carries on, and it hears why.
 const r = av.getBoundingClientRect();
@@ -52,4 +75,5 @@ assert(av.running && has('ready'), 'start() runs it again');
 
 av.remove();
 flush();
+assert(av.stats === null, 'av.stats is null after removal');
 console.log('test_appview_slices OK');

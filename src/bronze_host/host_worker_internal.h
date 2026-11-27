@@ -73,13 +73,15 @@ public:
     // {type: 'module'}; otherwise the script is a classic script, whose
     // top-level var and function declarations are properties of `self`.
     WorkerInstance(std::string scriptPath, std::string basePath, const util::AssetMounts* mounts, uint64_t workerId,
-                   std::string inlineSource, bool moduleScript)
+                   std::string inlineSource, bool moduleScript, std::string aotDir = {}, std::string appDir = {})
         : scriptPath_(std::move(scriptPath)),
           basePath_(std::move(basePath)),
           inlineSource_(std::move(inlineSource)),
           moduleScript_(moduleScript),
           mounts_(mounts),
-          workerId_(workerId) {}
+          workerId_(workerId),
+          aotDir_(std::move(aotDir)),
+          appDir_(std::move(appDir)) {}
 
     ~WorkerInstance() {
         terminate();
@@ -101,6 +103,10 @@ public:
 
     void terminate() {
         terminated_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(compMutex_);
+            if (compartment_) ev::requestCompartmentTerminate(compartment_, "Worker terminated");
+        }
         {
             std::lock_guard<std::mutex> lock(toWorkerMutex_);
             toWorkerCv_.notify_all();
@@ -178,6 +184,7 @@ public:
 
 private:
     void threadFunc();
+    static void wakeFromAtomics(void* arg);
 
     std::string scriptPath_;
     std::string basePath_;
@@ -185,6 +192,8 @@ private:
     bool moduleScript_ = false;
     const util::AssetMounts* mounts_ = nullptr;
     uint64_t workerId_ = 0;
+    std::string aotDir_;
+    std::string appDir_;
     WorkerAotBuild* aotBuild_ = nullptr;
     WorkerAotRun workerAot_;
 
@@ -192,8 +201,12 @@ private:
     std::atomic<bool> alive_{false};
     std::atomic<bool> terminated_{false};
 
+    std::mutex compMutex_;
+    ev::Compartment* compartment_ = nullptr;
+
     std::mutex toWorkerMutex_;
     std::condition_variable toWorkerCv_;
+    bool atomicsWake_ = false;
     std::deque<std::unique_ptr<Message>> toWorkerQueue_;
 
     std::mutex toMainMutex_;

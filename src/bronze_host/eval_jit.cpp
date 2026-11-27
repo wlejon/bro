@@ -2,6 +2,8 @@
 #include "bronze_host/eval_js_scan.h"
 #include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
+#include "bronze_host/host_access.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_headless.h"
@@ -389,7 +391,7 @@ std::string wrapAsyncIife(const std::string& code, const std::string& filename) 
 bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
                                               const std::string& filename,
                                               bronze::embed::ModuleHandle* moduleHandleOut,
-                                              bool moduleFile, ScriptGoal goal) {
+                                              bool moduleFile, ScriptGoal goal, bool allowAot) {
     HostEvalScope evalScope;
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
@@ -404,7 +406,15 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     // while it is current (app_aot.h); anything else compiles here, a page
     // unit with no module to be harvested (opts.harvestOutPath).
     bronze::embed::CallResult res;
-    if (auto aot = takeAotUnit(engine, execCode, opts, /*pageUnit=*/moduleHandleOut != nullptr)) {
+    std::optional<bronze::eval::LoadedModule> aot;
+    if (allowAot && moduleHandleOut != nullptr) {
+        if (Compartment* comp = currentCompartment(); comp && comp->id != 0) {
+            aot = takeCompartmentAotUnit(engine, *comp, execCode, opts);
+        } else {
+            aot = takeAotUnit(engine, execCode, opts, /*pageUnit=*/true);
+        }
+    }
+    if (aot) {
         res = bronze::eval::runModule(*aot, opts);
     } else {
         auto compiled = compileWithPumping(engine, opts, execCode);
@@ -564,6 +574,119 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
         return false;
     }
     return true;
+}
+
+namespace {
+
+struct ReloadedModuleHandle {
+    bronze::embed::Realm* realm = nullptr;
+    std::string key;
+    bronze::embed::ModuleHandle handle = 0;
+};
+std::vector<ReloadedModuleHandle> s_reloadedModules;
+
+std::filesystem::path resolveReloadModulePath(engine::Engine& engine, const std::string& rawPath) {
+    namespace fs = std::filesystem;
+    Compartment* comp = currentCompartment();
+    const bool appViewOverride = comp && comp->kind == CompartmentKind::AppView && !comp->appDir.empty();
+    const auto& mounts = engine.assetMounts().mounts();
+    std::string bestPrefix;
+    std::string bestTarget;
+    for (const auto& [prefix, target] : mounts) {
+        if (prefix.empty() || rawPath.rfind(prefix, 0) != 0) continue;
+        const bool boundary = rawPath.size() == prefix.size() || rawPath[prefix.size()] == '/' || prefix.back() == '/';
+        if (!boundary || prefix.size() <= bestPrefix.size()) continue;
+        bestPrefix = prefix;
+        bestTarget = (appViewOverride && prefix == "/app") ? comp->appDir : target;
+    }
+    fs::path candidate;
+    if (!bestPrefix.empty()) {
+        std::string rel = rawPath.substr(bestPrefix.size());
+        while (!rel.empty() && rel.front() == '/') rel.erase(rel.begin());
+        candidate = rel.empty() ? fs::path(std::u8string(bestTarget.begin(), bestTarget.end()))
+                                : fs::path(std::u8string(bestTarget.begin(), bestTarget.end())) /
+                                      fs::path(std::u8string(rel.begin(), rel.end()));
+    } else {
+        fs::path p(std::u8string(rawPath.begin(), rawPath.end()));
+        if (p.is_absolute()) {
+            candidate = std::move(p);
+        } else {
+            const std::string& base =
+                (comp && !comp->basePath.empty()) ? comp->basePath : engine.appDir();
+            candidate = base.empty() ? p : fs::path(std::u8string(base.begin(), base.end())) / p;
+        }
+    }
+    std::error_code ec;
+    fs::path resolved = fs::weakly_canonical(candidate, ec);
+    return ec ? candidate : resolved;
+}
+
+}  // namespace
+
+void clearReloadedModulesForRealm(bronze::embed::Realm* realm) {
+    if (!realm) return;
+    for (auto it = s_reloadedModules.begin(); it != s_reloadedModules.end();) {
+        if (it->realm == realm) {
+            if (it->handle != 0) bronze::embed::unloadModule(it->handle);
+            it = s_reloadedModules.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void clearAllReloadedModules() {
+    for (const auto& entry : s_reloadedModules) {
+        if (entry.handle != 0) bronze::embed::unloadModule(entry.handle);
+    }
+    s_reloadedModules.clear();
+}
+
+bronze::Value reloadModuleInPlace(engine::Engine& engine, const std::string& rawPath) {
+    namespace fs = std::filesystem;
+    if (rawPath.empty()) return ev::throwError("bro.app.reloadModule: path must not be empty");
+    const fs::path resolved = resolveReloadModulePath(engine, rawPath);
+    const std::u8string u8 = resolved.generic_u8string();
+    const std::string key(u8.begin(), u8.end());
+    requirePathAccess(key, false);
+
+    std::error_code ec;
+    if (!fs::is_regular_file(resolved, ec)) {
+        return ev::throwError("bro.app.reloadModule: module not found '" + rawPath + "' (" + key + ")");
+    }
+    std::ifstream ifs(resolved, std::ios::binary);
+    if (!ifs.is_open()) {
+        return ev::throwError("bro.app.reloadModule: cannot read '" + rawPath + "'");
+    }
+    std::string code((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+    ev::Realm* realm = ev::currentRealm();
+    ev::invalidateModuleRegistryEntry(key);
+    bronze::embed::ModuleHandle newHandle = 0;
+    bronze::embed::CallResult res =
+        evalScriptJitResult(engine, code, key, &newHandle, /*moduleFile=*/true, ScriptGoal::Module,
+                            /*allowAot=*/false);
+    if (res.thrown) {
+        if (newHandle != 0) bronze::embed::unloadModule(newHandle);
+        return ev::throwValue(res.value);
+    }
+
+    if (newHandle != 0) {
+        bool replaced = false;
+        for (auto& entry : s_reloadedModules) {
+            if (entry.realm == realm && entry.key == key) {
+                if (entry.handle != 0) bronze::embed::unloadModule(entry.handle);
+                entry.handle = newHandle;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) s_reloadedModules.push_back({realm, key, newHandle});
+    }
+
+    Value ns = ev::undefined();
+    ev::lookupModuleRegistryEntry(key, ns);
+    return ns;
 }
 
 } // namespace bro::bronze_host

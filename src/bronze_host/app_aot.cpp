@@ -6,8 +6,11 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval_jit.h"
+#include "bronze_host/host_appview.h"
+#include "bronze_host/host_compartment.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_worker_internal.h"
+#include "dom/document.h"
 #include "engine/app_exe.h"
 #include "engine/app_runtime.h"
 #include "util/log.h"
@@ -18,6 +21,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -25,6 +29,7 @@
 #include <mutex>
 #include <set>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 
 namespace bro::bronze_host {
@@ -129,6 +134,16 @@ std::string oneLine(std::string s) {
 
 }  // namespace
 
+size_t aotBuildThreads() {
+    if (const char* env = std::getenv("BRO_AOT_THREADS"); env && *env) {
+        const int n = std::atoi(env);
+        if (n > 0) return static_cast<size_t>(n);
+    }
+    const unsigned hw = std::thread::hardware_concurrency();
+    const size_t half = hw > 0 ? static_cast<size_t>(hw / 2) : 2;
+    return std::clamp<size_t>(half, 1, 4);
+}
+
 std::string aotUnitId(const std::string& filename, bool publishEntry, int ordinal) {
     util::Sha256 h;
     // The first unit of a name keeps the id it always had.
@@ -156,6 +171,46 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
     if (!isWebHostGlobalsInstalled()) installWebHostGlobals(engine);
     std::error_code ec;
     fs::create_directories(u8path(dir), ec);
+
+    // If this AOT directory belongs to an <appview> or <iframe> compartment,
+    // compile inside a matching sub-document compartment so registeredHostGlobals,
+    // moduleRoots, and externalModules match what the compartment sees at runtime.
+    std::unique_ptr<dom::Document> subDoc;
+    Compartment* subComp = nullptr;
+    std::optional<CompartmentScope> subScope;
+    {
+        std::ifstream compIn(u8path(dir) / ".compartment", std::ios::binary);
+        std::string line;
+        std::string kind;
+        while (compIn && std::getline(compIn, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.rfind("kind=", 0) == 0) kind = line.substr(5);
+        }
+        if (kind == "appview" || kind == "frame") {
+            subDoc = std::make_unique<dom::Document>(dom::Document::Unlisted{});
+            CompartmentSetup setup;
+            setup.kind = kind == "appview" ? CompartmentKind::AppView : CompartmentKind::Frame;
+            setup.document = subDoc.get();
+            setup.parent = &appCompartment();
+            setup.appDir = engine.appDir();
+            setup.basePath = engine.appDir();
+            if (setup.kind == CompartmentKind::AppView) prepareAppView(engine, setup);
+            subComp = createCompartment(engine, std::move(setup));
+            subScope.emplace(subComp);
+        }
+    }
+    struct CleanupSubComp {
+        std::optional<CompartmentScope>& scope;
+        Compartment*& comp;
+        ~CleanupSubComp() {
+            scope.reset();
+            if (comp) {
+                destroyCompartment(comp, "aot build complete");
+                reapDeadCompartments();
+                comp = nullptr;
+            }
+        }
+    } cleanupSubComp{subScope, subComp};
 
     // Modules another engine build wrote are compiled again, current record
     // or not. A record only says the module is still the program this text
@@ -195,6 +250,7 @@ bool buildAppAot(engine::Engine& engine, const std::vector<engine::Engine::PageS
             scriptEvalOptions(engine, unit.name, unit.moduleFile, pageUnitGoal(unit.classicScripts));
         opts.externalModules = registry;
         opts.externalModulesCaptured = true;
+        opts.buildThreads = aotBuildThreads();
         const std::string execCode = scriptExecCode(unit.code, unit.name);
         const std::string id =
             aotUnitId(opts.filename, opts.publishEntry, buildOrdinals[aotUnitId(opts.filename, opts.publishEntry)]++);
@@ -380,20 +436,46 @@ int s_workersHarvesting = 0;
 std::unordered_map<std::string, int> s_unitInstances;
 bool s_rebuildWanted = false;
 bool s_rebuildRequested = false;
+bool s_skipAutoRebuild = false;
+std::string s_mainRebuildAppDir;
+std::string s_mainRebuildAotDir;
+std::set<std::string> s_rebuiltDirs;
 
 std::vector<std::string> s_rebuildCommand;
 
-void spawnAotRebuild(const std::string& appDir, const std::string& aotDir) {
+std::string broHeadlessBinary() {
+    const std::string img = engine::engineImagePath();
+    if (img.empty()) return {};
+    const fs::path dir = u8path(img).parent_path();
+#ifdef _WIN32
+    const fs::path cand = dir / "bro-headless.exe";
+#else
+    const fs::path cand = dir / "bro-headless";
+#endif
+    std::error_code ec;
+    return fs::is_regular_file(cand, ec) ? u8str(cand) : std::string();
+}
+
+void spawnAotRebuild(const std::string& appDir, const std::string& aotDir, const std::string& aotExe = {}) {
     std::vector<std::string> argv;
-    {
+    if (!aotExe.empty()) {
+        argv = {engine::stockBroPath(), "--build-exe", appDir, "--out", aotExe, "--quiet"};
+    } else {
         std::lock_guard<std::mutex> lock(s_rebuildMutex);
-        argv = s_rebuildCommand;
+        if (!s_rebuildCommand.empty() && (aotDir == s_mainRebuildAotDir || s_mainRebuildAotDir.empty())) {
+            argv = s_rebuildCommand;
+        }
     }
     if (argv.empty()) {
         const std::string& exe = engine::currentApp().executable;
-        if (exe.empty()) return;
-        argv = {engine::stockBroPath(), "--build-exe", appDir, "--out", exe, "--quiet"};
+        if (!exe.empty() && aotDir == engine::appExeAotDir(exe)) {
+            argv = {engine::stockBroPath(), "--build-exe", appDir, "--out", exe, "--quiet"};
+        } else if (!appDir.empty()) {
+            const std::string headless = broHeadlessBinary();
+            if (!headless.empty()) argv = {headless, appDir, "--aot-build", aotDir};
+        }
     }
+    if (argv.empty()) return;
     std::string err;
     if (!util::spawnDetached(argv, {}, err)) {
         LOG_WARN("aot: cannot start the rebuild of %s: %s", aotDir.c_str(), err.c_str());
@@ -403,11 +485,25 @@ void spawnAotRebuild(const std::string& appDir, const std::string& aotDir) {
 void requestAotRebuild(engine::Engine& engine) {
     {
         std::lock_guard<std::mutex> lock(s_rebuildMutex);
+        if (engine.aotRequired() && s_rebuildCommand.empty()) return;
         s_rebuildWanted = true;
+        s_mainRebuildAppDir = engine.appDir();
+        s_mainRebuildAotDir = engine.aotDir();
         if (s_workersHarvesting > 0 || s_rebuildRequested) return;
         s_rebuildRequested = true;
+        s_rebuiltDirs.insert(engine.aotDir());
     }
     spawnAotRebuild(engine.appDir(), engine.aotDir());
+}
+
+void requestDirAotRebuild(const std::string& appDir, const std::string& aotDir, const std::string& aotExe) {
+    if (aotDir.empty() || appDir.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(s_rebuildMutex);
+        if (s_skipAutoRebuild) return;
+        if (!s_rebuiltDirs.insert(aotDir).second) return;
+    }
+    spawnAotRebuild(appDir, aotDir, aotExe);
 }
 
 // Whether the last build of `dir` failed unit `id` (aot.txt): it is not
@@ -425,11 +521,15 @@ bool unitBuildFailed(const std::string& dir, const std::string& id) {
 // a profile it runs (page thread only).
 struct HarvestedRun {
     std::string name;
+    std::string appDir;
+    std::string aotDir;
+    std::string aotExe;
     fs::path profile;
 };
 std::vector<HarvestedRun> s_harvested;
 struct ProfiledRun {
     std::string name;
+    std::string aotDir;
     fs::path record;
     fs::path profile;
     const uint64_t* coldEntries = nullptr;
@@ -437,6 +537,91 @@ struct ProfiledRun {
     double startMs = 0.0;
 };
 std::vector<ProfiledRun> s_profiled;
+
+bool isMainAotDir(engine::Engine& engine, const std::string& dir) {
+    return !engine.aotDir().empty() && dir == engine.aotDir();
+}
+
+std::optional<bronze::eval::LoadedModule> loadAotUnitForDir(engine::Engine& engine, const std::string& dir,
+                                                             const std::string& appDir, const std::string& aotExe,
+                                                             const std::string& execCode,
+                                                             bronze::eval::EvalOptions& opts, int ordinal,
+                                                             bool allowHarvest) {
+    if (dir.empty() || !allowHarvest) return std::nullopt;
+    if (engine.aotRequired()) {
+        std::lock_guard<std::mutex> lock(s_rebuildMutex);
+        s_skipAutoRebuild = true;
+    }
+    const std::string id = aotUnitId(opts.filename, opts.publishEntry, ordinal);
+    const fs::path record = recordPath(dir, id);
+    const fs::path profile = profilePath(dir, id);
+    std::error_code ec;
+    const bool hasRecord = fs::is_regular_file(record, ec);
+    const bool hasProfile = fs::is_regular_file(profile, ec);
+
+    if (hasRecord && hasProfile) {
+        bronze::eval::EvalOptions fed = opts;
+        fed.feedbackInPath = u8str(profile);
+        bronze::eval::LoadedModule loaded = bronze::eval::loadModule(execCode, fed, u8str(record));
+        if (loaded.ok) {
+            LOG_INFO("aot: %s runs its ahead-of-time module %s (built on its profile)", opts.filename.c_str(),
+                     loaded.modulePath.c_str());
+            if (loaded.coldEntries) {
+                s_profiled.push_back({opts.filename, dir, record, profile, loaded.coldEntries, loaded.coldEntryCount,
+                                      util::currentTimeMs()});
+            }
+            return loaded;
+        }
+        if (engine.aotRequired() && isMainAotDir(engine, dir)) {
+            static std::set<std::string> reported;  // page thread only
+            if (reported.insert(opts.filename).second)
+                LOG_ERROR("aot: --aot %s: the module for %s is out of date (%s); rebuild it with --aot-build",
+                          dir.c_str(), opts.filename.c_str(), loaded.why.c_str());
+            engine.setTestFailure(true);
+        } else {
+            LOG_WARN("aot: the ahead-of-time module for %s is out of date (%s); compiling it", opts.filename.c_str(),
+                     loaded.why.c_str());
+        }
+        fs::remove(profile, ec);
+        fs::remove(record, ec);
+    } else if (hasProfile) {
+        LOG_INFO("aot: %s has its profile and no module yet; compiling it", opts.filename.c_str());
+        if (!unitBuildFailed(dir, id)) {
+            if (isMainAotDir(engine, dir)) requestAotRebuild(engine);
+            else requestDirAotRebuild(appDir, dir, aotExe);
+        }
+        return std::nullopt;
+    }
+
+    fs::create_directories(u8path(dir), ec);
+    opts.harvestOutPath = u8str(profile);
+    const auto same = [&](const HarvestedRun& h) { return h.profile == profile; };
+    if (std::none_of(s_harvested.begin(), s_harvested.end(), same)) {
+        s_harvested.push_back({opts.filename, appDir, dir, aotExe, profile});
+        LOG_INFO("aot: no ahead-of-time module for %s yet: compiled in process, to be harvested for its build",
+                 opts.filename.c_str());
+    }
+    return std::nullopt;
+}
+
+void settleProfiledForDir(const std::string& filterDir) {
+    std::error_code ec;
+    for (auto it = s_profiled.begin(); it != s_profiled.end();) {
+        if (!filterDir.empty() && it->aotDir != filterDir) {
+            ++it;
+            continue;
+        }
+        uint64_t most = 0;
+        double seconds = 0.0;
+        if (profileTooThin(it->coldEntries, it->coldEntryCount, it->startMs, most, seconds)) {
+            fs::remove(it->record, ec);
+            fs::remove(it->profile, ec);
+            LOG_INFO("aot: %s entered a function its profile saw cold %llu times in %.0f s: its next launch is "
+                     "harvested again", it->name.c_str(), static_cast<unsigned long long>(most), seconds);
+        }
+        it = s_profiled.erase(it);
+    }
+}
 
 }  // namespace
 
@@ -447,93 +632,55 @@ void setAotRebuildCommand(std::vector<std::string> argv) {
 
 std::optional<bronze::eval::LoadedModule> loadAotUnit(engine::Engine& engine, const std::string& execCode,
                                                       bronze::eval::EvalOptions& opts, int ordinal, bool pageUnit) {
-    // Scripts that are not the page's (a control eval, a driver) have no
-    // module, and are not harvested either.
-    if (engine.aotDir().empty() || !pageUnit) return std::nullopt;
-    const std::string& dir = engine.aotDir();
-    const std::string id = aotUnitId(opts.filename, opts.publishEntry, ordinal);
-    const fs::path record = recordPath(dir, id);
-    const fs::path profile = profilePath(dir, id);
+    return loadAotUnitForDir(engine, engine.aotDir(), engine.appDir(), engine::currentApp().executable, execCode, opts,
+                             ordinal, pageUnit);
+}
+
+void settleAotHarvestsForDir(const std::string& aotDir) {
+    if (aotDir.empty()) return;
     std::error_code ec;
-    const bool hasRecord = fs::is_regular_file(record, ec);
-    const bool hasProfile = fs::is_regular_file(profile, ec);
-
-    if (hasRecord && hasProfile) {
-        // A module is built on its profile, and its record names the
-        // profile's bytes among its inputs.
-        bronze::eval::EvalOptions fed = opts;
-        fed.feedbackInPath = u8str(profile);
-        bronze::eval::LoadedModule loaded = bronze::eval::loadModule(execCode, fed, u8str(record));
-        if (loaded.ok) {
-            LOG_INFO("aot: %s runs its ahead-of-time module %s (built on its profile)", opts.filename.c_str(),
-                     loaded.modulePath.c_str());
-            if (loaded.coldEntries) {
-                s_profiled.push_back({opts.filename, record, profile, loaded.coldEntries, loaded.coldEntryCount,
-                                      util::currentTimeMs()});
+    std::string appDir, aotExe;
+    bool any = false;
+    for (auto it = s_harvested.begin(); it != s_harvested.end();) {
+        if (it->aotDir != aotDir) {
+            ++it;
+            continue;
+        }
+        if (fs::is_regular_file(it->profile, ec)) {
+            LOG_INFO("aot: %s: its run is harvested, and its module is built on it", it->name.c_str());
+            if (appDir.empty()) {
+                appDir = it->appDir;
+                aotExe = it->aotExe;
             }
-            return loaded;
+            any = true;
         }
-        if (engine.aotRequired()) {
-            // The ahead-of-page load and the unit's own load both ask; say it once.
-            static std::set<std::string> reported;  // page thread only
-            if (reported.insert(opts.filename).second)
-                LOG_ERROR("aot: --aot %s: the module for %s is out of date (%s); rebuild it with --aot-build",
-                          dir.c_str(), opts.filename.c_str(), loaded.why.c_str());
-            engine.setTestFailure(true);
-        } else {
-            LOG_WARN("aot: the ahead-of-time module for %s is out of date (%s); compiling it", opts.filename.c_str(),
-                     loaded.why.c_str());
-        }
-        // The profile is a run of the program the record names, not of this
-        // one: this run is harvested in its place.
-        fs::remove(profile, ec);
-        fs::remove(record, ec);
-    } else if (hasProfile) {
-        // Harvested, and the module not built yet: the build runs in the
-        // background (or failed, which aot.txt says), and this run compiles
-        // as a folder launch does.
-        LOG_INFO("aot: %s has its profile and no module yet; compiling it", opts.filename.c_str());
-        if (!unitBuildFailed(dir, id)) requestAotRebuild(engine);
-        return std::nullopt;
+        it = s_harvested.erase(it);
     }
-
-    // No module yet: the unit's first run (or its first since its text
-    // changed) compiles in process to be harvested, and the module is built
-    // on what it did (settleAotHarvests).
-    // The page's first unit is asked ahead of the page and again when it runs.
-    opts.harvestOutPath = u8str(profile);
-    const auto same = [&](const HarvestedRun& h) { return h.profile == profile; };
-    if (std::none_of(s_harvested.begin(), s_harvested.end(), same)) {
-        s_harvested.push_back({opts.filename, profile});
-        LOG_INFO("aot: no ahead-of-time module for %s yet: compiled in process, to be harvested for its build",
-                 opts.filename.c_str());
-    }
-    return std::nullopt;
+    settleProfiledForDir(aotDir);
+    if (any) requestDirAotRebuild(appDir, aotDir, aotExe);
 }
 
 void settleAotHarvests(engine::Engine& engine) {
     std::error_code ec;
-    bool any = false;
+    bool mainAny = false;
+    std::vector<std::tuple<std::string, std::string, std::string>> childDirs;
     for (const HarvestedRun& h : s_harvested) {
         if (!fs::is_regular_file(h.profile, ec)) continue;
         LOG_INFO("aot: %s: its run is harvested, and its module is built on it", h.name.c_str());
-        any = true;
+        if (isMainAotDir(engine, h.aotDir)) {
+            mainAny = true;
+        } else {
+            const bool seen = std::any_of(childDirs.begin(), childDirs.end(),
+                                          [&](const auto& t) { return std::get<1>(t) == h.aotDir; });
+            if (!seen) childDirs.emplace_back(h.appDir, h.aotDir, h.aotExe);
+        }
     }
     s_harvested.clear();
-    // A module whose run entered often what its profile saw seldom or never:
-    // the profile was too thin a run, and the next launch harvests the unit
-    // again (no record: loadAotUnit).
-    for (const ProfiledRun& p : s_profiled) {
-        uint64_t most = 0;
-        double seconds = 0.0;
-        if (!profileTooThin(p.coldEntries, p.coldEntryCount, p.startMs, most, seconds)) continue;
-        fs::remove(p.record, ec);
-        fs::remove(p.profile, ec);
-        LOG_INFO("aot: %s entered a function its profile saw cold %llu times in %.0f s: its next launch is "
-                 "harvested again", p.name.c_str(), static_cast<unsigned long long>(most), seconds);
+    settleProfiledForDir(std::string());
+    if (mainAny) requestAotRebuild(engine);
+    for (const auto& [appDir, aotDir, aotExe] : childDirs) {
+        requestDirAotRebuild(appDir, aotDir, aotExe);
     }
-    s_profiled.clear();
-    if (any) requestAotRebuild(engine);
 }
 
 namespace {
@@ -577,13 +724,34 @@ std::optional<bronze::eval::LoadedModule> takeAotUnit(engine::Engine& engine, co
     return loadAotUnit(engine, execCode, opts, ordinal, pageUnit);
 }
 
+std::optional<bronze::eval::LoadedModule> takeCompartmentAotUnit(engine::Engine& engine, Compartment& comp,
+                                                                 const std::string& execCode,
+                                                                 bronze::eval::EvalOptions& opts,
+                                                                 bool allowHarvest) {
+    if (comp.aotDir.empty()) return std::nullopt;
+    if (comp.kind == CompartmentKind::AppView || comp.kind == CompartmentKind::Frame) {
+        std::error_code ec;
+        fs::create_directories(u8path(comp.aotDir), ec);
+        const fs::path marker = u8path(comp.aotDir) / ".compartment";
+        if (!fs::exists(marker, ec)) {
+            std::ofstream out(marker, std::ios::binary | std::ios::trunc);
+            out << "kind=" << (comp.kind == CompartmentKind::AppView ? "appview" : "frame") << "\n";
+        }
+    }
+    const int ordinal = comp.aotRunOrdinals[aotUnitId(opts.filename, opts.publishEntry)]++;
+    return loadAotUnitForDir(engine, comp.aotDir, comp.appDir, comp.aotExe, execCode, opts, ordinal, allowHarvest);
+}
+
 void discardAheadAotUnit() { s_ahead.reset(); }
 
 std::optional<bronze::eval::LoadedModule> loadWorkerAotUnit(engine::Engine& engine, const std::string& code,
                                                             bronze::eval::EvalOptions& opts, bool moduleScript,
-                                                            const std::string& basePath, WorkerAotRun& run) {
-    if (engine.aotDir().empty()) return std::nullopt;
-    const std::string& dir = engine.aotDir();
+                                                            const std::string& basePath, WorkerAotRun& run,
+                                                            const std::string& overrideAotDir,
+                                                            const std::string& overrideAppDir) {
+    const std::string& dir = !overrideAotDir.empty() ? overrideAotDir : engine.aotDir();
+    if (dir.empty()) return std::nullopt;
+    const std::string appDir = !overrideAppDir.empty() ? overrideAppDir : engine.appDir();
     const std::string id = workerUnitId(opts.filename, moduleScript);
     const fs::path record = recordPath(dir, id);
     const fs::path profile = profilePath(dir, id);
@@ -613,29 +781,29 @@ std::optional<bronze::eval::LoadedModule> loadWorkerAotUnit(engine::Engine& engi
             // Harvested, and the module not built yet (or its build failed,
             // which aot.txt says): this run compiles as a folder launch does.
             LOG_INFO("aot: worker %s has its profile and no module yet; compiling it", opts.filename.c_str());
-            if (!unitBuildFailed(dir, id)) requestAotRebuild(engine);
+            if (!unitBuildFailed(dir, id)) {
+                if (isMainAotDir(engine, dir)) requestAotRebuild(engine);
+                else requestDirAotRebuild(appDir, dir, std::string());
+            }
             return std::nullopt;
         }
     }
 
-    // No module yet: this run compiles to be harvested. The harvest of one
-    // script is one, whatever thread runs an instance of it (bronze keeps a
-    // path per module, and a write is the union of the instances folded so
-    // far), so every instance of a pool arms the same file; the last to end
-    // renames it onto the profile.
+    // No module yet: this run compiles to be harvested.
+    fs::create_directories(u8path(dir), ec);
     {
         std::ofstream side(workerSidecarPath(dir, id), std::ios::binary | std::ios::trunc);
         side << "script=" << opts.filename << "\nbase=" << basePath << "\nmodule=" << (moduleScript ? 1 : 0)
              << "\n";
     }
     run.harvestOut = u8str(profile) + ".tmp";
-    run.appDir = engine.appDir();
+    run.appDir = appDir;
     run.aotDir = dir;
     run.harvesting = true;
     opts.harvestOutPath = run.harvestOut;
     {
         std::lock_guard<std::mutex> lock(s_rebuildMutex);
-        ++s_workersHarvesting;
+        if (isMainAotDir(engine, dir)) ++s_workersHarvesting;
         ++s_unitInstances[run.harvestOut];
     }
     LOG_INFO("aot: no ahead-of-time module for worker %s yet: compiled in process, to be harvested for its build",
@@ -673,17 +841,25 @@ void settleWorkerAot(WorkerAotRun& run) {
         if (ec) fs::remove(u8path(run.harvestOut), ec);
     }
     if (written) LOG_INFO("aot: worker %s: its run is harvested, and its module is built on it", run.name.c_str());
-    bool spawn = false;
+    bool isMain = false;
+    bool spawnMain = false;
     {
         std::lock_guard<std::mutex> lock(s_rebuildMutex);
-        --s_workersHarvesting;
-        if (written) s_rebuildWanted = true;
-        if (s_workersHarvesting == 0 && s_rebuildWanted && !s_rebuildRequested) {
-            s_rebuildRequested = true;
-            spawn = true;
+        isMain = !s_mainRebuildAotDir.empty() && run.aotDir == s_mainRebuildAotDir;
+        if (isMain && s_workersHarvesting > 0) --s_workersHarvesting;
+        if (isMain) {
+            if (written) s_rebuildWanted = true;
+            if (s_workersHarvesting == 0 && s_rebuildWanted && !s_rebuildRequested) {
+                s_rebuildRequested = true;
+                spawnMain = true;
+            }
         }
     }
-    if (spawn) spawnAotRebuild(run.appDir, run.aotDir);
+    if (spawnMain) {
+        spawnAotRebuild(run.appDir, run.aotDir);
+    } else if (written && !isMain) {
+        requestDirAotRebuild(run.appDir, run.aotDir, std::string());
+    }
 }
 
 }  // namespace bro::bronze_host

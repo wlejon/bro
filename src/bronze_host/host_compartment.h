@@ -48,6 +48,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -84,6 +85,9 @@ struct Compartment {
     // and refusals name.
     std::string name;
     std::string appDir, basePath;
+    std::string aotDir, aotExe;
+    std::map<std::string, int> aotRunOrdinals;
+    std::vector<ev::ModuleHandle> moduleHandles;
     // Never null. Frames, windows and panels share the app's; an appview owns
     // its own (ownPermissions).
     engine::AppPermissions* permissions = nullptr;
@@ -157,6 +161,7 @@ struct CompartmentSetup {
     dom::Element* hostElement = nullptr;
     uint64_t windowHostId = 0;
     std::string name, appDir, basePath;
+    std::string aotDir, aotExe;
     // An appview's own grants and identity; null shares the app's.
     std::unique_ptr<engine::AppPermissions> permissions;
     std::shared_ptr<const engine::AppRuntimeInfo> app;
@@ -232,6 +237,19 @@ bool runEntry(const dom::Document* doc, EntryKind kind, std::function<void()> bo
 /// The frame seam: each app suspended at its slice runs one more slice, and
 /// one that finished runs the entries queued meanwhile.
 void serviceCompartmentFibers();
+
+/// Live compartment diagnostics (including bronze slice overrun telemetry).
+struct CompartmentDiagnostics {
+    uint64_t id = 0;
+    CompartmentKind kind = CompartmentKind::App;
+    std::string name;
+    bool responding = true;
+    bool hasFiber = false;
+    uint32_t overruns = 0;
+    double longestOverrunMs = 0.0;
+    std::string longestOverrunSite;
+};
+std::vector<CompartmentDiagnostics> compartmentDiagnostics();
 
 /// One JS value per compartment, where the host once kept one per process: a
 /// dispatcher each compartment's bro_core.js registers, a per-document
