@@ -34,6 +34,7 @@
 #include <brolink/wire.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -315,6 +316,7 @@ std::vector<std::string> splitLine(const std::string& line) {
 void usage() {
     std::fprintf(stderr,
                  "usage: bro-ctl [-s NAME | -S PATH] [-o OUT|-] <command> [args...]\n"
+                 "       bro-ctl eval-file <path> [--timeout=10000]\n"
                  "       bro-ctl batch < commands      (one command per line)\n"
                  "       bro-ctl list | profile <seconds> [--top=40]\n"
                  "       bro-ctl help                  (the running engine's commands)\n"
@@ -386,7 +388,47 @@ int runOne(Conn& c, std::vector<std::string> argv, const std::string& out) {
         argv[outArg] = plan.path;
         if (!c.remote_) outArg = 0;
     }
-    if (cmd == "eval") {
+    if (cmd == "eval-file") {
+        std::string filePath;
+        std::vector<std::string> options;
+        for (size_t i = 1; i < argv.size(); ++i) {
+            if (argv[i] == "--timeout" && i + 1 < argv.size()) {
+                options.push_back("--timeout=" + argv[++i]);
+            } else if (argv[i].rfind("--", 0) == 0) {
+                options.push_back(argv[i]);
+            } else if (filePath.empty()) {
+                filePath = argv[i];
+            } else {
+                std::fprintf(stderr, "bro-ctl: eval-file: unexpected argument '%s'\n", argv[i].c_str());
+                return 1;
+            }
+        }
+        if (filePath.empty()) {
+            std::fprintf(stderr, "bro-ctl: usage: eval-file <path> [--timeout=10000]\n");
+            return 1;
+        }
+        const std::filesystem::path fsPath(std::u8string(filePath.begin(), filePath.end()));
+        std::error_code ec;
+        if (std::filesystem::is_directory(fsPath, ec)) {
+            std::fprintf(stderr, "bro-ctl: eval-file: '%s' is a directory\n", filePath.c_str());
+            return 1;
+        }
+        std::ifstream in(fsPath, std::ios::binary);
+        if (!in) {
+            std::fprintf(stderr, "bro-ctl: eval-file: cannot read '%s': %s\n", filePath.c_str(), std::strerror(errno));
+            return 1;
+        }
+        std::stringstream ss;
+        ss << in.rdbuf();
+        if (in.bad()) {
+            std::fprintf(stderr, "bro-ctl: eval-file: failed reading '%s'\n", filePath.c_str());
+            return 1;
+        }
+        argv.clear();
+        argv.push_back("eval");
+        argv.push_back(ss.str());
+        for (auto& opt : options) argv.push_back(std::move(opt));
+    } else if (cmd == "eval") {
         // eval -  : the script from stdin;  eval -f FILE : from a file.
         for (size_t i = 1; i < argv.size(); ++i) {
             if (argv[i] == "-") {

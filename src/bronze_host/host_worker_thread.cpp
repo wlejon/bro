@@ -10,6 +10,7 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_rejection_events.h"
 #include "bronze_host/host_runtime.h"
+#include "bronze_host/host_script_log.h"
 #include "bronze_host/host_values.h"
 #include "bronze_host/host_web_globals.h"
 #include "engine/engine.h"
@@ -178,6 +179,7 @@ void WorkerInstance::threadFunc() {
     namespace bk = brokit::api;
     bk::installModuleRegistry();
     bk::installConsole();
+    installScriptLogSink();
     bk::installTimers();
     bk::installURL();
     bk::installCrypto();

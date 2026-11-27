@@ -525,3 +525,51 @@ if (bro.kernel.gpu) {
 //   bro.kernel.dispatchTensors(kernel, gridShape, ...args);
 //   // CPU tensors run directly against host pointers; Vulkan tensors pack
 //   // BDA push constants and submit directly onto brotensor's Vulkan stream.
+
+// ============================================================================
+// 14. Enums, Nominal Newtypes, sizeof/offsetof & registerConstants
+// ============================================================================
+//
+// Typed enums, zero-cost nominal newtypes (`newtype Meters = f32;`), and
+// compile-time byte layout queries (`sizeof(T)`, `offsetof(S, field[.sub])`,
+// `std430_sizeof`, `std430_offsetof`, `std140_sizeof`, `std140_offsetof`):
+//
+//   enum Biome : i32 { Plains = 0, Forest, Highland = 10 }
+//   newtype Meters = f32;
+//   let m = Meters(42.0);        // construct
+//   let raw = m.0;               // or `m as f32` unwrap; `Meters + f32` is a compile error
+//
+// Reflected on modules:
+//   mod.enums                    // { Biome: { Plains: 0, Forest: 1, Highland: 10 } }
+//
+// Direct constant/enum module registration (without string templates):
+//   bro.kernel.registerConstants('sim::cfg', {
+//       TILE_N: ['i32', 64],
+//       GRAV: 9.81,
+//       Mode: { __enum: 'i32', Fast: 0, Accurate: 1 },
+//   });
+
+// ============================================================================
+// 15. CPU/GPU Parity (compareCpuGpu)
+// ============================================================================
+//
+//   const rep = kernel.compareCpuGpu([W, H], outBuf, { relTol: 1e-5, absTol: 1e-6, ulpTol: 16 });
+//   // { ok, ranGpu, elementsCompared, maxAbsDiff, maxRelDiff, maxUlpDiff,
+//   //   worstCoord: [x, y, z], cpuVal, gpuVal, message }
+
+// ============================================================================
+// 16. Runtime Assertions (check, trapNonFinite) & Conditional Probing (probeIf)
+// ============================================================================
+//
+//   // In .bk:
+//   check("positive_depth", depth >= 0.0);
+//   let v = probe_if("steep_cell", slope > 1.0, vec2<f32>(depth, slope));
+//
+// Compile with `{ enableChecks: true, trapNonFinite: true }` or call
+// `kernel.check(...)` directly (auto-compiles checked variant if needed):
+//   const chk = kernel.check([W, H], outBuf, { gpu: false, trapNonFinite: true });
+//   // { ok, kind: null | 'check' | 'non_finite', coord: [x, y, z], label, value, message }
+//
+// Gather the first `maxSamples` invocations where `cond` is true:
+//   const hits = kernel.probeIf([W, H], outBuf, { gpu: false, maxSamples: 32 });
+//   // [{ coord: [x, y, z], label, value }]

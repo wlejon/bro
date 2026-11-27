@@ -9,6 +9,7 @@
 #include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_script_log.h"
 #include "util/exe_dir.h"
 #include "util/interrupt.h"
 #include "util/log.h"
@@ -43,6 +44,7 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
             "\n"
             "Options:\n"
             "  --tickrate N          Fixed server tick rate in Hz (default: 0, event-driven)\n"
+            "  --script-log <path>   Write script console.* output and uncaught errors to <path>\n"
             "  --grant <caps>        Grant capabilities for this run (comma-separated;\n"
             "                        'declared' is everything bro.json declares), as on bro\n"
             "  --aot <dir>           Run the script from its module built ahead of time in\n"
@@ -65,6 +67,7 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
     double tickrate = 0.0;
     std::string aotDir;
     std::string aotBuildDir;
+    std::string scriptLogPath;
     std::vector<std::string> hostGrants;
     std::string target;
     std::string scriptPath;
@@ -79,6 +82,10 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--tickrate") == 0 && i + 1 < argc) {
             tickrate = atof(argv[++i]);
             if (tickrate > 1000.0) tickrate = 1000.0;
+        } else if (strcmp(argv[i], "--script-log") == 0 && i + 1 < argc) {
+            scriptLogPath = argv[++i];
+        } else if (strncmp(argv[i], "--script-log=", 13) == 0) {
+            scriptLogPath = argv[i] + 13;
         } else if (strcmp(argv[i], "--grant") == 0 && i + 1 < argc) {
             bro::engine::appendGrantList(argv[++i], hostGrants);
         } else if (strcmp(argv[i], "--aot") == 0 && i + 1 < argc) {
@@ -99,6 +106,7 @@ int bro::runtime::runServerMain(int argc, char* argv[]) {
     }
 
     bro::bronze_host::setScriptArgs(scriptArgs);
+    bro::bronze_host::setScriptLogPath(scriptLogPath);
 
     int exitCode = 0;
     bool standaloneScript = false;

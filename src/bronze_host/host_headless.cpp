@@ -10,6 +10,7 @@
 #include "bronze_host/host_natives.h"  // pollNet
 #include "bronze_host/host_builder.h"
 
+#include "engine/control.h"
 #include "engine/engine.h"
 #include "layout/image_loading.h"
 #include "bronze_host/host_bro_namespaces.h"
@@ -21,8 +22,11 @@
 #include <broaudio/api.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <mutex>
 #include <thread>
 #include <string>
 #include <vector>
@@ -94,9 +98,98 @@ void installHeadlessGlobals(engine::Engine& engine) {
             broaudio::api::drainMicChunks();
 #endif
             pumpBrokitTicks();
+            pollNet();
+            engine.control().pump();
             drainMicrotasksAndLocalFetches();
             return ev::undefined();
         }, 1, "advanceTime"));
+
+    // 1b. advanceRealtime([steps = 1 [, { targetHz, maxDtMs, minWallMs }]])
+    regBoth("advanceRealtime", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            int steps = 1;
+            if (!a.empty() && !ev::isUndefined(a[0])) {
+                const double s = ev::toDouble(a[0]);
+                steps = std::isfinite(s) ? std::max(0, satCast<int>(s)) : 0;
+            }
+            double targetHz = 60.0;
+            double maxDtMs = 50.0;
+            bool hasMinWall = false;
+            double minWallMs = 1000.0 / targetHz;
+            if (a.size() > 1 && ev::isObject(a[1])) {
+                const Value opts = a[1];
+                const Value hzVal = ev::getProperty(opts, "targetHz");
+                if (!ev::isUndefined(hzVal)) {
+                    const double hz = ev::toDouble(hzVal);
+                    if (std::isfinite(hz)) targetHz = hz;
+                }
+                const Value maxVal = ev::getProperty(opts, "maxDtMs");
+                if (!ev::isUndefined(maxVal)) {
+                    const double m = ev::toDouble(maxVal);
+                    if (std::isfinite(m)) maxDtMs = m;
+                }
+                const Value minVal = ev::getProperty(opts, "minWallMs");
+                if (!ev::isUndefined(minVal)) {
+                    hasMinWall = true;
+                    const double mw = ev::toDouble(minVal);
+                    minWallMs = std::isfinite(mw) ? std::max(0.0, mw) : 0.0;
+                }
+            }
+            maxDtMs = std::clamp(maxDtMs, 1.0, 1000.0);
+            if (!hasMinWall) {
+                minWallMs = targetHz > 0.0 ? (1000.0 / targetHz) : 0.0;
+            }
+
+            using Clock = std::chrono::steady_clock;
+            static std::mutex s_realtimeMu;
+            static bool s_realtimeInit = false;
+            static Clock::time_point s_lastStep;
+
+            const auto callStart = Clock::now();
+            std::unique_lock<std::mutex> lock(s_realtimeMu);
+            if (!s_realtimeInit) {
+                s_lastStep = callStart;
+                s_realtimeInit = true;
+            }
+
+            double totalSimMs = 0.0;
+            for (int i = 0; i < steps; ++i) {
+                if (minWallMs > 0.0) {
+                    const double elapsedMs =
+                        std::chrono::duration<double, std::milli>(Clock::now() - s_lastStep).count();
+                    const double remainMs = minWallMs - elapsedMs;
+                    if (remainMs > 0.0) {
+                        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(remainMs));
+                    }
+                }
+                const auto stepNow = Clock::now();
+                double dtMs = std::chrono::duration<double, std::milli>(stepNow - s_lastStep).count();
+                if (!std::isfinite(dtMs)) dtMs = 1.0;
+                dtMs = std::clamp(dtMs, 1.0, maxDtMs);
+                s_lastStep = stepNow;
+
+                lock.unlock();
+                engine.advanceTime(dtMs);
+#if BRO_WITH_AUDIO
+                broaudio::api::drainMicChunks();
+#endif
+                pumpBrokitTicks();
+                pollNet();
+                engine.control().pump();
+                drainMicrotasksAndLocalFetches();
+                totalSimMs += dtMs;
+                lock.lock();
+            }
+            lock.unlock();
+
+            const double totalWallMs =
+                std::chrono::duration<double, std::milli>(Clock::now() - callStart).count();
+            ObjectBuilder res;
+            res.set("steps", ev::fromDouble(static_cast<double>(steps)));
+            res.set("wallMs", ev::fromDouble(totalWallMs));
+            res.set("simMs", ev::fromDouble(totalSimMs));
+            return res.get();
+        }, 2, "advanceRealtime"));
 
     // 2. flush(): lay out and paint without advancing the clock. Engine::flush
     // does not run the frame callbacks (hostFrame), so the observer pass that
@@ -140,17 +233,22 @@ void installHeadlessGlobals(engine::Engine& engine) {
             broaudio::api::drainMicChunks();
 #endif
             pumpBrokitTicks();
+            pollNet();
+            engine.control().pump();
             drainMicrotasksAndLocalFetches();
             return ev::undefined();
         }, 1, "sleep"));
 
     // 4. wallSleep(double ms)
     regBoth("wallSleep", ev::makeFunction(
-        [](Value, std::span<const Value> a) -> Value {
+        [&engine](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             if (ms > 0.0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>(ms)));
+                std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int64_t>(ms * 1000.0)));
             }
+            pollNet();
+            engine.control().pump();
+            drainMicrotasksAndLocalFetches();
             return ev::undefined();
         }, 1, "wallSleep"));
 

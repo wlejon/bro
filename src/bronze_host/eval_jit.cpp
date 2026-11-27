@@ -5,6 +5,7 @@
 #include "bronze_host/host_gc.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_script_log.h"
 #include "bronze_host/host_runtime.h"
 #include "bronze_host/host_brokit.h"
 #include "bronze_host/host_pins.h"
@@ -71,6 +72,10 @@ bool reportCallResult(engine::Engine& engine, const bronze::embed::CallResult& r
         std::string errMsg = thrownValueText(thrownRoot.get());
         LOG_ERROR("%s: uncaught %s (in %s)", context, errMsg.c_str(),
                   filename.empty() ? "<eval>" : filename.c_str());
+        if (hasScriptLogPath()) {
+            writeScriptLogLine("error", std::string(context) + ": uncaught " + errMsg + " (in " +
+                                            (filename.empty() ? "<eval>" : filename) + ")");
+        }
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
@@ -402,6 +407,7 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
+    installScriptLogSink();
 
     bronze::eval::EvalOptions opts = scriptEvalOptions(engine, filename, moduleFile, goal);
     opts.moduleHandleOut = moduleHandleOut;
@@ -484,6 +490,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
+    installScriptLogSink();
 
     auto absPath = std::filesystem::absolute(p, ec);
     // require('./x') in the script resolves against the script's directory,

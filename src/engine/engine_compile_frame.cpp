@@ -60,6 +60,7 @@ void Engine::setCompileProgress(bool compiling, double progress) {
 
 // The page's markup as it stands, laid out and presented: a boot frame.
 void Engine::drawBootFrame() {
+    if (!window_) return;
     // A resize while booting: the run loop's handler is not installed yet,
     // so the window's size is read back directly.
     int winW = 0, winH = 0;

@@ -58,6 +58,7 @@ struct EngineConfig {
     std::string systemDirName = "system";
     DisplayMode displayMode = DisplayMode::Windowed;
     bool realAudio = false;
+    bool noGpu = false;  // headless only: skip Vulkan/Skia GPU and hidden window init
     bool showSplash = true;
     // An installed app's executable: the directory holding its page scripts
     // compiled ahead of time (engine/app_exe.h, appExeAotDir). Each script unit

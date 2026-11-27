@@ -138,6 +138,7 @@ void Engine::run() {
         virtualTime_ = util::currentTimeMs();
         engineNowMs_ = virtualTime_;
         if (splashVisible_) splashStartMs_ = virtualTime_;
+        startControl();
         return;
     }
 

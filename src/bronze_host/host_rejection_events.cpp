@@ -31,6 +31,7 @@
 #include "bronze_host/host_rejection_events.h"
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_runtime.h"
+#include "bronze_host/host_script_log.h"
 #include "bronze_host/host_events.h"
 #include "engine/engine.h"
 #include "util/log.h"
@@ -153,8 +154,11 @@ void fireOne(RejectionState& st, const RejectionItem& item) {
     canceled = item.unhandled && eventWasCanceled(evt);
 
     if (item.unhandled && !canceled) {
-        LOG_ERROR("[bronze:%s] Uncaught (in promise) %s", st.sink.what,
-                  thrownValueText(item.reason.get()).c_str());
+        const std::string text = thrownValueText(item.reason.get());
+        LOG_ERROR("[bronze:%s] Uncaught (in promise) %s", st.sink.what, text.c_str());
+        if (hasScriptLogPath()) {
+            writeScriptLogLine("error", std::string("[bronze:") + st.sink.what + "] Uncaught (in promise) " + text);
+        }
         if (st.sink.onReported) st.sink.onReported();
     }
 }

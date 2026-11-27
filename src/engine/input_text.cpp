@@ -266,7 +266,7 @@ void Engine::updateTextInputArea() {
     const int ry = static_cast<int>(std::lround(y + static_cast<float>(contentTop())));
     const int rw = static_cast<int>(std::lround(std::max(1.0f, w)));
     const int rh = static_cast<int>(std::lround(std::max(1.0f, h)));
-    window_->textInput().setArea(rx, ry, rw, rh, 0);
+    if (window_) window_->textInput().setArea(rx, ry, rw, rh, 0);
 }
 
 void Engine::handleTextEditing(const std::string& text, int start,

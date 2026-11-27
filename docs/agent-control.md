@@ -170,7 +170,9 @@ instead of pixels (`view`, `windows`, `set`, `scroll`, `focus`, `close`,
 - `-o FILE` (or `-o -` for stdout) on `screenshot`, `shot` and `record`
   writes the result where bro-ctl runs. With `-o -`, stdout carries only
   the file's bytes: every text reply goes to stderr, so a PNG stream stays
-  clean. `eval -` / `eval -f FILE` read the script from stdin or a file.
+  clean. `eval -` / `eval -f FILE` / `eval-file FILE` read the script from
+  stdin or a local file (`BRO_CONTROL=1 bro-headless ...` pumps control
+  commands live during `advanceTime`, `wallSleep`, and `advanceRealtime`).
 
 Input goes in at the device level: under DRM through the same path libinput
 events take (so global hotkeys, the pointer, and client windows all see it);

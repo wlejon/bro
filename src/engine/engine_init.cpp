@@ -173,7 +173,7 @@ void Engine::construct(const EngineConfig& config) {
     // own, for the first scene's setup to find built.
     render::configureKernelCache();
 #if BRO_WITH_3D
-    if (config.displayMode != DisplayMode::Server) scene::SceneRenderer::prewarmBuiltinShaders();
+    if (config.displayMode != DisplayMode::Server && !config.noGpu) scene::SceneRenderer::prewarmBuiltinShaders();
 #endif
     // Before any image decodes: rasterizing an SVG image paints it with the
     // layout's SVG traversal.
@@ -363,6 +363,10 @@ void Engine::construct(const EngineConfig& config) {
         ~JoinOnExit() { if (t.joinable()) t.join(); }
     } joinGpuInit{gpuInit};
     if (displayMode_ == DisplayMode::Headless) {
+        if (config.noGpu) {
+            renderer_ = std::make_unique<render::RasterRenderer>();
+            windowDoneAt = sinceStartMs();
+        } else {
         // The offscreen device needs no window, so it comes up on a thread
         // while this one creates the hidden window (~90 ms, SDL's video init,
         // which loads the same Vulkan loader for a SDL_WINDOW_VULKAN window),
@@ -427,6 +431,7 @@ void Engine::construct(const EngineConfig& config) {
         }
         gfxTiming.windowMs = util::currentTimeMs() - gfxStart;
         windowDoneAt = sinceStartMs();
+        }
     } else if (displayMode_ == DisplayMode::Windowed) {
         // Preload the Vulkan loader / ICD and create VkInstance on a worker
         // thread while the main thread creates the window and begins compiling
@@ -495,6 +500,7 @@ void Engine::construct(const EngineConfig& config) {
     if (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) beginPageCompile();
 
     if (displayMode_ == DisplayMode::Headless) {
+        if (!config.noGpu) {
         // The device's thread may still be loading the driver and the
         // pipeline cache: waited for pumped, as every wait on this thread is.
         util::waitPumpingUntil([&gpuInitDone](int ms) {
@@ -514,6 +520,7 @@ void Engine::construct(const EngineConfig& config) {
         auto skia = std::make_unique<render::SkiaRenderer>();
         skia->setGpu(headlessSkiaGpu);
         renderer_ = std::move(skia);
+        }
     } else if (displayMode_ == DisplayMode::Windowed) {
         // The device is chosen against the window's surface (VulkanContext::
         // init), and the surface stays on this thread (a Cocoa view must be
@@ -546,7 +553,7 @@ void Engine::construct(const EngineConfig& config) {
             gpuReadyAt = sinceStartMs();
         }
     }
-    if (displayMode_ == DisplayMode::Headless || displayMode_ == DisplayMode::Windowed) {
+    if ((displayMode_ == DisplayMode::Headless && !config.noGpu) || displayMode_ == DisplayMode::Windowed) {
         gfxTiming.gpuMs = gpuMs;
         gfxTiming.readyAtMs = gpuReadyAt;
         // The window and the device only, not the audio and the page's host

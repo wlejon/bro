@@ -158,7 +158,7 @@ void Engine::beginNativeDrag() {
     for (const auto& fmt : rest) drag.data.emplace_back(fmt, store.data.at(fmt));
 
     renderDragIcon(dragLabel(store), drag);
-    nativeDrag_ = toClients ? startShellDrag(drag) : window_->startDrag(drag);
+    nativeDrag_ = toClients ? startShellDrag(drag) : (window_ ? window_->startDrag(drag) : false);
 }
 
 void Engine::handleOwnDragMotion(float x, float y) {

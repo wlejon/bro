@@ -12,6 +12,7 @@
 #include "bronze_host/eval.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_script_log.h"
 #include "render/vulkan_debug.h"
 #include "platform/desktop_notifications.h"
 #include "platform/desktop_platform.h"
@@ -101,9 +102,11 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     int width = 1920, height = 1080;
     float deviceScale = 1.0f;
     bool realAudio = false;
+    bool noGpu = false;
     int cliSplash = -1;
     std::string appDir;
     std::string scriptPath;
+    std::string scriptLogPath;
     std::vector<std::string> inlineExprs;
     std::vector<std::string> scriptArgs;
     bool claimInstance = false;
@@ -138,6 +141,10 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "                  viewport; default: 1)\n"
                 "  --real-audio    Enable real audio output\n"
                 "  --audio         Enable real audio output\n"
+                "  --no-gpu        Skip Vulkan, Skia GPU, and hidden window initialization\n"
+                "                  (fast pure-CPU mode; bro.kernel.gpu === false)\n"
+                "  --script-log <path>\n"
+                "                  Write script console.* output and uncaught errors to <path>\n"
                 "  --splash        Show splash screen during load\n"
                 "  --no-splash     Skip splash screen\n"
                 "  -e <expr>       Evaluate JavaScript and print its value (a string as\n"
@@ -178,6 +185,12 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             if (!(deviceScale > 0.0f)) deviceScale = 1.0f;
         } else if (strcmp(argv[i], "--real-audio") == 0 || strcmp(argv[i], "--audio") == 0) {
             realAudio = true;
+        } else if (strcmp(argv[i], "--no-gpu") == 0) {
+            noGpu = true;
+        } else if (strcmp(argv[i], "--script-log") == 0 && i + 1 < argc) {
+            scriptLogPath = argv[++i];
+        } else if (strncmp(argv[i], "--script-log=", 13) == 0) {
+            scriptLogPath = argv[i] + 13;
         } else if (strcmp(argv[i], "--splash") == 0) {
             cliSplash = 1;
         } else if (strcmp(argv[i], "--no-splash") == 0) {
@@ -245,6 +258,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     }
 
     bro::bronze_host::setScriptArgs(scriptArgs);
+    bro::bronze_host::setScriptLogPath(scriptLogPath);
     bro::bronze_host::clearTestFailure();
 
     int exitCode = 0;
@@ -303,6 +317,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 
         config.displayMode = bro::engine::DisplayMode::Headless;
         config.realAudio = realAudio;
+        config.noGpu = noGpu;
         config.graphics.width = width;
         config.graphics.height = height;
         config.deviceScaleFactor = deviceScale;

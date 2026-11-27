@@ -43,6 +43,7 @@
 #endif
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_control.h"
+#include "bronze_host/host_script_log.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_globals_internal.h"
@@ -393,6 +394,9 @@ void reportBronzeError(const char* origin, Value thrown) {
     if (hostDispatchUncaughtError(root.get())) return;
     const std::string text = thrownValueText(root.get());
     LOG_ERROR("%s[bronze:%s] uncaught %s", compartmentLogPrefix().c_str(), origin, text.c_str());
+    if (hasScriptLogPath()) {
+        writeScriptLogLine("error", compartmentLogPrefix() + "[bronze:" + origin + "] uncaught " + text);
+    }
     // An appview's: its page hears it (apperror) and the app runs on.
     if (Compartment* c = currentCompartment()) noteAppViewError(*c, text);
 }
@@ -554,6 +558,7 @@ void installRealmHostGlobals(engine::Engine& engine, Compartment& c) {
     // via installHtmlInterfaces() / installImageGlobal().
     installTouchGlobals();
     installBrokitGlobals(engine);
+    installScriptLogSink();
     chainNodeOntoEventTarget();
     // The UI event classes (js/events.js) extend the `Event` brokit just
     // installed.
