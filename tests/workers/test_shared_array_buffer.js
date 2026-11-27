@@ -9,7 +9,7 @@ function pumpUntil(pred, ms) {
 const replies = [];
 w.onmessage = (e) => { replies.push(e.data); };
 
-const sab = new SharedArrayBuffer(32);
+const sab = new SharedArrayBuffer(64);
 const view = new Int32Array(sab);
 Atomics.store(view, 0, 42);
 
@@ -28,7 +28,7 @@ try {
     transferThrew = e instanceof TypeError;
 }
 assert(transferThrew, 'transferring SharedArrayBuffer throws TypeError');
-assert(sab.byteLength === 32, 'SharedArrayBuffer remains intact after rejected transfer');
+assert(sab.byteLength === 64, 'SharedArrayBuffer remains intact after rejected transfer');
 
 // 3. Cross-thread Atomics.wait in worker woken by main Atomics.notify.
 w.postMessage({ cmd: 'wait-for-main', sab: sab });
@@ -69,5 +69,23 @@ pumpUntil(() => resolvedValue !== null && replies.some((r) => r.cmd === 'notifie
 const notifyReply = replies.find((r) => r.cmd === 'notified');
 assert(notifyReply && notifyReply.woken === 1, 'worker notify woke 1 main waiter');
 assert(resolvedValue === 'ok', 'waitAsync resolved with ok, got ' + resolvedValue);
+
+// 6. Atomics.waitAsync woken solely by Worker notify (no postMessage reply).
+Atomics.store(view, 8, 0);
+const asyncOnly = Atomics.waitAsync(view, 8, 0);
+assert(asyncOnly.async === true, 'async-only waitAsync returned async=true');
+let asyncOnlyVal = null;
+asyncOnly.value.then((v) => { asyncOnlyVal = v; });
+w.postMessage({ cmd: 'notify-only', sab: sab, index: 8 });
+pumpUntil(() => asyncOnlyVal !== null);
+assert(asyncOnlyVal === 'ok', 'waitAsync woke via microtasksPending without postMessage, got ' + asyncOnlyVal);
+
+// 7. Atomics.waitAsync finite timeout expires via microtasksPending.
+const timeoutWait = Atomics.waitAsync(view, 7, 123, 25);
+assert(timeoutWait.async === true, 'timed waitAsync returned async=true');
+let timeoutVal = null;
+timeoutWait.value.then((v) => { timeoutVal = v; });
+pumpUntil(() => timeoutVal !== null);
+assert(timeoutVal === 'timed-out', 'timed waitAsync resolved to timed-out, got ' + timeoutVal);
 
 w.terminate();

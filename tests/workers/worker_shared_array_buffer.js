@@ -9,7 +9,7 @@ onmessage = (e) => {
                    view instanceof Int32Array &&
                    view.buffer === msg.sab &&
                    msg.sab === msg.sameSab &&
-                   msg.sab.byteLength === 32 &&
+                   msg.sab.byteLength === 64 &&
                    Atomics.load(view, 0) === 42;
         Atomics.store(view, 1, 99);
         postMessage({ cmd: 'identity-reply', ok: ok });
@@ -42,6 +42,12 @@ onmessage = (e) => {
         Atomics.store(view, 7, 123);
         const woken = Atomics.notify(view, 7, 1);
         postMessage({ cmd: 'notified', woken: woken });
+        return;
+    }
+
+    if (msg.cmd === 'notify-only') {
+        const view = new Int32Array(msg.sab);
+        Atomics.notify(view, msg.index, 1);
         return;
     }
 };
