@@ -4,6 +4,8 @@
 #include "scene/kernel_source_scan.h"
 
 #include <cstddef>
+#include <mutex>
+#include <unordered_map>
 
 namespace bro::scene {
 
@@ -363,6 +365,24 @@ bool kernelFnReadsField(std::string_view source, std::string_view fn, std::strin
         }
     }
     return false;
+}
+
+KernelVertexScan scanKernelVertex(const std::string& source) {
+    // A control path (a node given a shader), so a lock; a scene of a
+    // thousand nodes on one hook scans it once.
+    static std::mutex mu;
+    static std::unordered_map<std::string, KernelVertexScan> seen;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        if (auto it = seen.find(source); it != seen.end()) return it->second;
+    }
+    KernelVertexScan scan;
+    scan.hasVertex = kernelSourceDefinesFn(source, "vertex");
+    scan.hasVertexPos = scan.hasVertex && kernelSourceModifiesVertexPos(source);
+    std::lock_guard<std::mutex> lock(mu);
+    if (seen.size() >= 512) seen.clear();      // edits under hot reload are new sources
+    seen.emplace(source, scan);
+    return scan;
 }
 
 }  // namespace bro::scene

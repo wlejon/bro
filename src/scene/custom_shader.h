@@ -64,8 +64,9 @@ struct CustomShaderState {
 
     void rebuildKey() {
         vertexReads_.clear();
-        hasVertex = kernelSourceDefinesFn(module, "vertex");
-        hasVertexPos = hasVertex && kernelSourceModifiesVertexPos(module);
+        const KernelVertexScan scan = scanKernelVertex(module);
+        hasVertex = scan.hasVertex;
+        hasVertexPos = scan.hasVertexPos;
         size_t h = std::hash<std::string>{}(module);
         for (const auto& m : modules) {
             h ^= std::hash<std::string>{}(m.first) + 0x9e3779b9 + (h << 6) + (h >> 2);

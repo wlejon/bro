@@ -28,6 +28,15 @@ bool kernelSourceDefinesFn(std::string_view source, std::string_view name);
 /// varying-only / passthrough hooks; returns `false` when no `fn vertex` exists.
 bool kernelSourceModifiesVertexPos(std::string_view source);
 
+/// What a hook's vertex stage is: `kernelSourceDefinesFn(source, "vertex")`
+/// and `kernelSourceModifiesVertexPos(source)`, remembered per distinct
+/// source, since every node given the same hook asks the same question of it.
+struct KernelVertexScan {
+    bool hasVertex = false;
+    bool hasVertexPos = false;
+};
+KernelVertexScan scanKernelVertex(const std::string& source);
+
 /// Whether `fn <fn>(` in `source`, or a function of `source` it calls (at any
 /// depth), reads a field named `field` (`x.field`): which uniforms a hook's
 /// vertex stage reads. Conservative: any `.field` counts, whatever its
