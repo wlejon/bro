@@ -18,7 +18,8 @@
  */
 
 /**
- * @param {{gravity?: number[]}} [options]  gravity defaults to [0, -9.81, 0]
+ * @param {{gravity?: number[], workers?: number}} [options]  gravity defaults to [0, -9.81, 0];
+ *   `workers` is how many threads a step solves on (World.setWorkers)
  * @returns {World}
  *
  * @example
@@ -36,6 +37,9 @@ class World {
 
     /** @param {number[]} g */
     setGravity(g) {}
+
+    /** The threads a step solves on. @param {number} n */
+    setWorkers(n) {}
 
     /** The fastest a body moves (m/s, 400 unless set). @type {number} write only */
     maxSpeed;
@@ -92,6 +96,31 @@ class World {
      */
     addMesh(o) {}
 
+    /**
+     * One rigid body made of several boxes: `parts`, each { center, rotation, half, mass }
+     * in the body's space. Its mass and inertia are the parts' together; with every part's
+     * mass 0 it is fixed in place. Takes the add* options for the body as a whole.
+     *
+     * @param {{parts: {center?: number[], rotation?: number[], half: number[], mass?: number}[]}} o
+     * @returns {number} the body
+     *
+     * @example
+     * const dumbbell = w.addCompound({ position: [0, 2, 0], parts: [
+     *     { center: [-1, 0, 0], half: [0.3, 0.3, 0.3], mass: 20 },
+     *     { center: [1, 0, 0], half: [0.3, 0.3, 0.3], mass: 20 },
+     *     { half: [1, 0.05, 0.05], mass: 2 },
+     * ] });
+     */
+    addCompound(o) {}
+
+    /**
+     * Ground from a grid of heights, fixed in place: `heights` (countX × countZ, row by
+     * row along x), `countX`, `countZ` (2 or more), `scale` [x, y, z] (metres per cell
+     * across, per unit of height), `minHeight` / `maxHeight` (-100, 500).
+     * @returns {number} the body
+     */
+    addHeightField(o) {}
+
     /** Removes a body and the joints on it. */
     removeBody(body) {}
 
@@ -103,18 +132,52 @@ class World {
      * (leave `b` out). `anchor` and `axis` are in the world, at the bodies'
      * poses when the joint is made.
      *
-     *   'weld'   nothing moves
-     *   'hinge'  turns about `axis` through `anchor`
-     *   'ball'   turns any way about `anchor`
+     *   'weld'      nothing moves
+     *   'hinge'     turns about `axis` through `anchor`
+     *   'ball'      turns any way about `anchor`
+     *   'slider'    slides along `axis` through `anchor`, turning not at all
+     *   'wheel'     b rolls about `axisB` and rides up and down `axis` (suspension)
+     *   'distance'  `anchor` on a and `anchorB` on b kept a length apart (the
+     *               length between them when made, or `target`)
+     *   'filter'    holds nothing: the two bodies just do not touch
+     *
+     * A hinge, slider, wheel or distance joint also takes:
+     *
+     *   lower, upper      its travel (rad or m; a distance joint's shortest and
+     *                     longest), on when either is given
+     *   motorSpeed        a motor turning it at this speed (rad/s or m/s; a
+     *                     wheel's spin) with at most `maxMotor` (N m or N)
+     *   target, hertz     a spring toward `target` (angle, travel or length) at
+     *   damping, maxSpring  `hertz`, damped by `damping` (1, critical), with at
+     *                     most `maxSpring` (N m or N; 0 any): a servo. A wheel's
+     *                     spring is its suspension. A distance spring of hertz 0
+     *                     pulls nothing until it reaches its `upper`.
+     *   maxPush           the most a distance spring pushes (N): 0 makes a rope,
+     *                     which pulls as a spring and lies slack shorter
      *
      * `breakForce` (N) and `breakTorque` (N m) are what the joint can take: the
-     * step in which more goes through it removes it and names it in broken().
+     * step in which more goes through it (the whole of it: what holds it in
+     * line, its motor, spring and stops) removes it and names it in broken().
      * Left out, it takes anything. The two bodies of a joint do not touch each
      * other unless `collide` is true.
      *
-     * @param {{kind?: 'weld'|'hinge'|'ball', a: number, b?: number, anchor?: number[],
-     *          axis?: number[], breakForce?: number, breakTorque?: number, collide?: boolean}} o
+     * @param {{kind?: 'weld'|'hinge'|'ball'|'slider'|'wheel'|'distance'|'filter', a: number, b?: number,
+     *          anchor?: number[], axis?: number[], anchorB?: number[], axisB?: number[],
+     *          lower?: number, upper?: number, motorSpeed?: number, maxMotor?: number,
+     *          target?: number, hertz?: number, damping?: number, maxSpring?: number, maxPush?: number,
+     *          breakForce?: number, breakTorque?: number, collide?: boolean}} o
      * @returns {number} the joint
+     *
+     * @example
+     * // A boom on a geared motor: up to 600 N m, at most 1 rad/s, and stops at ±1.2 rad.
+     * const hinge = w.addJoint({ kind: 'hinge', a: base, b: boom, anchor: [0, 1, 0], axis: [0, 0, 1],
+     *     lower: -1.2, upper: 1.2, motorSpeed: 0, maxMotor: 600 });
+     * w.setJointMotor(hinge, 1, 600);      // raise
+     * w.jointState(hinge);                  // { position, speed, motorEffort, extra }
+     *
+     * // A load on a rope from its tip: pulls like a steel wire, lies slack when set down.
+     * w.addJoint({ kind: 'distance', a: boom, b: load, anchor: tip, anchorB: top,
+     *     target: 3, lower: 0, upper: 4.5, hertz: 4, damping: 0.3, maxPush: 0 });
      *
      * @example
      * // A beam welded to the world that lets go past 50 kN.
@@ -136,6 +199,24 @@ class World {
      */
     jointLoad(joint) {}
 
+    /** A joint's motor: toward `speed` with at most `maxEffort` (N m or N; 1e6), on unless `enabled` is false. */
+    setJointMotor(joint, speed, maxEffort, enabled) {}
+
+    /** A joint's spring: toward `target` at `hertz` (8), `damping` (1), with at most `maxEffort` (0: any). */
+    setJointTarget(joint, target, hertz, damping, maxEffort, enabled) {}
+
+    /** A joint's travel, `lower` to `upper` (rad or m), on unless `enabled` is false. */
+    setJointLimits(joint, lower, upper, enabled) {}
+
+    /**
+     * Where a joint is: `position` (a hinge's angle from where it was made, a
+     * slider's travel, a wheel's steering angle, a distance joint's length),
+     * `speed`, `motorEffort` (the motor's torque or force in the last step) and
+     * `extra` (a wheel's steering torque).
+     * @returns {{position: number, speed: number, motorEffort: number, extra: number}}
+     */
+    jointState(joint) {}
+
     /**
      * Advances the world. More substeps hold joints and stacks tighter.
      * @param {number} [dt=1/60] seconds
@@ -153,6 +234,12 @@ class World {
 
     /** An impulse (N s) at a point of the world; wakes the body. */
     applyImpulse(body, impulse, at) {}
+
+    /** A force (N) at a point of the world, for the next step; wakes the body. */
+    applyForce(body, force, at) {}
+
+    /** A torque (N m, world axes) for the next step; wakes the body. */
+    applyTorque(body, torque) {}
 
     /** @returns {number} kg; 0 for a fixed body */
     mass(body) {}

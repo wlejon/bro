@@ -118,3 +118,25 @@ function near(a, b, eps, msg) {
     w.destroy();
     console.log('PASS distance cable');
 }
+
+// --- rope: a distance spring that pulls and never pushes ---------------------------
+{
+    const w = bro.dynamics.createWorld();
+    w.addBox({ position: [0, -0.5, 0], half: [20, 0.5, 20], mass: 0 });
+    const post = w.addBox({ position: [0, 3, 0], half: [0.2, 0.2, 0.2], mass: 0 });
+    // A 100 kg block on the ground under a 4 m rope from the post's foot at 3 m: slack.
+    const block = w.addBox({ position: [0, 0.25, 0], half: [0.25, 0.25, 0.25], mass: 100 });
+    const rope = w.addJoint({
+        kind: 'distance', a: post, b: block, anchor: [0, 3, 0], anchorB: [0, 0.5, 0],
+        target: 4, lower: 0, upper: 6, hertz: 6, damping: 0.3, maxPush: 0,
+    });
+    for (let i = 0; i < 60; i++) w.step(1 / 60, 4);
+    near(w.pose(block)[1], 0.25, 0.01, 'a slack rope leaves the block on the ground');
+    // Shortened to 1 m it lifts the block and holds it, stretched a little by its weight.
+    w.setJointTarget(rope, 1, 6, 0.3, 0, true);
+    for (let i = 0; i < 240; i++) w.step(1 / 60, 4);
+    const y = w.pose(block)[1];
+    assert(y > 1.4 && y < 1.75, 'a taut rope holds the block up under it (y=' + y.toFixed(3) + ')');
+    w.destroy();
+    console.log('PASS rope');
+}

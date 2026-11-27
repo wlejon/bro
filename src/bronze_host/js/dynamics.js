@@ -192,6 +192,8 @@
                 d[21] = o.maxSpring === undefined ? 0 : +o.maxSpring;
                 if (o.enableSpring !== false) flags |= 16;
             }
+            // The most a distance spring pushes: 0 makes a rope, which only pulls.
+            d[23] = o.maxPush === undefined ? -1 : +o.maxPush;
             d[22] = flags;
             const a = o.a === undefined || o.a === null ? -1 : o.a | 0;
             const b = o.b === undefined || o.b === null ? -1 : o.b | 0;

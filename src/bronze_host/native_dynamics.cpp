@@ -286,6 +286,7 @@ int32_t bro_dynamics_addJoint(int32_t world, int32_t kind, int32_t a, int32_t b,
         d.hertz = desc[19];
         d.damping = desc[20];
         d.maxSpringEffort = desc[21];
+        d.maxSpringPush = desc[23];
         const int flags = static_cast<int>(desc[22]);
         d.hasAnchorB = (flags & 1) != 0;
         d.hasAxisB = (flags & 2) != 0;

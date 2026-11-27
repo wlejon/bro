@@ -102,6 +102,7 @@ struct JointDesc {
     float hertz = 0.0f;
     float damping = 1.0f;
     float maxSpringEffort = 0.0f;     // N*m or N (0: unclamped)
+    float maxSpringPush = -1.0f;      // N a Distance spring pushes at most (0: a rope); < 0: as maxSpringEffort
 };
 
 // One box of a body made of several: its centre, turn and half extents in the body's space,

@@ -633,10 +633,13 @@ std::uint32_t World::addJoint(const JointDesc& d) {
             jd.enableSpring = d.enableSpring;
             jd.hertz = std::max(0.0f, d.hertz);
             jd.dampingRatio = std::max(0.0f, d.damping);
+            // Box3D's lower bound is the most tension the spring holds, its upper the most
+            // compression: a rope pulls and never pushes (maxSpringPush 0).
             if (d.maxSpringEffort > 0.0f) {
                 jd.lowerSpringForce = -d.maxSpringEffort;
                 jd.upperSpringForce = d.maxSpringEffort;
             }
+            if (d.maxSpringPush >= 0.0f) jd.upperSpringForce = d.maxSpringPush;
             jd.enableMotor = d.enableMotor;
             jd.motorSpeed = d.motorSpeed;
             jd.maxMotorForce = std::max(0.0f, d.maxMotorEffort);
