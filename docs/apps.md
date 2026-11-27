@@ -650,6 +650,23 @@ build reads them all. A worker made from a `blob:` or `data:` URL has no file
 to be the unit of and always compiles; so do the scripts `importScripts`
 loads.
 
+**Child compartments (`<appview>` / `<iframe>`).** Each `<appview>` or
+`<iframe>` sub-document compiles into its own AOT subdirectory under the app's
+AOT tree (e.g. `appview-<digest>/` or `iframe-<digest>/`) carrying a
+`.compartment` marker file. When built (`--aot-build`), bro initializes that
+compartment with the child's host globals and `/app` mount override (using an
+`AppView` identity when marked `.compartment`), keeping child-app harvests and
+modules isolated from the parent page's realm. Parallel compilation across units
+in `--aot-build` defaults to half the hardware threads clamped `1..4` and can
+be tuned with `BRO_AOT_THREADS`.
+
+**Built-in JS PGO (`BRO_JS_HARVEST_DIR` / `BRO_JS_PROFILE_DIR`).** Engine-owned
+built-in JS modules (`src/bronze_host/js/*.js`) support two-stage profile-guided
+AOT in CMake: configure with `-DBRO_JS_HARVEST_DIR=<dir>`, exercise
+representative workloads so `writeInlineCacheHarvests()` flushes matching `.tfb`
+files, then rebuild `bro_bronze_js` with `-DBRO_JS_PROFILE_DIR=<dir>` (or run
+`scripts/harvest-builtin-js.sh`).
+
 **The folder is unaffected.** `bro <dir>` never looks at an AOT directory: the
 edit loop, hot reload and the code cache work as before.
 

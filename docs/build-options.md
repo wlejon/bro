@@ -89,6 +89,20 @@ relink or rerun it. A new native's registration goes in its register file,
 never inline in a body `.cpp`; `tests/bronze_host/run_checks.sh natives`
 fails otherwise.
 
+### Built-in JS PGO (`BRO_JS_HARVEST_DIR` / `BRO_JS_PROFILE_DIR`)
+
+`src/bronze_host/CMakeLists.txt` supports two-stage profile-guided AOT for
+bro's built-in JS modules (`bro_bronze_js`):
+
+1. Configure/build with `-DBRO_JS_HARVEST_DIR=<dir>` so the compiled modules
+   record inline-cache and counter harvests on exit (`writeInlineCacheHarvests()`).
+2. Run representative training workloads through `bro-headless`, then reconfigure
+   with `-DBRO_JS_HARVEST_DIR="" -DBRO_JS_PROFILE_DIR=<dir>` so `bronze`
+   consumes those matching `.tfb` profiles via `--feedback-in`.
+
+`scripts/harvest-builtin-js.sh` drives both stages (`--smoke-only` verifies
+`bronze --emit-obj --harvest-out` on `geometry.js`).
+
 ### Desktop libraries
 
 Each desktop sibling has its own flag, on in `desktop`, `app` and `full`, off in

@@ -147,6 +147,7 @@ first match's centre).
 | `wait <selector> [--gone] [--timeout=5000]` | until a match has a box (or none does) |
 | `wait-idle [--timeout=5000] [--frames=3]` | until N frames in a row lay out, animate and render nothing |
 | `mem [--detail] [--trim]` | what the process costs: see below |
+| `compartments [--json]` | live child compartments (`<appview>` / `<iframe>`): `id`, `kind`, `name`, `responding`, `overruns`, `longestOverrunMs`, `longestOverrunSite` |
 
 Coordinates are window CSS px; a selector's point is its element's centre
 in the window (below a menu bar, if the app shows one).

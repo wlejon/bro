@@ -182,6 +182,24 @@ bro.app.open = function(id, args, options) {};
  */
 bro.app.find = function(id) {};
 
+/**
+ * Reload an ES module in place without resetting the page DOM or script heap:
+ * invalidates bronze's module registry entry for `path`, compiles and executes
+ * the updated file in the current realm, retires the previous swapped module
+ * handle, and returns the updated module namespace object (see
+ * docs/hot-reload.md, "Taking a change in place"). Already-loaded static
+ * importers retain their existing live bindings; the returned namespace and
+ * subsequent dynamic `import(expr)` / newly compiled units receive the new
+ * instance. Accepts `/app/...`, `bro://app/...`, `/lib/...`, or a path relative
+ * to the app dir; requires read access to the resolved path.
+ * @param {string} path
+ * @returns {Object} The reloaded module namespace object.
+ * @example
+ *   const ns = bro.app.reloadModule('/app/sim/rules.js');
+ *   applyUpdatedRules(ns);
+ */
+bro.app.reloadModule = function(path) {};
+
 // ── Directories ──────────────────────────────────────────────────────────────
 
 /**

@@ -246,7 +246,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
             if (ms > 0.0) {
                 std::this_thread::sleep_for(std::chrono::microseconds(static_cast<int64_t>(ms * 1000.0)));
             }
-            pollNet();
+            // Intentionally do not pollNet() here so scripts can let worker/net threads accumulate work until advanceTime()/flush().
             engine.control().pump();
             drainMicrotasksAndLocalFetches();
             return ev::undefined();
