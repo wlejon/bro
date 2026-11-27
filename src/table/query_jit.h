@@ -80,4 +80,16 @@ private:
     mutable std::atomic<uint64_t> misses_{0};
 };
 
+struct FusedUdfSpec {
+    const brass::Module* sourceModule = nullptr;
+    std::string calleeName;
+    std::vector<uint32_t> argColIndices;
+    bool nanBoxedCallee = false;
+};
+
+std::shared_ptr<const CompiledKernel> compileFusedUdfFilterKernel(
+    const TableSnapshot& snap,
+    const FusedUdfSpec& udf,
+    std::string* outError = nullptr);
+
 }  // namespace bro::table

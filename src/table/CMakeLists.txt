@@ -35,6 +35,7 @@ add_library(bro_table STATIC
     query_jit_agg.cpp
     query_jit.h
     query_jit.cpp
+    query_jit_fuse.cpp
     query_jit_simd.cpp
     query_groupby.h
     query_groupby.cpp

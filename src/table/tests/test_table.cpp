@@ -3,6 +3,8 @@
 #include "table/query_ir.h"
 #include "table/query_jit.h"
 #include "table/table.h"
+#include "brass/mir/builder.hpp"
+#include "brass/mir/module.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -372,6 +374,116 @@ void testIndexJoinGroupByAndUpdates() {
     EXPECT(snapHeld->getCell(5, 0, 15).i64 != copyForRef->getCell(RowLoc{0, 15}, 5).i64);
 }
 
+void testFusedCrossModuleUdf() {
+    auto tbl = makeMultiTypeTable(10000);
+    auto snap = tbl->snapshot();
+
+    // Build an external MIR module holding unboxed, NaN-boxed, and allocating predicates.
+    brass::Module extMod("external_udf_domain");
+    brass::Builder b(extMod);
+
+    // 1. Unboxed predicate: (y: f64, id: i32) -> i32 : (y > 20.0) && (id >= 0) && ((id % 2) == 0)
+    {
+        brass::Function* fn = extMod.create_function(
+            "pred_unboxed", brass::Type::i32(), {brass::Type::f64(), brass::Type::i32()});
+        b.set_function(fn);
+        brass::BasicBlock* entry = b.append_block("entry");
+        brass::Value* y = b.add_block_param(entry, brass::Type::f64());
+        brass::Value* id = b.add_block_param(entry, brass::Type::i32());
+        b.position_at_end(entry);
+        brass::Value* c0 = b.build_sgt(y, b.build_fconst_f64(20.0));
+        brass::Value* c1 = b.build_sge(id, b.build_iconst_i32(0));
+        brass::Value* even = b.build_eq(b.build_and(id, b.build_iconst_i32(1)), b.build_iconst_i32(0));
+        b.build_ret(b.build_and(b.build_and(c0, c1), even));
+        fn->rebuild_cfg_predecessors();
+    }
+
+    // 2. NaN-boxed JS-ABI predicate: (y_tag: tagged, id_tag: tagged) -> tagged
+    {
+        brass::Function* fn = extMod.create_function(
+            "pred_nanboxed", brass::Type::tagged(), {brass::Type::tagged(), brass::Type::tagged()});
+        b.set_function(fn);
+        brass::BasicBlock* entry = b.append_block("entry");
+        brass::Value* yTag = b.add_block_param(entry, brass::Type::tagged());
+        brass::Value* idTag = b.add_block_param(entry, brass::Type::tagged());
+        b.position_at_end(entry);
+        brass::Value* y = b.build_bitcast_f64_i64(b.build_bitcast_i64_tagged(yTag));
+        brass::Value* id = b.build_trunc_i32(b.build_bitcast_i64_tagged(idTag));
+        brass::Value* c0 = b.build_sgt(y, b.build_fconst_f64(20.0));
+        brass::Value* c1 = b.build_sge(id, b.build_iconst_i32(0));
+        brass::Value* even = b.build_eq(b.build_and(id, b.build_iconst_i32(1)), b.build_iconst_i32(0));
+        brass::Value* cond = b.build_and(b.build_and(c0, c1), even);
+        brass::Value* boxed = b.build_bitcast_tagged_i64(b.build_or(
+            b.build_zext_i64(cond), b.build_iconst_i64(static_cast<int64_t>(0x7FF9000000000000ULL))));
+        b.build_ret(boxed);
+        fn->rebuild_cfg_predecessors();
+    }
+
+    // 3. Disallowed allocating external callee (must be rejected by DomainAuditReport).
+    {
+        extMod.add_external_symbol("ext_gc_alloc");
+        extMod.add_allocation_function("ext_gc_alloc");
+        brass::Function* fn = extMod.create_function(
+            "pred_alloc", brass::Type::i32(), {brass::Type::i32()});
+        b.set_function(fn);
+        brass::BasicBlock* entry = b.append_block("entry");
+        brass::Value* id = b.add_block_param(entry, brass::Type::i32());
+        b.position_at_end(entry);
+        (void)b.build_call("ext_gc_alloc", brass::Type::i64(), {id});
+        b.build_ret(b.build_sge(id, b.build_iconst_i32(0)));
+        fn->rebuild_cfg_predecessors();
+    }
+
+    std::vector<uint32_t> expectedRows;
+    for (uint32_t row = 0; row < 10000; ++row) {
+        const int32_t id = static_cast<int32_t>(row) - 10;
+        const double y = (row == 5) ? -0.0 : (static_cast<double>(row % 131) * 1.25);
+        if (y > 20.0 && id >= 0 && ((id & 1) == 0)) expectedRows.push_back(row);
+    }
+
+    auto runAndVerify = [&](const std::shared_ptr<const CompiledKernel>& kern) {
+        EXPECT(kern != nullptr && kern->entry != nullptr);
+        std::vector<uint32_t> gotRows;
+        uint32_t globalBase = 0;
+        for (const auto& ch : snap->chunks) {
+            std::vector<const void*> colPtrs(snap->schema.columns.size(), nullptr);
+            for (size_t c = 0; c < snap->schema.columns.size(); ++c) {
+                colPtrs[c] = ch.columns[c]->rawData();
+            }
+            std::vector<uint32_t> matchBuf(ch.rowCount, 0);
+            JitChunkContext ctx{};
+            ctx.leftColPtrs = colPtrs.data();
+            ctx.aliveWords = ch.aliveWords.data();
+            ctx.hasAliveMask = (ch.aliveCount < ch.rowCount) ? 1u : 0u;
+            ctx.rowCount = ch.rowCount;
+            ctx.matchIndices = matchBuf.data();
+            kern->entry(&ctx);
+            for (uint32_t m = 0; m < ctx.matchCount; ++m) {
+                gotRows.push_back(globalBase + matchBuf[m]);
+            }
+            globalBase += ch.rowCount;
+        }
+        EXPECT(gotRows == expectedRows);
+    };
+
+    std::string err;
+    FusedUdfSpec specUnboxed{&extMod, "pred_unboxed", {4u, 0u}, false};
+    auto kUnboxed = compileFusedUdfFilterKernel(*snap, specUnboxed, &err);
+    EXPECT(kUnboxed != nullptr);
+    runAndVerify(kUnboxed);
+
+    err.clear();
+    FusedUdfSpec specNanBox{&extMod, "pred_nanboxed", {4u, 0u}, true};
+    auto kNanBox = compileFusedUdfFilterKernel(*snap, specNanBox, &err);
+    EXPECT(kNanBox != nullptr);
+    runAndVerify(kNanBox);
+
+    err.clear();
+    FusedUdfSpec specBad{&extMod, "pred_alloc", {0u}, false};
+    auto kBad = compileFusedUdfFilterKernel(*snap, specBad, &err);
+    EXPECT(kBad == nullptr && !err.empty());
+}
+
 }  // namespace
 
 int main() {
@@ -379,6 +491,7 @@ int main() {
     testCowSnapshotIsolationAndConcurrency();
     testDifferentialFiltersProjectionsOrderLimit();
     testIndexJoinGroupByAndUpdates();
+    testFusedCrossModuleUdf();
     std::cout << "bro_table_test: all tests passed.\n";
     return 0;
 }

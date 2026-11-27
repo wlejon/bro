@@ -1,5 +1,7 @@
 #include "table/query_jit.h"
 
+#include "brass/cache/artifact_cache.hpp"
+#include "brass/cache/native_module_cache.hpp"
 #include "brass/target/host_cpu.hpp"
 #include "table/query_jit_emit.h"
 
@@ -11,6 +13,34 @@ namespace bro::table {
 namespace {
 
 using namespace jit_detail;
+
+brass::cache::NativeModuleCache& table_native_cache() {
+    static constexpr uint64_t kMaxBytes = 64ULL * 1024 * 1024;
+    static auto* store = new brass::cache::ArtifactCache(
+        brass::cache::default_cache_dir("bro", "table_kernels", "BRO_TABLE_CACHE_DIR"), kMaxBytes);
+    static auto* cache = new brass::cache::NativeModuleCache(*store);
+    return *cache;
+}
+
+brass::cache::CacheKey makeTableDiskKey(
+    const QueryPlan& plan, const TableSnapshot& snap, std::string_view modeTag,
+    const brass::codegen::KernelOptions& opts) {
+    brass::cache::KeyBuilder kb("bro.table_kernel/1");
+    kb.add_brass_codegen();
+    kb.add("plan", buildPlanCacheKey(plan, snap, modeTag));
+    kb.add_u64("opt_level", static_cast<uint64_t>(opts.opt_level));
+    kb.add_bool("enable_optimizations", opts.enable_optimizations);
+    kb.add_bool("enable_superopt", opts.enable_superopt);
+    kb.add_bool("enable_smt_guard_elim", opts.enable_smt_guard_elim);
+    kb.add_bool("enable_vectorize", opts.enable_vectorize);
+    kb.add_bool("enable_slp", opts.enable_slp);
+    kb.add_bool("enable_trace_layout", opts.enable_trace_layout);
+    kb.add_bool("enable_pre_ra_schedule", opts.enable_pre_ra_schedule);
+    kb.add_bool("enable_post_ra_schedule", opts.enable_post_ra_schedule);
+    kb.add_bool("enable_software_pipelining", opts.enable_software_pipelining);
+    kb.add_bool("enable_parallel", opts.enable_parallel);
+    return kb.finish();
+}
 
 std::shared_ptr<CompiledKernel> compileKernelImpl(const QueryPlan& plan, const TableSnapshot& snap,
                                                   JitMode requestedMode, std::string* outError) {
@@ -215,7 +245,30 @@ std::shared_ptr<CompiledKernel> compileKernelImpl(const QueryPlan& plan, const T
     opts.enable_slp = false;
     opts.enable_parallel = false;
 
+    const char* diskMode = (out->mode == JitMode::ScatterUpdate)
+                               ? "U"
+                               : (out->mode == JitMode::FilterAndProject ? "FP" : "F");
     try {
+        const brass::cache::CacheKey diskKey = makeTableDiskKey(plan, snap, diskMode, opts);
+        const brass::cache::NativeOptions nativeOpts;
+        std::string cacheErr;
+        auto nativeMod = table_native_cache().get_or_build_object(
+            diskKey,
+            [&](brass::object::ObjectFile& obj, std::string&) -> bool {
+                brass::codegen::KernelJit jit(opts);
+                obj = jit.compile_object(mod);
+                return true;
+            },
+            nativeOpts,
+            &cacheErr);
+        if (nativeMod) {
+            if (void* sym = nativeMod->symbol(entryName)) {
+                out->func = brass::codegen::KernelFunction::from_owner(
+                    entryName, sym, 0, std::move(nativeMod));
+                out->entry = reinterpret_cast<JitKernelFnPtr>(sym);
+                return out;
+            }
+        }
         brass::codegen::KernelJit jit(opts);
         out->func = jit.compile(mod, entryName);
         out->entry = reinterpret_cast<JitKernelFnPtr>(out->func.entry_point());
