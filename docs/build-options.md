@@ -5,8 +5,9 @@ The profiles and `BRO_WITH_*` flags. Quickstart: [BUILDING.md](../BUILDING.md).
 A flag that is off leaves its sibling unbuilt, compiles its code out behind
 `#if BRO_WITH_*`, and installs its JS namespace as the `{ available: false }`
 stub. Only `BRO_WITH_NET` (GameNetworkingSockets), `BRO_WITH_VIDEO`
-(libvpx/webm/Opus) and `BRO_WITH_AVIF` (dav1d) need vcpkg; only `BRO_WITH_TENSOR_CUDA` needs the CUDA
-toolkit.
+(libvpx/webm/Opus) and `BRO_WITH_AVIF` (dav1d) need vcpkg; `BRO_WITH_TENSOR_CUDA` compiles
+pure C++ (Brass MIR -> PTX JIT + dynamic `libcuda`/`nvcuda`) with zero CUDA Toolkit
+dependencies.
 
 ## Profiles (presets)
 
@@ -18,7 +19,7 @@ toolkit.
 | `minimal` | HTML/CSS + Canvas2D + WebGL + audio. 2D renderer only. | no | no |
 | `desktop` | Full renderer (3D scene graph, dynamics, audio, core game-AI), terminal, desktop libraries, remote. No vcpkg services (net/video/AVIF/steam) and no AI tower. | no | no |
 | **`app`** (default) | Full renderer (3D scene graph, dynamics, audio, core game-AI), terminal, desktop libraries, remote + net/video/steam. No AI tower. | yes | no |
-| `full` | Everything except the CUDA sub-lever (still opt-in). | yes | no (opt-in) |
+| `full` | Everything (AI tower + CUDA JIT on Linux/Windows, Metal opt-in on macOS). | yes | no |
 
 ```bash
 cmake -B build                                 # app profile (default), needs vcpkg for net/video
@@ -138,7 +139,7 @@ gated ones also need their capability at run time ([apps.md](apps.md#permissions
 | Flag | Pulls in | `full` | Requires |
 |---|:--|:--:|---|
 | `BRO_WITH_TENSOR` | brotensor (CPU); `bro.gpu`, and `bro.tensor` only with a GPU backend (below) | on | none |
-| `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend | **off** | `TENSOR` + CUDA toolkit |
+| `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend (pure-C++ Brass MIR -> PTX JIT) | **on** (Linux/Windows) | `TENSOR` (no CUDA toolkit) |
 | `BRO_WITH_TENSOR_METAL` | brotensor Metal backend | **off** | `TENSOR` + macOS |
 | `BRO_WITH_TENSOR_VULKAN` | brotensor Vulkan compute backend (hand-written GLSL); the AMD GPU path | **auto/on** (Linux + glslc + Vulkan headers + loader) | `TENSOR` + glslc (shaderc) + Vulkan headers |
 | `BRO_WITH_LM` | brolm | on | `TENSOR` |
@@ -148,9 +149,12 @@ gated ones also need their capability at run time ([apps.md](apps.md#permissions
 | `BRO_WITH_TRIPOSPLAT` | triposplat pipeline | on | `VISION` + `DIFFUSION` + `3D` |
 | `BRO_WITH_GAMEAI_NN` | brogameagent `nn/*` + `learn/*` | on | `GAMEAI` + `TENSOR` |
 
-`BRO_WITH_TENSOR_CUDA` stays **off even in `full`**. brotensor auto-detects
-the CUDA toolkit when the flag is off, so a genuinely CUDA-free build also
-passes `-DBROTENSOR_WITH_CUDA=OFF -DBROGAMEAGENT_WITH_CUDA=OFF`.
+`BRO_WITH_TENSOR_CUDA` defaults **on in `full`** on Linux and Windows (off on
+macOS). Because the CUDA backend compiles as pure C++ (Brass MIR -> PTX JIT) and
+loads `libcuda.so.1` / `nvcuda.dll` lazily at runtime, builds need no CUDA
+Toolkit and fall back automatically to Vulkan or CPU on machines without an
+NVIDIA driver. Pass `-DBRO_WITH_TENSOR_CUDA=OFF` to omit the CUDA backend
+explicitly.
 
 `BRO_WITH_TENSOR_VULKAN` is the AMD GPU path (there is no HIP backend) and can
 sit beside CUDA, which then stays the default device. On Linux it is

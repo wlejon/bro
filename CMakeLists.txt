@@ -193,7 +193,7 @@ set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app desktop full)
 # self-contained and <audio>/Web Audio is core HTML, so it stays in every
 # profile).  desktop = full UI/compositor + desktop services (no AI).
 # app = full renderer (3D + physics + core game-AI) + net/video/steam.
-# full = everything (the CUDA sub-lever stays opt-in even here).
+# full = everything (adds AI tower + pure-C++ CUDA JIT on Linux/Windows; Metal stays opt-in on macOS).
 if(BRO_PROFILE STREQUAL "minimal")
     set(_d_render OFF)
     set(_d_ai     OFF)
@@ -334,8 +334,12 @@ option(BRO_WITH_REMOTE     "Remote session hosting (broremote)"                 
 # full; minimal leaves it out (a compiled-out build gets the `available: false` stub).
 option(BRO_WITH_TERMINAL "Native <terminal> element (bropty + brosearch)"    ${_d_render})
 # Tier 2 — the AI tower (brotensor is the base).
+set(_d_tensor_cuda OFF)
+if(_d_ai AND NOT APPLE)
+    set(_d_tensor_cuda ON)
+endif()
 option(BRO_WITH_TENSOR       "brotensor tensor ops (ML backbone)"            ${_d_ai})
-option(BRO_WITH_TENSOR_CUDA  "brotensor CUDA backend (needs CUDA toolkit)"   OFF)
+option(BRO_WITH_TENSOR_CUDA  "brotensor CUDA backend (Brass MIR -> PTX JIT, dynamic libcuda)" ${_d_tensor_cuda})
 option(BRO_WITH_TENSOR_METAL "brotensor Metal backend (macOS)"              OFF)
 # BRO_WITH_TENSOR_VULKAN is declared below, after its auto-detection.
 option(BRO_WITH_LM           "Language models (brolm)"                       ${_d_ai})
