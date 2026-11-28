@@ -141,7 +141,7 @@ gated ones also need their capability at run time ([apps.md](apps.md#permissions
 | `BRO_WITH_TENSOR` | brotensor (CPU); `bro.gpu`, and `bro.tensor` only with a GPU backend (below) | on | none |
 | `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend (pure-C++ Brass MIR -> PTX JIT) | **on** (Linux/Windows) | `TENSOR` (no CUDA toolkit) |
 | `BRO_WITH_TENSOR_METAL` | brotensor Metal backend | **off** | `TENSOR` + macOS |
-| `BRO_WITH_TENSOR_VULKAN` | brotensor Vulkan compute backend (hand-written GLSL); the AMD GPU path | **auto/on** (Linux + glslc + Vulkan headers + loader) | `TENSOR` + glslc (shaderc) + Vulkan headers |
+| `BRO_WITH_TENSOR_VULKAN` | brotensor Vulkan compute backend (Brass MIR -> SPIR-V); the AMD GPU path | **auto/on** (Linux + Vulkan headers + loader) | `TENSOR` + Vulkan headers |
 | `BRO_WITH_LM` | brolm | on | `TENSOR` |
 | `BRO_WITH_DIFFUSION` | brodiffusion | on | `LM` (text encoder) |
 | `BRO_WITH_VISION` | brovisionml | on | `TENSOR` |
@@ -157,10 +157,11 @@ NVIDIA driver. Pass `-DBRO_WITH_TENSOR_CUDA=OFF` to omit the CUDA backend
 explicitly.
 
 `BRO_WITH_TENSOR_VULKAN` is the AMD GPU path (there is no HIP backend) and can
-sit beside CUDA, which then stays the default device. On Linux it is
-auto-detected on a build directory's first configure when `glslc`, the Vulkan
-headers and the loader are present; `-DBRO_WITH_TENSOR_VULKAN=ON/OFF` decides
-it explicitly. Without CUDA or Metal, `bro.gpu.backend === "vulkan"`, and
+sit beside CUDA, which then stays the default device. Because Vulkan kernels compile
+as pure C++ (single-source Brass MIR -> SPIR-V), builds need no external shader
+compiler (`glslc` / shaderc). On Linux it is auto-detected on a build directory's
+first configure when the Vulkan headers and loader are present;
+`-DBRO_WITH_TENSOR_VULKAN=ON/OFF` decides it explicitly. Without CUDA or Metal, `bro.gpu.backend === "vulkan"`, and
 every ML loader takes `{ device: 'vulkan' }` (alias `'vk'`).
 
 **`bro.tensor` needs one of those GPU backends, and `bro.gpu` does not.** The

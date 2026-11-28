@@ -359,12 +359,12 @@ if(BRO_WITH_TENSOR)
     endif()
 endif()
 
-# The Vulkan compute backend (brotensor docs/vulkan.md: hand-written GLSL on any
-# Vulkan 1.2+ driver), the AMD GPU path. Unlike CUDA / Metal it is additive:
-# it can sit beside CUDA, which then stays the default device (CUDA > Metal >
-# Vulkan > CPU). Auto-detected on Linux, the first time this build directory
-# is configured, when glslc, the Vulkan headers and the Vulkan loader are all
-# present (brotensor_vulkan_detect);
+# The Vulkan compute backend (brotensor docs/vulkan.md: single-source Brass MIR
+# lowered to SPIR-V for any Vulkan 1.2+ driver), the AMD GPU path. Unlike CUDA
+# / Metal it is additive: it can sit beside CUDA, which then stays the default
+# device (CUDA > Metal > Vulkan > CPU). Auto-detected on Linux, the first time
+# this build directory is configured, when the Vulkan headers and the Vulkan
+# loader are both present (brotensor_vulkan_detect);
 # -DBRO_WITH_TENSOR_VULKAN=ON/OFF decides it explicitly.
 set(_bro_vulkan_default OFF)
 if(NOT DEFINED CACHE{BRO_WITH_TENSOR_VULKAN} AND BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_METAL
@@ -372,11 +372,11 @@ if(NOT DEFINED CACHE{BRO_WITH_TENSOR_VULKAN} AND BRO_WITH_TENSOR AND NOT BRO_WIT
     include("${_bro_brotensor_cmake_dir}/BrotensorVulkan.cmake")
     brotensor_vulkan_detect(_bro_vulkan_ok)
     if(_bro_vulkan_ok)
-        message(STATUS "bro: glslc, Vulkan headers and loader found; enabling BRO_WITH_TENSOR_VULKAN")
+        message(STATUS "bro: Vulkan headers and loader found; enabling BRO_WITH_TENSOR_VULKAN")
         set(_bro_vulkan_default ON)
     endif()
 endif()
-option(BRO_WITH_TENSOR_VULKAN "brotensor Vulkan backend (glslc + Vulkan headers)" ${_bro_vulkan_default})
+option(BRO_WITH_TENSOR_VULKAN "brotensor Vulkan backend (Brass MIR -> SPIR-V, Vulkan headers)" ${_bro_vulkan_default})
 
 # Auto-enable prerequisites (a feature forces on what it needs). Ordered
 # top-down through the dependency DAG so a single pass resolves everything.
