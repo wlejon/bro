@@ -6,6 +6,7 @@
 // library so that the executables are one-line callers and every bro process
 // maps one copy of the engine.
 
+#include <cstdint>
 #include <functional>
 #include <string>
 

@@ -8,18 +8,12 @@
 #include "engine/engine.h"
 #include "util/page_pump.h"
 
-#if BRO_WITH_KERNEL
-#include <brokernel/api.h>
-#include <brokernel/ast.h>
-#endif
-
 #include <json.hpp>
 
 #include <chrono>
 #include <functional>
 #include <memory>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -79,38 +73,6 @@ bool readShaderModuleArgs(scene::SceneNode* n, const char* module, const char* f
             out.modules.emplace_back(it.key(), it.value().get<std::string>());
         }
     }
-#if BRO_WITH_KERNEL
-    {
-        // Resolve transitive imported registered modules into out.modules so
-        // CustomShaderState::rebuildKey() hashes actual module source contents.
-        static const std::unordered_set<std::string_view> kBuiltins = {
-            "std", "tiles", "wind", "scene", "atmosphere", "local_lighting", "lighting",
-            "custom", "volume", "near", "vegetation", "procedural", "bark", "mesh",
-            "hook", "voxeldag", "impostor"
-        };
-        std::unordered_set<std::string> known;
-        for (const auto& m : out.modules) known.insert(m.first);
-        std::vector<std::string> worklist;
-        worklist.push_back(out.source);
-        for (const auto& m : out.modules) worklist.push_back(m.second);
-        while (!worklist.empty()) {
-            std::string cur = std::move(worklist.back());
-            worklist.pop_back();
-            brokernel::DiagnosticBag diags;
-            auto ast = brokernel::parse_source(cur, "<hook>", diags);
-            if (!ast) continue;
-            for (const auto& imp : ast->imports) {
-                if (!imp.file_path.empty() || imp.module_path.empty()) continue;
-                const std::string& mname = imp.module_path.front();
-                if (kBuiltins.contains(mname) || !known.insert(mname).second) continue;
-                if (auto src = brokernel::api::resolveRegisteredModule(mname)) {
-                    worklist.push_back(*src);
-                    out.modules.emplace_back(mname, std::move(*src));
-                }
-            }
-        }
-    }
-#endif
     return true;
 }
 
