@@ -427,52 +427,20 @@ if(BRO_WITH_3D)
     target_link_libraries(bro_bronze_host PUBLIC bromesh_api)
 endif()
 
-if(BRO_WITH_CONF)
-    target_link_libraries(bro_bronze_host PUBLIC broconf broconf_api)
-endif()
-
 if(BRO_WITH_THEMES)
     target_link_libraries(bro_bronze_host PUBLIC brothemes brothemes_api)
-endif()
-
-if(BRO_WITH_KEYS)
-    target_link_libraries(bro_bronze_host PUBLIC brokeys brokeys_api)
 endif()
 
 if(BRO_WITH_SEARCH)
     target_link_libraries(bro_bronze_host PUBLIC brosearch brosearch_api)
 endif()
 
-if(BRO_WITH_APPS)
-    target_link_libraries(bro_bronze_host PUBLIC broapps broapps_api)
-endif()
-
-if(BRO_WITH_VFS)
-    target_link_libraries(bro_bronze_host PUBLIC brovfs brovfs_api)
-endif()
-
-if(BRO_WITH_THUMB)
-    target_link_libraries(bro_bronze_host PUBLIC brothumb brothumb_api)
-endif()
-
 if(BRO_WITH_SEAT)
     target_link_libraries(bro_bronze_host PUBLIC broseat broseat_api)
 endif()
 
-if(BRO_WITH_CRED)
-    target_link_libraries(bro_bronze_host PUBLIC brocred brocred_api)
-endif()
-
-if(BRO_WITH_SYS)
-    target_link_libraries(bro_bronze_host PUBLIC brosys brosys_api)
-endif()
-
 if(BRO_WITH_DISPLAYS)
     target_link_libraries(bro_bronze_host PUBLIC brodisplays brodisplays_api)
-endif()
-
-if(BRO_WITH_PORTAL)
-    target_link_libraries(bro_bronze_host PUBLIC broportal broportal_api)
 endif()
 
 if(BRO_WITH_COMPOSITOR)
@@ -485,26 +453,6 @@ endif()
 
 if(BRO_WITH_A11Y)
     target_link_libraries(bro_bronze_host PUBLIC broa11y broa11y_api)
-endif()
-
-if(BRO_WITH_DECOR)
-    target_link_libraries(bro_bronze_host PUBLIC brodecor brodecor_api)
-endif()
-
-if(BRO_WITH_CLIP)
-    target_link_libraries(bro_bronze_host PUBLIC broclip broclip_api)
-endif()
-
-if(BRO_WITH_MPRIS)
-    target_link_libraries(bro_bronze_host PUBLIC brompris brompris_api)
-endif()
-
-if(BRO_WITH_PULSE)
-    target_link_libraries(bro_bronze_host PUBLIC bropulse bropulse_api)
-endif()
-
-if(BRO_WITH_IME)
-    target_link_libraries(bro_bronze_host PUBLIC broime broime_api)
 endif()
 
 # bro.remote: broremote's binding, and the host side it reaches through its

@@ -323,7 +323,10 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         config.deviceScaleFactor = deviceScale;
         config.showSplash = (cliSplash == 1);
         config.installHostBindings = hooks.installHostBindings;
+        config.installHostRootApis = hooks.installHostRootApis;
         config.installWorkerHostBindings = hooks.installWorkerHostBindings;
+        config.onDropCompartment = hooks.onDropCompartment;
+        config.onShutdownForReload = hooks.onShutdownForReload;
         config.aotBuildDir = aotBuildDir;
         if (!aotRunDir.empty()) {
             std::ifstream summary(aotRunDir + "/aot.txt");

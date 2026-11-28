@@ -25,8 +25,6 @@ bro_dependencies(
     box3d
     # The <terminal> element and remote sessions.
     brosearch brothemes bropty brolink bromux brovideo broremote
-    # Desktop substrate.
-    broconf brokeys broapps brovfs brothumb broseat brocred brosys brodisplays
-    broportal brocompositor browl broa11y brodmabuf brodbus brodecor broclip
-    brompris bropulse broime
+    # Desktop host / compositor / Wayland / accessibility substrate retained in bro.
+    broseat brodisplays brocompositor browl broa11y brodmabuf brodbus
 )

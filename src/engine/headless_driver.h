@@ -22,8 +22,17 @@ struct HeadlessHooks {
     /// Host bindings to register when bronze web host globals are installed.
     std::function<void(Engine&)> installHostBindings;
 
+    /// Host-extension APIs mounted onto `bro` inside installBroRoots before permission gating.
+    std::function<void(Engine&)> installHostRootApis;
+
     /// Per-thread host bindings for each Worker (EngineConfig::installWorkerHostBindings).
     std::function<void()> installWorkerHostBindings;
+
+    /// Called when a child compartment is destroyed.
+    std::function<void(uint64_t)> onDropCompartment;
+
+    /// Called during hot-reload beside shutdownSiblingApisForReload().
+    std::function<void()> onShutdownForReload;
 
     /// Run after the Engine is destroyed and immediately before `_exit()`.
     ///

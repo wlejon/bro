@@ -43,9 +43,6 @@
 #if BRO_WITH_THEMES
 #include <brothemes/api.h>
 #endif
-#if BRO_WITH_KEYS
-#include <brokeys/api.h>
-#endif
 #if BRO_WITH_SEARCH
 #include <brosearch/api.h>
 #endif
@@ -128,9 +125,6 @@ void installWorkerSiblingApis() {
 #if BRO_WITH_THEMES
     bro::themes::api::setPathResolver(&brokit::api::resolveAssetPath);
     bro::themes::api::installThemes();
-#endif
-#if BRO_WITH_KEYS
-    bro::keys::api::installKeys();
 #endif
 #if BRO_WITH_SEARCH
     brosearch::api::installSearch();

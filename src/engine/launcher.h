@@ -46,7 +46,7 @@ void publishLaunchEnv(EngineConfig& config);
 /// list folder apps, and write their FreeDesktop desktop entries. `args` is
 /// the command line after the program name. Returns the process exit status,
 /// or -1 when `args` is not an app-management command.
-int runAppCommand(const std::vector<std::string>& args);
+int runAppCommand(const std::vector<std::string>& args, const std::string& defaultExecPath = {});
 
 /// `bro --permissions [<id|dir>]`, `--grant-app <id|dir> <cap>`,
 /// `--revoke-app <id|dir> <cap>`, `--dev-mode on|off`: the grant store

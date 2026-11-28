@@ -216,7 +216,10 @@ void Engine::construct(const EngineConfig& config) {
     titleOverride_ = config.title;
     fallbackTitle_ = initialWindowTitle(config);
     installHostBindings_ = config.installHostBindings;
+    installHostRootApis_ = config.installHostRootApis;
     installWorkerHostBindings_ = config.installWorkerHostBindings;
+    onDropCompartment_ = config.onDropCompartment;
+    onShutdownForReload_ = config.onShutdownForReload;
     initDevLoopConfig(config);
     if (!config.manifestError.empty()) throw std::runtime_error(config.manifestError);
     // CSS animations are Web Animations records (css_transitions.h).

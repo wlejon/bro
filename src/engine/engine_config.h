@@ -124,11 +124,20 @@ struct EngineConfig {
     std::vector<std::string> appArgs;
     std::string launchCwd;
     std::function<void(Engine&)> installHostBindings;
+    // Called inside installBroRoots(Engine&) after bro's built-in sibling APIs
+    // and BEFORE installGatedNamespaces() / markAvailableNamespaces(), so host
+    // extensions (helm) can mount privileged bro.<ns> namespaces and still get
+    // full permission gating and `available: true` decoration.
+    std::function<void(Engine&)> installHostRootApis;
     // Called on each Worker thread after its `bro` root is in, so an embedder
     // can put its own namespace (bro.<app>) into workers as well. Runs on the
     // worker's thread with that thread's registry: any native state it binds
     // must be per thread.
     std::function<void()> installWorkerHostBindings;
+    // Called when a child compartment (iframe / appview) is destroyed.
+    std::function<void(uint64_t)> onDropCompartment;
+    // Called during app hot-reload beside shutdownSiblingApisForReload().
+    std::function<void()> onShutdownForReload;
 };
 
 } // namespace bro::engine

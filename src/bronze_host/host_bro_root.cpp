@@ -122,7 +122,7 @@ void installBroRoots(engine::Engine& engine) {
                                              "scene", "terrain", "tile_world", "lighting", "animation", "lm",
                                              "rave", "music", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                                             "flora", "tensor", "profiler", "apps", "vfs", "models", "dynamics"}));
+                                             "flora", "tensor", "profiler", "models", "dynamics"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
@@ -209,9 +209,6 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_NET
     setUnavailable("net", "BRO_WITH_NET");
 #endif
-#if !BRO_WITH_CONF
-    setUnavailable("conf", "BRO_WITH_CONF");
-#endif
     // bro.terminal: the <terminal> element's namespace (host_element_terminal.cpp).
 #if BRO_WITH_TERMINAL
     {
@@ -287,35 +284,14 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_THEMES
     setUnavailable("themes", "BRO_WITH_THEMES");
 #endif
-#if !BRO_WITH_KEYS
-    setUnavailable("keys", "BRO_WITH_KEYS");
-#endif
 #if !BRO_WITH_SEARCH
     setUnavailable("search", "BRO_WITH_SEARCH");
-#endif
-#if !BRO_WITH_APPS
-    setUnavailable("apps", "BRO_WITH_APPS");
-#endif
-#if !BRO_WITH_VFS
-    setUnavailable("vfs", "BRO_WITH_VFS");
-#endif
-#if !BRO_WITH_THUMB
-    setUnavailable("thumb", "BRO_WITH_THUMB");
 #endif
 #if !BRO_WITH_SEAT
     setUnavailable("seat", "BRO_WITH_SEAT");
 #endif
-#if !BRO_WITH_CRED
-    setUnavailable("cred", "BRO_WITH_CRED");
-#endif
-#if !BRO_WITH_SYS
-    setUnavailable("sys", "BRO_WITH_SYS");
-#endif
 #if !BRO_WITH_DISPLAYS
     setUnavailable("displays", "BRO_WITH_DISPLAYS");
-#endif
-#if !BRO_WITH_PORTAL
-    setUnavailable("portal", "BRO_WITH_PORTAL");
 #endif
 #if !BRO_WITH_COMPOSITOR
     setUnavailable("compositor", "BRO_WITH_COMPOSITOR");
@@ -326,24 +302,34 @@ void installBroRoots(engine::Engine& engine) {
 #if !BRO_WITH_A11Y
     setUnavailable("a11y", "BRO_WITH_A11Y");
 #endif
-#if !BRO_WITH_DECOR
-    setUnavailable("decor", "BRO_WITH_DECOR");
-#endif
-#if !BRO_WITH_CLIP
-    setUnavailable("clip", "BRO_WITH_CLIP");
-#endif
-#if !BRO_WITH_MPRIS
-    setUnavailable("mpris", "BRO_WITH_MPRIS");
-#endif
-#if !BRO_WITH_PULSE
-    setUnavailable("pulse", "BRO_WITH_PULSE");
-#endif
-#if !BRO_WITH_IME
-    setUnavailable("ime", "BRO_WITH_IME");
-#endif
 #if !BRO_WITH_REMOTE
     setUnavailable("remote", "BRO_WITH_REMOTE");
 #endif
+    // Host-extension root APIs (helm desktop runtime): mounted before permission
+    // gating and before unavailable-stub fallback for unmounted extensions.
+    if (engine.installHostRootApis()) {
+        engine.installHostRootApis()(engine);
+    }
+    static constexpr struct { const char* name; const char* flag; } kDesktopExt[] = {
+        {"apps",   "BRO_WITH_APPS"},
+        {"vfs",    "BRO_WITH_VFS"},
+        {"thumb",  "BRO_WITH_THUMB"},
+        {"cred",   "BRO_WITH_CRED"},
+        {"sys",    "BRO_WITH_SYS"},
+        {"portal", "BRO_WITH_PORTAL"},
+        {"clip",   "BRO_WITH_CLIP"},
+        {"mpris",  "BRO_WITH_MPRIS"},
+        {"pulse",  "BRO_WITH_PULSE"},
+        {"conf",   "BRO_WITH_CONF"},
+        {"decor",  "BRO_WITH_DECOR"},
+        {"keys",   "BRO_WITH_KEYS"},
+        {"ime",    "BRO_WITH_IME"},
+    };
+    for (const auto& ext : kDesktopExt) {
+        if (ev::isUndefined(ev::getProperty(bro->get(), ext.name))) {
+            setUnavailable(ext.name, ext.flag);
+        }
+    }
     // The privileged namespaces, by what the app is granted
     // (host_permissions.cpp, engine/capabilities.h).
     installAccessPolicy();
@@ -532,27 +518,14 @@ void installWorkerBroRoot() {
 #if !BRO_WITH_TRIPOSPLAT
     setUnavailable("triposplat", "BRO_WITH_TRIPOSPLAT");
 #endif
-#if !BRO_WITH_APPS
     setUnavailable("apps", "BRO_WITH_APPS");
-#endif
-#if !BRO_WITH_VFS
     setUnavailable("vfs", "BRO_WITH_VFS");
-#endif
-#if !BRO_WITH_DECOR
+    setUnavailable("keys", "BRO_WITH_KEYS");
     setUnavailable("decor", "BRO_WITH_DECOR");
-#endif
-#if !BRO_WITH_CLIP
     setUnavailable("clip", "BRO_WITH_CLIP");
-#endif
-#if !BRO_WITH_MPRIS
     setUnavailable("mpris", "BRO_WITH_MPRIS");
-#endif
-#if !BRO_WITH_PULSE
     setUnavailable("pulse", "BRO_WITH_PULSE");
-#endif
-#if !BRO_WITH_IME
     setUnavailable("ime", "BRO_WITH_IME");
-#endif
     markAvailableNamespaces();
 }
 

@@ -289,18 +289,19 @@ static void attachParentConsole() {
 
 namespace bro::runtime {
 
-int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
+int runWindowed(int argc, char* argv[], const AppExeLaunch* exe, const WindowedHooks& hooks) {
     // A crash reports its reason and stack to stderr, which is the app's log
     // once the launch redirects it there: the log of a crash on a user's
     // machine ends with why, not mid-line.
-    bro::util::installCrashHandler("bro", bro::util::CrashMode::System);
+    const std::string prog = hooks.programName.empty() ? std::string("bro") : hooks.programName;
+    bro::util::installCrashHandler(prog.c_str(), bro::util::CrashMode::System);
     const std::vector<std::string> args = utf8Args(argc, argv);
 
     // App management (`bro --install <dir>`, docs/apps.md) prints and exits,
     // and never starts an engine. An app's own executable is never a bro
     // command line: all of its arguments are the app's.
     if (!exe)
-        if (int status = bro::engine::runAppCommand(args); status >= 0) return status;
+        if (int status = bro::engine::runAppCommand(args, hooks.defaultExecPath); status >= 0) return status;
 
     if (!exe && !args.empty() && (args[0] == "--help" || args[0] == "-h")) {
         attachParentConsole();
@@ -399,6 +400,11 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     if (cliDrm)      config.displayMode = bro::engine::DisplayMode::Drm;
     // Added to what the launch resolved (the project manager's own grants).
     config.hostGrants.insert(config.hostGrants.end(), cliGrants.begin(), cliGrants.end());
+    config.installHostRootApis = hooks.installHostRootApis;
+    config.installHostBindings = hooks.installHostBindings;
+    config.installWorkerHostBindings = hooks.installWorkerHostBindings;
+    config.onDropCompartment = hooks.onDropCompartment;
+    config.onShutdownForReload = hooks.onShutdownForReload;
 
     // Absolutise and publish BRO_EXE_DIR / BRO_APP_DIR / BRO_PROJECT_ROOT so
     // JS and spawned children can locate themselves without guessing from cwd,
@@ -542,6 +548,10 @@ int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
     // crash report (a fatal error is reported too).
     if (!fatal) bro::util::noteCleanExit();
     return exitCode;
+}
+
+int runWindowed(int argc, char* argv[], const AppExeLaunch* exe) {
+    return runWindowed(argc, argv, exe, WindowedHooks{});
 }
 
 }  // namespace bro::runtime

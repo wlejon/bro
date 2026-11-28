@@ -24,7 +24,7 @@
 #   deps       comma-separated bro-ecosystem repos it builds against (from its CMake)
 #
 # name          group     bro        github   platforms        deps
-bro             runtime   self       public   win,linux,mac    bronze,brass,brasslua,brokernel,bromath,brokit,FastNoise2,box3d,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brolink,brovfs,brosys,brocred,broapps,brothumb,brodisplays,brocompositor,brokeys,broa11y,broconf,broseat,browl,broportal,brodbus,brovideo,broremote,brodmabuf,brodecor,broclip,brompris,bropulse,broime
+bro             runtime   self       public   win,linux,mac    bronze,brass,brasslua,brokernel,bromath,brokit,FastNoise2,box3d,htmlayout,broaudio,bromesh,broflora,brotensor,brogameagent,brolm,brodiffusion,broimage,brosoundml,brovisionml,bropty,brosearch,brothemes,bromux,brolink,brodisplays,brocompositor,broa11y,broseat,browl,brodbus,brovideo,broremote,brodmabuf
 bronze          compiler  dep        public   win,linux,mac    brass
 brass           compiler  dep        public   win,linux,mac    -
 brasslua        compiler  dep        public   win,linux,mac    brass,bronze
@@ -49,31 +49,18 @@ brosearch       terminal  dep        public   win,linux,mac    bronze,brass
 brothemes       terminal  dep        public   win,linux,mac    bronze,brass
 bromux          terminal  dep        public   win,linux,mac    bropty,brosearch,brolink,broimage,bromath
 brolink         terminal  dep        public   win,linux,mac    -
-brovfs          desktop   dep        public   win,linux,mac    bronze,brass
-brosys          desktop   dep        public   win,linux,mac    brodbus,bronze,brass
 brocas          desktop   -          public   win,linux,mac    -
-brocred         desktop   dep        public   win,linux,mac    brodbus,bronze,brass
-broapps         desktop   dep        public   win,linux,mac    brovfs,bronze,brass
-brothumb        desktop   dep        public   win,linux,mac    brovfs,broimage,bromath,bronze,brass
 brodisplays     desktop   dep        public   win,linux,mac    bronze,brass
 brocompositor   desktop   dep        public   win,linux,mac    brodisplays,bronze,brass
-brokeys         desktop   dep        public   win,linux,mac    brosearch,bronze,brass
 broa11y         desktop   dep        public   win,linux,mac    bronze,brass
-broconf         desktop   dep        public   win,linux,mac    bronze,brass
 broseat         desktop   dep        public   linux            brodbus,bronze,brass
 brodmabuf       desktop   dep        public   linux            -
 brodbus         desktop   dep        public   linux            -
 browl           desktop   dep        public   linux            bronze,brass
-broportal       desktop   dep        public   linux            brodbus,bronze,brass
-brodecor        desktop   dep        public   win,linux,mac    bromath,bronze,brass
-broclip         desktop   dep        public   win,linux,mac    bronze,brass
-brompris        desktop   dep        public   win,linux,mac    brodbus,bronze,brass
-bropulse        desktop   dep        public   win,linux,mac    bronze,brass
-broime          desktop   dep        public   win,linux,mac    brosearch,bronze,brass
 brovideo        desktop   dep        public   win,linux,mac    brodmabuf
 broremote       desktop   dep        public   win,linux        brovideo,brolink,bronze,brass
 broworkshop     app       -          public   win,linux,mac    bro
-helm            app       -          public   win,linux,mac    bro
-helmapps        app       -          public   win,linux,mac    bro
+helm            app       -          public   win,linux,mac    bro,brodbus
+helmapps        app       -          public   win,linux,mac    helm
 ffmpeg-bro      app       -          public   win,linux,mac    bro
 broparity       tool      -          public   win,linux,mac    bro

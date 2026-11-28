@@ -59,45 +59,17 @@
 #if BRO_WITH_DYNAMICS
 #include "dynamics/world.h"
 #endif
-#if BRO_WITH_CONF
-#include <broconf/api.h>
-#include <broconf/store.h>
-#include <cstdlib>
-#include <filesystem>
-#endif
 #if BRO_WITH_THEMES
 #include <brothemes/api.h>
-#endif
-#if BRO_WITH_KEYS
-#include <brokeys/api.h>
 #endif
 #if BRO_WITH_SEARCH
 #include <brosearch/api.h>
 #endif
-#if BRO_WITH_APPS
-#include <broapps/api.h>
-#endif
-#if BRO_WITH_VFS
-#include <brovfs/api.h>
-#endif
-#if BRO_WITH_THUMB
-#include <brothumb/api.h>
-#include <brothumb/service.h>
-#endif
 #if BRO_WITH_SEAT
 #include <broseat/api.h>
 #endif
-#if BRO_WITH_CRED
-#include <brocred/api.h>
-#endif
-#if BRO_WITH_SYS
-#include <brosys/api.h>
-#endif
 #if BRO_WITH_DISPLAYS
 #include <brodisplays/api.h>
-#endif
-#if BRO_WITH_PORTAL
-#include <broportal/api.h>
 #endif
 #if BRO_WITH_COMPOSITOR
 #include <brocompositor/api.h>
@@ -113,21 +85,6 @@
 #endif
 #if BRO_WITH_A11Y
 #include <broa11y/api.h>
-#endif
-#if BRO_WITH_DECOR
-#include <brodecor/api.h>
-#endif
-#if BRO_WITH_CLIP
-#include <broclip/api.h>
-#endif
-#if BRO_WITH_MPRIS
-#include <brompris/api.h>
-#endif
-#if BRO_WITH_PULSE
-#include <bropulse/api.h>
-#endif
-#if BRO_WITH_IME
-#include <broime/api.h>
 #endif
 #if BRO_WITH_REMOTE
 #include "bronze_host/host_remote.h"
@@ -451,36 +408,9 @@ void installSiblingApis(engine::Engine& engine) {
         render::registerImageCodecs();
         broimage::api::installImage();
     }
-#if BRO_WITH_CONF
-    {
-        // BRO_APP_HOME (an app's tests, a scratch profile) holds everything the app keeps,
-        // the desktop settings it reads and writes through bro.conf included: never the
-        // user's own settings.ini, and no session bus to hear the real desktop's changes.
-        static bool confStoreChosen = false;
-        const char* appHome = std::getenv("BRO_APP_HOME");
-        if (!confStoreChosen && appHome && *appHome) {
-            broconf::StoreOptions opts;
-            opts.user_config_path = std::filesystem::absolute(std::filesystem::u8path(appHome)) / "config" / "settings.ini";
-            opts.enable_dbus = false;
-            broconf::api::setStore(broconf::Store::create(std::move(opts)));
-        }
-        confStoreChosen = true;
-    }
-    broconf::api::installConf();
-    if (installHooks) {
-        engine.addFramePump([] {
-            broconf::api::tickConfAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { broconf::api::shutdownConfAsync(); });
-    }
-#endif
 #if BRO_WITH_THEMES
     bro::themes::api::setPathResolver(&brokit::api::resolveAssetPath);
     bro::themes::api::installThemes();
-#endif
-#if BRO_WITH_KEYS
-    bro::keys::api::installKeys();
 #endif
 #if BRO_WITH_SEARCH
     brosearch::api::installSearch();
@@ -490,59 +420,6 @@ void installSiblingApis(engine::Engine& engine) {
             if (ev::microtasksPending()) ev::drainMicrotasks();
         });
         engine.addShutdownHook([] { brosearch::api::shutdownSearchAsync(); });
-    }
-#endif
-#if BRO_WITH_APPS
-    broapps::api::installApps();
-    if (installHooks) {
-        engine.addFramePump([] {
-            broapps::api::tickAppsAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { broapps::api::shutdownAppsAsync(); });
-    }
-#endif
-#if BRO_WITH_VFS
-    brovfs::api::installVfs();
-    if (installHooks) {
-        engine.addFramePump([] {
-            brovfs::api::tickVfsAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { brovfs::api::shutdownVfsAsync(); });
-    }
-#endif
-#if BRO_WITH_THUMB
-    {
-        // BRO_APP_HOME (an app's tests, a scratch profile) holds the thumbnail
-        // cache too, as it holds bro.conf's store: a headless test's previews
-        // land under <home>/cache/thumbnails, never in the user's real
-        // %LOCALAPPDATA%\thumbnails or ~/.cache/thumbnails. Chosen once per
-        // process, before the first realm mounts bro.thumb.
-        static bool thumbServiceChosen = false;
-        const char* appHome = std::getenv("BRO_APP_HOME");
-        if (!thumbServiceChosen && appHome && *appHome) {
-            brothumb::ThumbnailService::Config cfg;
-            cfg.cache_dir =
-                std::filesystem::absolute(std::filesystem::u8path(appHome)) / "cache" / "thumbnails";
-            std::string err;
-            if (auto svc = brothumb::ThumbnailService::create(cfg, &err))
-                brothumb::api::setService(std::move(svc));
-            else
-                LOG_WARN("bro.thumb: no service under BRO_APP_HOME (%s)", err.c_str());
-        }
-        thumbServiceChosen = true;
-    }
-    brothumb::api::installThumb();
-    if (installHooks) {
-        // A finished thumbnail wakes a window idling between frames, which
-        // would otherwise settle its promise only at the next input.
-        brothumb::api::setWake(&util::wakeMainLoop);
-        engine.addFramePump([] {
-            brothumb::api::tickThumbAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { brothumb::api::shutdownThumbAsync(); });
     }
 #endif
 #if BRO_WITH_SEAT
@@ -565,26 +442,6 @@ void installSiblingApis(engine::Engine& engine) {
         engine.addShutdownHook([] { broseat::api::shutdownSeatAsync(); });
     }
 #endif
-#if BRO_WITH_CRED
-    brocred::api::installCred();
-    if (installHooks) {
-        engine.addFramePump([] {
-            brocred::api::tickCredAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { brocred::api::shutdownCredAsync(); });
-    }
-#endif
-#if BRO_WITH_SYS
-    brosys::api::installSys();
-    if (installHooks) {
-        engine.addFramePump([] {
-            brosys::api::tickSysAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { brosys::api::shutdownSysAsync(); });
-    }
-#endif
 #if BRO_WITH_DISPLAYS
     brodisplays::api::installDisplays();
     if (installHooks) {
@@ -593,16 +450,6 @@ void installSiblingApis(engine::Engine& engine) {
             if (ev::microtasksPending()) ev::drainMicrotasks();
         });
         engine.addShutdownHook([] { brodisplays::api::shutdownDisplaysAsync(); });
-    }
-#endif
-#if BRO_WITH_PORTAL
-    broportal::api::installPortal();
-    if (installHooks) {
-        engine.addFramePump([] {
-            broportal::api::tickPortalAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { broportal::api::shutdownPortalAsync(); });
     }
 #endif
 #if BRO_WITH_COMPOSITOR
@@ -720,59 +567,6 @@ void installSiblingApis(engine::Engine& engine) {
         engine.addShutdownHook([] { broa11y::api::shutdownA11yAsync(); });
     }
 #endif
-#if BRO_WITH_DECOR
-    brodecor::api::installDecor();
-    if (installHooks) {
-        engine.addFramePump([] {
-            brodecor::api::tickDecorAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { brodecor::api::shutdownDecorAsync(); });
-    }
-#endif
-#if BRO_WITH_CLIP
-    broclip::api::installClip();
-    if (installHooks) {
-        engine.addFramePump([] {
-            broclip::api::tickClipAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { broclip::api::shutdownClipAsync(); });
-    }
-#endif
-#if BRO_WITH_MPRIS
-    // Headless sees no session players and publishes none onto the session
-    // bus: a test must not read or answer to the machine's media players.
-    brompris::api::setSessionAccess(engine.displayMode() != engine::DisplayMode::Headless);
-    brompris::api::installMpris();
-    if (installHooks) {
-        engine.addFramePump([] {
-            brompris::api::tickMprisAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { brompris::api::shutdownMprisAsync(); });
-    }
-#endif
-#if BRO_WITH_PULSE
-    bropulse::api::installPulse();
-    if (installHooks) {
-        engine.addFramePump([] {
-            bropulse::api::tickPulseAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { bropulse::api::shutdownPulseAsync(); });
-    }
-#endif
-#if BRO_WITH_IME
-    bro::ime::api::installIme();
-    if (installHooks) {
-        engine.addFramePump([] {
-            bro::ime::api::tickImeAsync();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
-        });
-        engine.addShutdownHook([] { bro::ime::api::shutdownImeAsync(); });
-    }
-#endif
 #if BRO_WITH_REMOTE
     // bro.remote, with its frame pump and shutdown hook (host_remote.cpp).
     installRemoteHost(engine);
@@ -793,56 +587,20 @@ void shutdownSiblingApisForReload() {
 #if BRO_WITH_VISION
     shutdownVisionJobs();
 #endif
-#if BRO_WITH_CONF
-    broconf::api::shutdownConfAsync();
-#endif
 #if BRO_WITH_SEARCH
     brosearch::api::shutdownSearchAsync();
-#endif
-#if BRO_WITH_APPS
-    broapps::api::shutdownAppsAsync();
-#endif
-#if BRO_WITH_VFS
-    brovfs::api::shutdownVfsAsync();
-#endif
-#if BRO_WITH_THUMB
-    brothumb::api::shutdownThumbAsync();
 #endif
 #if BRO_WITH_SEAT
     broseat::api::shutdownSeatAsync();
 #endif
-#if BRO_WITH_CRED
-    brocred::api::shutdownCredAsync();
-#endif
-#if BRO_WITH_SYS
-    brosys::api::shutdownSysAsync();
-#endif
 #if BRO_WITH_DISPLAYS
     brodisplays::api::shutdownDisplaysAsync();
-#endif
-#if BRO_WITH_PORTAL
-    broportal::api::shutdownPortalAsync();
 #endif
 #if BRO_WITH_WL
     browl::api::shutdownWlAsync();
 #endif
 #if BRO_WITH_A11Y
     broa11y::api::shutdownA11yAsync();
-#endif
-#if BRO_WITH_DECOR
-    brodecor::api::shutdownDecorAsync();
-#endif
-#if BRO_WITH_CLIP
-    broclip::api::shutdownClipAsync();
-#endif
-#if BRO_WITH_MPRIS
-    brompris::api::shutdownMprisAsync();
-#endif
-#if BRO_WITH_PULSE
-    bropulse::api::shutdownPulseAsync();
-#endif
-#if BRO_WITH_IME
-    bro::ime::api::shutdownImeAsync();
 #endif
 }
 

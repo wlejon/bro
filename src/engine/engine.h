@@ -671,7 +671,10 @@ public:
     /// Whether the app holds `cap` (capabilities.h) now, without asking.
     bool hasCapability(std::string_view cap) const { return appPermissions().granted(cap); }
     const std::function<void(Engine&)>& installHostBindings() const { return installHostBindings_; }
+    const std::function<void(Engine&)>& installHostRootApis() const { return installHostRootApis_; }
     const std::function<void()>& installWorkerHostBindings() const { return installWorkerHostBindings_; }
+    const std::function<void(uint64_t)>& onDropCompartment() const { return onDropCompartment_; }
+    const std::function<void()>& onShutdownForReload() const { return onShutdownForReload_; }
     /// Engine-supplied virtual path prefixes (`/app`, `/lib`, `/system`, ...),
     /// so a compile of the app's scripts resolves the same `import "/lib/x.js"`
     /// the asset loader does.

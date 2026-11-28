@@ -303,6 +303,9 @@ void destroyCompartment(Compartment* c, const std::string& why) {
     clearWindowProxies(c->id);
     clearCustomElementsForCompartment(c->id);
     dropObserverState(c->id);
+    if (auto* eng = hostEngine(); eng && eng->onDropCompartment()) {
+        eng->onDropCompartment()(c->id);
+    }
     dropModuleGroups(c->id);
     for (PerCompartment* slot : perCompartmentSlots()) slot->drop(c->id);
     for (auto d = s_byDocument.begin(); d != s_byDocument.end();)

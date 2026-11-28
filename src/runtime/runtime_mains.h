@@ -6,7 +6,12 @@
 // library so that the executables are one-line callers and every bro process
 // maps one copy of the engine.
 
+#include <functional>
 #include <string>
+
+namespace bro::engine {
+class Engine;
+}
 
 namespace bro::runtime {
 
@@ -17,8 +22,19 @@ struct AppExeLaunch {
     std::string exePath;  // the executable itself, absolute
 };
 
+struct WindowedHooks {
+    std::string programName = "bro";
+    std::string defaultExecPath;
+    std::function<void(bro::engine::Engine&)> installHostRootApis;
+    std::function<void(bro::engine::Engine&)> installHostBindings;
+    std::function<void()> installWorkerHostBindings;
+    std::function<void(uint64_t)> onDropCompartment;
+    std::function<void()> onShutdownForReload;
+};
+
 /// `bro [flags] <app> [args]`, or with `exe` an app executable's launch:
 /// the target is exe->appDir and every argument is the app's.
+int runWindowed(int argc, char* argv[], const AppExeLaunch* exe, const WindowedHooks& hooks);
 int runWindowed(int argc, char* argv[], const AppExeLaunch* exe);
 
 int runHeadlessMain(int argc, char* argv[]);

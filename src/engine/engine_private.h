@@ -439,7 +439,10 @@ private:
     std::string fallbackTitle_ = "Bro";   // the window's title while the page has none
     void applyWindowIcon(const EngineConfig& config);
     std::function<void(Engine&)> installHostBindings_;
+    std::function<void(Engine&)> installHostRootApis_;
     std::function<void()> installWorkerHostBindings_;
+    std::function<void(uint64_t)> onDropCompartment_;
+    std::function<void()> onShutdownForReload_;
     util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenesDetached_;

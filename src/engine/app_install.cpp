@@ -359,7 +359,7 @@ std::string installExe(const std::string& appDir, const AppDescriptor& m, bool s
 
 }  // namespace
 
-int runAppCommand(const std::vector<std::string>& args) {
+int runAppCommand(const std::vector<std::string>& args, const std::string& defaultExecPath) {
     if (args.empty()) return -1;
     const std::string& cmd = args[0];
     const bool permissionsCmd = cmd == "--permissions" || cmd == "--grant-app" || cmd == "--revoke-app" ||
@@ -385,7 +385,7 @@ int runAppCommand(const std::vector<std::string>& args) {
         else if (target.empty()) target = args[i];
         else return usage();
     }
-    if (exec.empty()) exec = defaultExec();
+    if (exec.empty()) exec = defaultExecPath.empty() ? defaultExec() : defaultExecPath;
 
     // bro --exe-info <exe> [--icon-png <file>]: what an app executable holds.
     if (cmd == "--exe-info") {
