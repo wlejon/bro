@@ -1,0 +1,32 @@
+module _es_fixture;
+
+import _es_helper;
+
+struct EsCell {
+    weight: f32,
+    height: df32,
+    tag: i32,
+}
+
+@kernel
+fn df_shift(a: df32) -> df32 {
+    return (df32(16384.0) + a) - df32(16384.0);
+}
+
+@kernel @cpu
+fn store_accum(arr: read_store<f32, 1>, bias: f32, n: i32) -> f64 {
+    var acc: f64 = 0.0;
+    for i in 0..n {
+        acc = acc + f64(_es_helper::scale_bias(arr[i], bias));
+    }
+    return acc;
+}
+
+@kernel @grid(1)
+fn scale_buf(g: grid<1>, inp: read_store<f32, 1>, out: write_store<f32, 1>, factor: f32) {
+    out[g.x()] = _es_helper::scale_bias(inp[g.x()], 1.0) * factor;
+}
+
+pub fn eval_pair(x: f32, y: f32) -> f32 {
+    return _es_helper::scale_bias(x, y);
+}

@@ -274,10 +274,8 @@ VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFo
 }
 
 SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState& cs, MeshKind kind) {
-    std::string key = cs.key;
-    key += '\x1e';
-    key += static_cast<char>('0' + static_cast<int>(kind));
-    if (probeActive_) key += "\x1eprobe";
+    std::string key = cs.key + '\x1e' + static_cast<char>('0' + static_cast<int>(kind)) + (probeActive_ ? "\x1eprobe" : "");
+    if (const uint64_t rg = kernelHookReloadGeneration()) key += '\x1b' + std::to_string(rg);
     auto it = custom_.find(key);
     if (it != custom_.end()) return it->second->failed ? nullptr : it->second.get();
 

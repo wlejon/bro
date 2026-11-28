@@ -2,6 +2,9 @@
 #include "bronze_host/eval_js_scan.h"
 #include "bronze_host/app_aot.h"
 #include "bronze_host/eval.h"
+#if BRO_WITH_KERNEL
+#include "bronze_host/host_kernel_es_loader.h"
+#endif
 #include "bronze_host/host_access.h"
 #include "bronze_host/host_compartment.h"
 #include "bronze_host/host_gc.h"
@@ -157,6 +160,9 @@ void configureCodeCache(bronze::eval::EvalOptions& opts) {
     }();
     opts.codeCacheDir = dir;
     opts.codeCacheMaxBytes = uint64_t{512} << 20;
+#if BRO_WITH_KERNEL
+    configureKernelEsLoader(opts);
+#endif
 }
 
 const char* cacheStatusName(bronze::eval::CodeCacheStatus s) {

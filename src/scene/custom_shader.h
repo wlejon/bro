@@ -83,18 +83,28 @@ struct CustomShaderState {
     }
 
     void setKnobs(std::vector<std::pair<std::string, double>> k) {
+        bool changed = false;
         for (const auto& [name, val] : k) {
+            for (auto& u : uniforms) {
+                if (u.name == name && u.comps == 1) u.v[0] = static_cast<float>(val);
+            }
             bool found = false;
             for (auto& existing : knobs) {
                 if (existing.first == name) {
-                    existing.second = val;
+                    if (existing.second != val) {
+                        existing.second = val;
+                        changed = true;
+                    }
                     found = true;
                     break;
                 }
             }
-            if (!found) knobs.emplace_back(name, val);
+            if (!found) {
+                knobs.emplace_back(name, val);
+                changed = true;
+            }
         }
-        rebuildKey();
+        if (changed) rebuildKey();
     }
 
     void bumpReloadGen() {

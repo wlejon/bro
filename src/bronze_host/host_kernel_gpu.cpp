@@ -20,6 +20,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -258,6 +259,7 @@ bool launchAccesses(const brokernel::CompiledKernel& kernel, const brokernel::Gp
 class KernelGpu final : public brokernel::api::GpuDevice {
 public:
     explicit KernelGpu(std::shared_ptr<Device> device) : device_(std::move(device)) {}
+    ~KernelGpu() override { clearScratchPool(); }
 
     bool available() const override { return device_->context() != nullptr; }
 
@@ -268,7 +270,43 @@ public:
         return std::make_shared<Buffer>(device_, std::move(buffer));
     }
 
+    void beginBatch() override { ++batchDepth_; }
+
+    bool endBatch(std::string* err) override {
+        if (batchDepth_ > 0) --batchDepth_;
+        if (batchDepth_ == 0 && !lost(*device_, err)) {
+            device_->context()->compute().flush();
+        }
+        return true;
+    }
+
+    std::shared_ptr<brokernel::api::GpuBuffer> acquireScratchBuffer(size_t bytes, std::string* err) override {
+        if (lost(*device_, err)) return nullptr;
+        const size_t bucket = scratchBucketFor(bytes);
+        auto it = scratchPool_.find(bucket);
+        if (it != scratchPool_.end() && !it->second.empty()) {
+            auto cb = std::move(it->second.back());
+            it->second.pop_back();
+            scratchPoolBytes_ = scratchPoolBytes_ >= bucket ? (scratchPoolBytes_ - bucket) : 0;
+            return std::make_shared<Buffer>(device_, std::move(cb));
+        }
+        return createBuffer(bucket, err);
+    }
+
+    void releaseScratchBuffer(std::shared_ptr<brokernel::api::GpuBuffer> buf) override {
+        auto* own = dynamic_cast<Buffer*>(buf.get());
+        if (!own || !own->computeBuffer() || !device_->context()) return;
+        const size_t bucket = scratchBucketFor(static_cast<size_t>(own->computeBuffer()->size()));
+        auto& list = scratchPool_[bucket];
+        if (list.size() >= kMaxScratchPerBucket || scratchPoolBytes_ + bucket > kMaxScratchPoolBytes) return;
+        list.push_back(own->computeBuffer());
+        scratchPoolBytes_ += bucket;
+    }
+
     void reclaim() override {
+        if (scratchPoolBytes_ > (kMaxScratchPoolBytes / 2) || !device_->context()) {
+            clearScratchPool();
+        }
         if (render::VulkanContext* ctx = device_->context()) ctx->compute().reclaim();
     }
 
@@ -399,8 +437,25 @@ private:
     }
 
 private:
+    static constexpr size_t kMaxScratchPerBucket = 4;
+    static constexpr size_t kMaxScratchPoolBytes = 64ull << 20;
+
+    static size_t scratchBucketFor(size_t bytes) {
+        size_t b = 256;
+        while (b < bytes && b < (1ull << 30)) b <<= 1;
+        return b;
+    }
+
+    void clearScratchPool() {
+        scratchPool_.clear();
+        scratchPoolBytes_ = 0;
+    }
+
     std::shared_ptr<Device> device_;
     std::vector<render::ComputeAccess> access_;   // a dispatch's, reused
+    uint32_t batchDepth_ = 0;
+    std::unordered_map<size_t, std::vector<std::shared_ptr<render::ComputeBuffer>>> scratchPool_;
+    size_t scratchPoolBytes_ = 0;
 };
 
 // One device for every main-thread realm (the page and its iframes).

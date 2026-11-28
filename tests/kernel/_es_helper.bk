@@ -1,0 +1,5 @@
+module _es_helper;
+
+pub fn scale_bias(x: f32, bias: f32) -> f32 {
+    return x * 2.0 + bias;
+}
