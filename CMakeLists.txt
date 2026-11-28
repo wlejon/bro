@@ -131,9 +131,8 @@ if(EXISTS "${CMAKE_BINARY_DIR}/compile_commands.json")
 endif()
 
 if(MSVC)
-    # Scope to CXX so these don't leak into nvcc-driven CUDA compilation
-    # (brogameagent's optional GPU backend). /MP in particular collides with
-    # nvcc's single-input-per-output model.
+    # Scope MSVC-only flags to CXX so mixed-language or external targets
+    # do not inherit host-only flags accidentally.
     add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:/MP>
         $<$<COMPILE_LANGUAGE:CXX>:/permissive->
